@@ -43,6 +43,7 @@ It does not need Android, a framework or a GPU.
 | Area | Features |
 |---|---|
 | **Install** | Zip **queue**, CRC **integrity check** before flashing, real `update-binary` protocol (`ui_print`, `progress`, `set_progress`, `wipe_cache`), zip type detection (Edify, script, Magisk/KSU module, A/B OTA), optional cache/ART wipe and auto-reboot afterwards |
+| **ADB sideload** | Receive a package over `adb sideload` without copying it to storage first. Spawns `minadbd` when the ramdisk has it, or falls back to switching the USB function to `sideload` and watching the drop paths; then flashes with the same verified installer pipeline |
 | **Images** | Flash **raw and Android sparse** `.img` to any partition, with automatic target guessing from the file name and size checks |
 | **Wipe** | Factory reset (keeps internal storage), Advanced wipe checklist, **Format Data** (mkfs + metadata), ART/Dalvik wipe |
 | **Backup** | Streaming tar/raw backups with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
@@ -169,7 +170,8 @@ build-host/twrpv2_selftest
 ## Known limitations (honest list)
 - **No decryption** of FBE/FDE `/data`. When data is encrypted, TWRP v2 detects it and keeps backups and
   settings off `/data`; **Format Data** still works.
-- **No ADB sideload, MTP or `payload.bin` OTA flashing** yet. Flash zips from storage instead.
+- **No MTP or `payload.bin` OTA flashing** yet. Use **ADB sideload** or flash zips from storage.
+- ADB sideload needs `minadbd` in the ramdisk for the real sideload protocol; without it TWRP v2 flips USB to the `sideload` function and watches the standard drop paths instead.
 - Zip flashing checks integrity (CRC) but not OTA **signatures**.
 - SELinux labels are preserved only if the ramdisk's `tar` supports it (`--selinux` or `--xattrs`).
   Otherwise use *Advanced → Fix storage contexts*.

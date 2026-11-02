@@ -8,6 +8,7 @@
 #include "platform/device.h"
 #include "sys/installer.h"
 #include "sys/partitions.h"
+#include "sys/sideload.h"
 
 namespace tw {
 
@@ -20,6 +21,7 @@ class InstallScreen : public Screen {
 public:
     std::string title() const override { return "Install"; }
     std::string subtitle() const override {
+        if (mode_ == 2) return "ADB sideload from a computer";
         return g_queue.empty() ? "Flash zips or images" : std::to_string(g_queue.size()) + " zip(s) queued";
     }
 
@@ -33,10 +35,64 @@ public:
         float x = area.x + pad, w = area.w - pad * 2;
 
         // Mode tabs
-        float tabW = (w - ui.dp(8)) / 2;
+        float tabW = (w - ui.dp(8) * 2) / 3;
         if (ui.chip(ui.id("tab_zip"), Rect(x, y, tabW, ui.dp(42)), "Zip", mode_ == 0, Icon::Zip)) mode_ = 0;
-        if (ui.chip(ui.id("tab_img"), Rect(x + tabW + ui.dp(8), y, tabW, ui.dp(42)), "Image", mode_ == 1, Icon::Image)) mode_ = 1;
+        if (ui.chip(ui.id("tab_img"), Rect(x + (tabW + ui.dp(8)), y, tabW, ui.dp(42)), "Image", mode_ == 1, Icon::Image)) mode_ = 1;
+        if (ui.chip(ui.id("tab_sl"), Rect(x + (tabW + ui.dp(8)) * 2, y, tabW, ui.dp(42)), "Sideload", mode_ == 2, Icon::Usb)) mode_ = 2;
         y += ui.dp(58);
+
+        if (mode_ == 2) {
+            Rect info(x, y, w, ui.dp(190));
+            ui.card(info);
+            icons::drawCentered(*ui.c, Icon::Usb, info.x + ui.dp(40), info.y + ui.dp(44), ui.dp(32), th.info);
+            ui.label(Rect(info.x + ui.dp(74), info.y + ui.dp(20), info.w - ui.dp(90), ui.dp(26)), "ADB sideload", ui.dp(16),
+                     th.text, Face::SemiBold);
+            ui.textBlock(info.x + ui.dp(74), info.y + ui.dp(48), info.w - ui.dp(94),
+                         "Push a zip over USB without copying it to storage first. The device appears to adb as 'sideload' "
+                         "— run adb sideload <file.zip> on your computer and the package is received and flashed here.",
+                         ui.dp(13.5f), th.textDim);
+            // Monospace example
+            Rect code(info.x + ui.dp(16), info.b() - ui.dp(44), info.w - ui.dp(32), ui.dp(32));
+            ui.c->fillRoundRect(code, ui.dp(10), th.surface2);
+            font::drawIn(*ui.c, Face::Mono, ui.dp(13), code.inset(ui.dp(12), ui.dp(8)),
+                         "adb sideload rom.zip", th.text);
+            y += ui.dp(206);
+
+            Rect optc(x, y, w, ui.dp(68) * 2 + ui.dp(8));
+            ui.card(optc);
+            Settings& s = Settings::get();
+            bool verify = s.flag("zip_verify", true), reboot = s.flag("zip_reboot", false);
+            if (ui.toggleRow(ui.id("sl_v"), Rect(x + ui.dp(4), y + ui.dp(4), w - ui.dp(8), ui.dp(64)), Icon::Shield,
+                             "Verify zip integrity", "CRC-check every entry before flashing", verify))
+                s.setFlag("zip_verify", verify), s.save();
+            if (ui.toggleRow(ui.id("sl_r"), Rect(x + ui.dp(4), y + ui.dp(4) + ui.dp(68), w - ui.dp(8), ui.dp(64)), Icon::Reboot,
+                             "Reboot when done", "Automatically boot to system on success", reboot))
+                s.setFlag("zip_reboot", reboot), s.save();
+            y += optc.h + ui.dp(16);
+            ui.endScroll(y);
+
+            Rect sb = bottom.inset(pad, ui.dp(14));
+            if (ui.slideToConfirm(ui.id("sl_go"), sb, "Swipe to start sideload", th.info)) {
+                installer::InstallOptions o;
+                o.verifyZip = s.flag("zip_verify", true);
+                bool rb = s.flag("zip_reboot", false);
+                app.runTask("ADB sideload", Icon::Usb, [o, rb](Task& t) {
+                    t.setRange(0, 0.7f);
+                    std::string pkg = sideload::receive(t);
+                    if (pkg.empty()) return false;
+                    t.setRange(0.7f, 0.3f);
+                    bool ok = installer::installZip(pkg, o, t);
+                    unlink(pkg.c_str());
+                    if (ok && rb) {
+                        t.print("Rebooting in 3 seconds...");
+                        sleep(3);
+                        device::reboot("");
+                    }
+                    return ok;
+                });
+            }
+            return;
+        }
 
         if (mode_ == 1) {
             Rect info(x, y, w, ui.dp(120));
