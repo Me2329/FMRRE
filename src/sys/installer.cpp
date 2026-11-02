@@ -4,6 +4,7 @@
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/imagesrc.h"
 #include "sys/partitions.h"
 #include "miniz.h"
 
@@ -258,17 +259,6 @@ bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
 }
 
 // ---- Android sparse image support -------------------------------------------------
-#pragma pack(push, 1)
-struct SparseHeader {
-    uint32_t magic;
-    uint16_t major, minor, fileHdrSz, chunkHdrSz;
-    uint32_t blkSz, totalBlks, totalChunks, checksum;
-};
-struct ChunkHeader {
-    uint16_t type, reserved;
-    uint32_t chunkSz, totalSz;
-};
-#pragma pack(pop)
 static const uint32_t kSparseMagic = 0xED26FF3A;
 
 bool isSparseImage(const std::string& path) {
@@ -280,116 +270,8 @@ bool isSparseImage(const std::string& path) {
     return r;
 }
 
-static bool readFull(int fd, void* buf, size_t n) {
-    char* p = (char*)buf;
-    while (n) {
-        ssize_t r = read(fd, p, n);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) return false;
-        p += r;
-        n -= r;
-    }
-    return true;
-}
-
-static bool writeFull(int fd, const void* buf, size_t n) {
-    const char* p = (const char*)buf;
-    while (n) {
-        ssize_t r = write(fd, p, n);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) return false;
-        p += r;
-        n -= r;
-    }
-    return true;
-}
-
 bool flashImage(const std::string& image, const std::string& blockDev, Task& t) {
-    t.setStatus("Flashing " + util::basename(image));
-    int in = open(image.c_str(), O_RDONLY | O_CLOEXEC);
-    if (in < 0) { t.print("Cannot open %s: %s", image.c_str(), strerror(errno)); return false; }
-    int out = open(blockDev.c_str(), O_WRONLY | O_CLOEXEC | (device::isSim() ? O_CREAT : 0), 0644);
-    if (out < 0) { t.print("Cannot open %s: %s", blockDev.c_str(), strerror(errno)); close(in); return false; }
-    uint64_t devSize = Partitions::blockSize(blockDev);
-    uint64_t imgSize = util::fileSize(image);
-    std::vector<char> buf(1 << 20);
-    int64_t t0 = util::nowMs();
-    bool ok = true;
-
-    SparseHeader sh{};
-    if (readFull(in, &sh, sizeof(sh)) && sh.magic == kSparseMagic) {
-        uint64_t outSize = uint64_t(sh.totalBlks) * sh.blkSz;
-        t.print("Sparse image: %u chunks, %s expanded", sh.totalChunks, util::humanSize(outSize).c_str());
-        if (!device::isSim() && devSize && outSize > devSize) {
-            t.print("Image (%s) is larger than the partition (%s)!", util::humanSize(outSize).c_str(),
-                    util::humanSize(devSize).c_str());
-            close(in); close(out);
-            return false;
-        }
-        lseek(in, sh.fileHdrSz, SEEK_SET);
-        uint64_t pos = 0;
-        for (uint32_t c = 0; c < sh.totalChunks && ok && !t.cancelled(); c++) {
-            ChunkHeader ch{};
-            if (!readFull(in, &ch, sizeof(ch))) { ok = false; break; }
-            if (sh.chunkHdrSz > sizeof(ch)) lseek(in, sh.chunkHdrSz - sizeof(ch), SEEK_CUR);
-            uint64_t len = uint64_t(ch.chunkSz) * sh.blkSz;
-            switch (ch.type) {
-                case 0xCAC1: {  // raw
-                    lseek(out, pos, SEEK_SET);
-                    uint64_t left = len;
-                    while (left && ok) {
-                        size_t n = std::min<uint64_t>(left, buf.size());
-                        ok = readFull(in, buf.data(), n) && writeFull(out, buf.data(), n);
-                        left -= n;
-                    }
-                    break;
-                }
-                case 0xCAC2: {  // fill
-                    uint32_t v;
-                    ok = readFull(in, &v, 4);
-                    for (size_t i = 0; i < buf.size() / 4; i++) memcpy(&buf[i * 4], &v, 4);
-                    lseek(out, pos, SEEK_SET);
-                    uint64_t left = len;
-                    while (left && ok) {
-                        size_t n = std::min<uint64_t>(left, buf.size());
-                        ok = writeFull(out, buf.data(), n);
-                        left -= n;
-                    }
-                    break;
-                }
-                case 0xCAC3: break;  // don't care
-                case 0xCAC4: lseek(in, 4, SEEK_CUR); len = 0; break;  // crc32
-                default: t.print("Unknown sparse chunk type 0x%x", ch.type); ok = false;
-            }
-            pos += len;
-            t.setSubProgress(float(lseek(in, 0, SEEK_CUR)) / imgSize);
-        }
-    } else {
-        if (!device::isSim() && devSize && imgSize > devSize) {
-            t.print("Image (%s) is larger than the partition (%s)!", util::humanSize(imgSize).c_str(),
-                    util::humanSize(devSize).c_str());
-            close(in); close(out);
-            return false;
-        }
-        lseek(in, 0, SEEK_SET);
-        uint64_t done = 0;
-        while (ok && !t.cancelled()) {
-            ssize_t n = read(in, buf.data(), buf.size());
-            if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) break;
-            ok = writeFull(out, buf.data(), n);
-            done += n;
-            t.setSubProgress(float(done) / imgSize);
-            int64_t el = util::nowMs() - t0;
-            if (el > 0) t.setDetail(util::humanSize(done * 1000 / el) + "/s");
-        }
-    }
-    if (t.cancelled()) { t.print("Cancelled!"); ok = false; }
-    fsync(out);
-    close(in);
-    close(out);
-    t.print(ok ? "Image flashed to %s" : "Flashing to %s FAILED", blockDev.c_str());
-    return ok;
+    return img::flash(image, "", blockDev, {}, t);
 }
 
 }  // namespace tw::installer

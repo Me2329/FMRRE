@@ -25,6 +25,8 @@ std::vector<LogLine> tail(size_t max);
 // when to redraw the console).
 uint64_t generation();
 std::string filePath();
+// Echo log lines to stderr (default on). The `twrp` CLI turns it off to keep its output clean.
+void setConsole(bool on);
 }  // namespace log
 
 }  // namespace tw

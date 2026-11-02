@@ -25,6 +25,13 @@ public:
         struct Item { Icon icon; const char* title; const char* sub; Color tint; int code; };
         const auto& info = device::info();
         std::vector<std::pair<const char*, std::vector<Item>>> groups = {
+            {"Partitions & boot",
+             {{Icon::Key, "Root", "Magisk / KernelSU / APatch, stock backup, modules", th.ok, 25},
+              {Icon::Storage, "Super partitions", "Resize / delete dynamic partitions (system, product...)", th.accent, 20},
+              {Icon::Phone, "GSI wizard", "Flash a Generic System Image the right way", th.ok, 21},
+              {Icon::Bolt, "Verified boot (vbmeta)", "Disable / enable dm-verity and AVB", th.warn, 22},
+              {Icon::Wrench, "File system tools", "Repair, resize, change file system", th.info, 23},
+              {Icon::Search, "Find & flash a file", "Manual path, diagnostics, dd command", th.accent2, 24}}},
             {"Diagnostics",
              {{Icon::Chart, "System monitor", "Live CPU, memory, battery & thermals", th.accent, 1},
               {Icon::Storage, "Partition info", "Block devices, sizes and flags", th.info, 2},
@@ -38,7 +45,7 @@ public:
               {Icon::Usb, "Restart ADB", "Restart the adbd service", th.ok, 9},
               {Icon::Refresh, "Reload partitions", "Re-read fstab and block devices", th.textDim, 10}}},
         };
-        if (info.ab) groups[1].second.insert(groups[1].second.begin(), {Icon::Swap, "Switch boot slot",
+        if (info.ab) groups[2].second.insert(groups[2].second.begin(), {Icon::Swap, "Switch boot slot",
                                              "Make the other A/B slot active", th.danger, 11});
         int k = 0;
         for (auto& g : groups) {
@@ -62,6 +69,12 @@ public:
         Theme& th = app.ui.th;
         switch (code) {
             case 1: app.push(makeMonitorScreen()); break;
+            case 20: app.push(makeSuperScreen()); break;
+            case 21: app.push(makeGsiScreen()); break;
+            case 22: app.push(makeVbmetaScreen()); break;
+            case 23: app.push(makeFsToolsScreen("")); break;
+            case 24: app.push(makeManualFlashScreen()); break;
+            case 25: app.push(makeRootScreen()); break;
             case 2: app.push(makePartInfoScreen()); break;
             case 3: app.push(makeInputTestScreen()); break;
             case 4: app.push(makeFilesScreen()); break;

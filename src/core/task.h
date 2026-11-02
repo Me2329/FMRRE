@@ -41,6 +41,8 @@ public:
 
     void print(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
     std::vector<std::string> lines(size_t max) const;
+    // Lines printed since `cursor` (a running count), which is advanced. Survives the 500-line cap.
+    std::vector<std::string> linesSince(size_t& cursor) const;
 
     void requestCancel() { cancel_ = true; }
     bool cancelled() const { return cancel_; }
@@ -58,6 +60,7 @@ private:
     mutable std::mutex mu_;
     std::string status_, detail_;
     std::vector<std::string> lines_;
+    size_t totalLines_ = 0;
 };
 
 }  // namespace tw

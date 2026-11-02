@@ -11,7 +11,7 @@ namespace {
 class MountScreen : public Screen {
 public:
     std::string title() const override { return "Mount"; }
-    std::string subtitle() const override { return "Tap a partition to mount / unmount"; }
+    std::string subtitle() const override { return "Tap to mount / unmount, hold for file system tools"; }
     void onShow(App&) override { Partitions::get().refresh(); }
 
     float headerActionsWidth() const override { return 44; }
@@ -58,7 +58,10 @@ public:
                 ui.label(Rect(tx, r.y + ui.dp(58), r.w - ui.dp(80), ui.dp(18)), p.present ? (p.size ? util::humanSize(p.size) : "") : "",
                          ui.dp(12), th.textFaint);
             }
-            if (res & Clicked) {
+            if (res & LongPressed) {
+                app.vibrate(30);
+                app.push(makeFsToolsScreen(p.mountPoint));
+            } else if (res & Clicked) {
                 std::string err;
                 bool ok = p.mounted ? P.unmount(p, &err) : P.mount(p, &err);
                 if (!ok) app.toast((p.mounted ? "Unmount failed: " : "Mount failed: ") + err, Icon::Warning, th.danger);
@@ -87,6 +90,13 @@ public:
             P.refresh();
             app.toast("All partitions unmounted", Icon::Mount);
         }
+        y += ui.dp(60);
+        if (ui.button(ui.id("rescan"), Rect(x, y, bw, ui.dp(50)), "Rescan USB / SD", Icon::Usb, BtnStyle::Tonal)) {
+            int n = P.rescanRemovable();
+            app.toast(n ? std::to_string(n) + " removable drive(s) found" : "No USB or SD card detected", Icon::Usb);
+        }
+        if (ui.button(ui.id("fstools"), Rect(x + bw + ui.dp(10), y, bw, ui.dp(50)), "FS tools", Icon::Wrench, BtnStyle::Tonal))
+            app.push(makeFsToolsScreen(""));
         y += ui.dp(64);
         ui.label(Rect(x + ui.dp(6), y, w, ui.dp(18)), "fstab: " + P.fstabPath(), ui.dp(11.5f), th.textFaint, Face::Mono);
         y += ui.dp(30);

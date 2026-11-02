@@ -53,6 +53,12 @@ public:
     // Format = mkfs (destroys everything, including /data/media).
     bool format(Partition& p, Task& t, const std::string& newFs = "");
     bool wipeDalvik(Task& t);
+    // Filesystem tools (fsck / resize2fs / resize.f2fs ...). The partition is unmounted first.
+    bool repair(Partition& p, Task& t);
+    bool resizeFs(Partition& p, Task& t);
+    std::string fsInfo(Partition& p);
+    // Detect microSD / USB OTG drives that appeared after boot (also adds a USB OTG entry when the fstab has none).
+    int rescanRemovable();
 
     // Storage handling: where backups and screenshots go.
     std::vector<Partition*> storages();

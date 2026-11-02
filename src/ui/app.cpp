@@ -159,6 +159,7 @@ void App::run() {
             dimState_ = 2;
             if (Settings::get().flag("lock_on_blank", true)) lockNow();
         }
+        tickIdle();
         if (dimState_ == 2) continue;
 
         // One touch transition per frame so quick taps are never lost.
@@ -177,6 +178,13 @@ void App::run() {
             frame(fe);
         }
     }
+}
+
+void App::tickIdle() {
+    int64_t now = util::nowMs();
+    if (!idleHook || now - lastIdle_ < 300) return;
+    lastIdle_ = now;
+    idleHook(*this);
 }
 
 void App::handleGlobalKeys(const std::vector<InputEvent>& evs) {
@@ -222,6 +230,7 @@ void App::frame(const std::vector<InputEvent>& evs) {
     clock_gettime(CLOCK_MONOTONIC, &ts0);
     handleGlobalKeys(evs);
     updateStatus();
+    tickIdle();
     ui.beginFrame(canvas, evs, now);
     canvas.setOrigin(0, 0);
     canvas.setAlpha(1);

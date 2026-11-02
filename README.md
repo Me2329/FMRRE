@@ -10,11 +10,14 @@ It does not need Android, a framework or a GPU.
 ![Overview](docs/screenshots/overview.png)
 ![Tools](docs/screenshots/tools.png)
 ![Themes](docs/screenshots/themes.png)
+![GSI wizard, Find & flash, dd command, Root](docs/screenshots/gsi_root.png)
 
-> **Status: experimental.** Everything here builds, runs in the simulator and passes the host self-tests
-> (real `update-binary` protocol, sparse images, backup → wipe → restore round trip). It has **not yet
-> been tested on real hardware.** Always try it with `fastboot boot` before flashing, and keep a working
-> recovery image around.
+> **Status: experimental - NOT tested on a real phone yet.** Everything here builds (host, static arm64 and
+> armv7), runs in the desktop simulator and passes the host self-tests (real `update-binary` protocol, sparse
+> and compressed images, super metadata rewrite, backup → wipe → restore, OpenRecoveryScript). The features that
+> touch `super`, `vbmeta`, `misc` and device-mapper follow the AOSP on-disk formats exactly and are covered by
+> tests, but they have **never run on hardware**. Always try it with `fastboot boot` first, keep a working
+> recovery, and keep the super/vbmeta/boot backups TWRP v2 makes automatically.
 
 ---
 
@@ -44,12 +47,19 @@ It does not need Android, a framework or a GPU.
 |---|---|
 | **Install** | Zip **queue**, CRC **integrity check** before flashing, real `update-binary` protocol (`ui_print`, `progress`, `set_progress`, `wipe_cache`), zip type detection (Edify, script, Magisk/KSU module, A/B OTA), optional cache/ART wipe and auto-reboot afterwards |
 | **ADB sideload** | Receive a package over `adb sideload` without copying it to storage first. Spawns `minadbd` when the ramdisk has it, or falls back to switching the USB function to `sideload` and watching the drop paths; then flashes with the same verified installer pipeline |
-| **Images** | Flash **raw and Android sparse** `.img` to any partition, with automatic target guessing from the file name and size checks |
+| **Images** | Flash **raw and Android sparse** images that are also **`.xz`, `.gz`, `.zst`, `.lz4` or inside a `.zip`** - streamed, no temp files (xz decoder built in). Target picked from the image *content* (boot / init_boot / vendor_boot / vbmeta / dtbo / super / system), fit check, optional archive pre-check, **SHA-256 read-back verify**, logical partitions remapped read-write (the reason plain `dd` fails on `system_a`) |
+| **GSI wizard** | Pick a GSI in any format → checks it fits → **grows `system_a` inside super** (optionally frees the other slot or deletes `product_a`) → streams it → **disables AVB in vbmeta** → optional factory reset. Refuses while a Virtual A/B update is merging |
+| **Super partitions** | Reads and rewrites the LP metadata like fastbootd: usage map, groups, **resize / delete / create** logical partitions, free the inactive slot, map read-write, **automatic metadata backup + restore** before every change (written to all slots, backup copy first, verified by read-back) |
+| **Find & flash a file** | "Can't find your file?": type a path (`/sdcard/...` is mapped to recovery's real path), get a **diagnosis** (wrong folder, typo with fuzzy suggestions, unfinished download, encrypted or unmounted storage, missing extension - files are recognised by their content) and a **ready-to-run command** (`dd`, `xz -dc \| dd`, `simg2img` for sparse, `blockdev --setrw` for logical partitions) to open in the terminal, save as a script, or flash with the built-in streamer |
+| **Verified boot** | Show and change vbmeta flags for both slots (`--disable-verity --disable-verification` equivalent), original header saved first; flashing a `vbmeta.img` can patch it on the fly |
+| **Root** | Detects Magisk / KernelSU / APatch and whether the ramdisk is in `boot` or `init_boot`; installs from zip/APK or flashes a `magisk_patched` image to the right partition **after an automatic stock backup**; one-tap unroot; **module manager** (enable, disable, remove, "bootloop? disable all") |
+| **Automation** | **OpenRecoveryScript** (`/cache/recovery/openrecoveryscript`) with a cancellable countdown, AOSP `/cache/recovery/command` and the **bootloader message in `misc`** (read and cleared, no recovery boot loops), and a **`twrp` command line tool** for `adb shell` (see below) |
 | **Wipe** | Factory reset (keeps internal storage), Advanced wipe checklist, **Format Data** (mkfs + metadata), ART/Dalvik wipe |
 | **Backup** | Streaming tar/raw backups with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
 | **Restore** | Reads TWRP v2 and **classic TWRP** backups, per-partition selection, **verify before restore** (refuses corrupt backups), verify-only and delete |
-| **Mount** | Toggle each partition with live usage bars, read-only system by default (dm-verity safe), unmount all |
-| **Files** | Full file manager: sort, hidden files, quick locations, **multi-select**, copy/move/paste, rename, chmod, delete, SHA-256, text and **hex viewer**, install/flash straight from a file |
+| **Mount** | Toggle each partition with live usage bars, read-only system by default (dm-verity safe), unmount all, **USB OTG auto-detect** and rescan, **exFAT / NTFS** via kernel drivers (exfat, sdfat, ntfs3) or FUSE helpers |
+| **File systems** | Check & repair (e2fsck, fsck.f2fs, fsck.fat, fsck.exfat, ntfsfix), grow to fill the partition (resize2fs, resize.f2fs), change file system, info - long-press a partition in Mount |
+| **Files** | Full file manager: sort, hidden files, quick locations, **multi-select**, copy/move/paste, rename, chmod, delete, SHA-256, text and **hex viewer**, install/flash straight from a file, "flash as GSI", "dd command for this file". Pickers show **how many files the type filter hides** and have an **All files** switch |
 | **Terminal** | Root shell with on-screen keyboard, history, quick-command chips, Ctrl-C |
 | **Advanced** | **System monitor** (CPU graph, per-core frequency, RAM, battery details, every thermal zone), partition info, **input and touch tester**, copy log, fix contexts, restart ADB, A/B **slot switching** |
 | **Reboot** | System, Recovery, Bootloader, **Fastbootd**, **Download** (Samsung), **EDL** (Qualcomm), Power off |
@@ -64,9 +74,12 @@ src/
   core/       logging, utilities, SHA-256, settings, background task runner
   gfx/        software canvas (SDF anti-aliasing), fonts (stb_truetype), vector icons, PNG
   platform/   DRM/KMS + fbdev + simulator displays, evdev input, device info/power/battery
-  sys/        partitions & fstab, installer (zip/update-binary/sparse), backup engine
+  sys/        partitions & fstab, installer (zip/update-binary), image streaming (sparse/xz/gz/zip),
+              super (LP metadata + device-mapper), vbmeta, boot images & root, path diagnostics,
+              OpenRecoveryScript + twrp CLI, sideload, backup engine
   ui/         immediate-mode widget toolkit, app shell (navigation, dialogs, console, lock)
-  ui/screens/ home, install, wipe, backup/restore, mount, files, terminal, advanced, settings, reboot
+  ui/screens/ home, install, GSI wizard, super, vbmeta, find & flash, root, fs tools, wipe,
+              backup/restore, mount, files, terminal, advanced, settings, reboot, ORS
   sim.cpp     fake device sandbox for desktop development
 tests/        host self-tests
 device/       example twrp.fstab and device-tree snippet
@@ -167,10 +180,33 @@ build-host/twrpv2_selftest
 
 ---
 
+## Command line (`twrp`)
+
+From a computer, over `adb shell` while TWRP v2 runs (the UI shows progress), or from the recovery terminal:
+```bash
+adb shell /system/bin/recovery twrp gsi /sdcard/Download/system-td-arm64-ab-vanilla.img.xz
+```
+```bash
+adb shell /system/bin/recovery twrp check /sdcard/Download/system.img
+```
+`ln -s /system/bin/recovery /sbin/twrp` lets you just type `twrp ...`. Commands (the same ones work in
+OpenRecoveryScript files): `install`, `flash <image> <partition>`, `gsi`, `wipe`, `format data`, `backup`,
+`restore`, `mount`, `unmount`, `mkdir`, `cmd`, `sideload`, `lp list|resize|delete|free-other-slot`,
+`vbmeta disable|enable|status`, `root status|backup|modules-off`, `check <path>`, `dd <image> <partition>`,
+`print`, `sleep`, `reboot [target]`. `twrp help` lists them.
+
+In the simulator: `out/sim/twrpv2 --sim twrp lp list`.
+
+---
+
 ## Known limitations (honest list)
 - **No decryption** of FBE/FDE `/data`. When data is encrypted, TWRP v2 detects it and keeps backups and
   settings off `/data`; **Format Data** still works.
 - **No MTP or `payload.bin` OTA flashing** yet. Use **ADB sideload** or flash zips from storage.
+- **Super metadata editing has only been tested on images, not on a phone.** Retrofit dynamic partitions (super
+  split across `system_a`/`system_b`) are read-only on purpose; use fastbootd there.
+- `.zst` and `.lz4` images need the `zstd` / `lz4` tools in the ramdisk (`.xz`, `.gz` and `.zip` are built in).
+- Root: TWRP v2 installs and manages Magisk / KernelSU / APatch; it has no `su` of its own.
 - ADB sideload needs `minadbd` in the ramdisk for the real sideload protocol; without it TWRP v2 flips USB to the `sideload` function and watches the standard drop paths instead.
 - Zip flashing checks integrity (CRC) but not OTA **signatures**.
 - SELinux labels are preserved only if the ramdisk's `tar` supports it (`--selinux` or `--xattrs`).
@@ -183,5 +219,6 @@ build-host/twrpv2_selftest
 TWRP v2 is an independent project inspired by the original TWRP (Team Win Recovery Project); its code is
 written from scratch. Licensed under the **Apache License 2.0** (see `LICENSE`).
 Third-party components: [Inter](https://rsms.me/inter/) (SIL OFL 1.1), DejaVu Sans Mono (Bitstream Vera
-licence), [stb_truetype](https://github.com/nothings/stb) (public domain), [miniz](https://github.com/richgel999/miniz) (MIT).
+licence), [stb_truetype](https://github.com/nothings/stb) (public domain), [miniz](https://github.com/richgel999/miniz) (MIT),
+[XZ Embedded](https://github.com/tukaani-project/xz-embedded) (0BSD).
 Font licences are in `res/fonts/`.

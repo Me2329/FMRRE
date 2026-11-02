@@ -228,6 +228,11 @@ void Partitions::load() {
         else if (f[0][0] == '/') addFromTwrpLine(f);
     }
     addImagesFromByName();
+    if (!device::isSim()) {
+        std::string keep = storage_;
+        rescanRemovable();
+        storage_ = keep;
+    }
     // Order: data first, then filesystems, then images.
     std::stable_sort(parts_.begin(), parts_.end(), [](const Partition& a, const Partition& b) {
         auto rank = [](const Partition& p) {
@@ -300,8 +305,10 @@ bool Partitions::mount(Partition& p, std::string* err) {
     }
     util::mkdirs(p.mountPoint);
     std::vector<std::string> types;
-    if (p.fsType == "auto") types = {"ext4", "f2fs", "vfat", "exfat", "ntfs"};
+    if (p.fsType == "auto" || p.removable) types = {"vfat", "exfat", "sdfat", "texfat", "ntfs3", "ntfs", "ext4", "f2fs"};
     else types = {p.fsType};
+    if (p.removable && p.fsType != "auto")
+        types.insert(types.begin(), p.fsType);
     unsigned long flags = MS_NOATIME | MS_NODEV | MS_NODIRATIME;
     bool roFs = p.readOnly || ((p.mountPoint == "/system_root" || p.mountPoint == "/system" ||
                                 p.mountPoint == "/vendor" || p.mountPoint == "/product" ||
@@ -309,8 +316,10 @@ bool Partitions::mount(Partition& p, std::string* err) {
                                !Settings::get().flag("mount_system_rw"));
     if (roFs) flags |= MS_RDONLY;
     for (auto& t : types) {
-        const char* opts = (t == "vfat" || t == "exfat") ? "utf8" : nullptr;
-        if (::mount(p.blockDev.c_str(), p.mountPoint.c_str(), t.c_str(), flags, opts) == 0) {
+        const char* opts = t == "vfat" ? "utf8" : (t == "exfat" || t == "sdfat" || t == "texfat") ? "iocharset=utf8" : nullptr;
+        bool ok = ::mount(p.blockDev.c_str(), p.mountPoint.c_str(), t.c_str(), flags, opts) == 0;
+        if (!ok && opts) ok = ::mount(p.blockDev.c_str(), p.mountPoint.c_str(), t.c_str(), flags, nullptr) == 0;
+        if (ok) {
             LOGI("Mounted %s (%s%s)", p.mountPoint.c_str(), t.c_str(), roFs ? ", ro" : "");
             p.mounted = true;
             if (p.fsType == "auto") p.fsType = t;
@@ -325,6 +334,17 @@ bool Partitions::mount(Partition& p, std::string* err) {
         }
     }
     std::string e = strerror(errno);
+    if (p.removable || p.fsType == "exfat" || p.fsType == "ntfs") {
+        // Kernels without exFAT/NTFS drivers: FUSE helpers shipped in some ramdisks.
+        std::string dev = util::shellQuote(p.blockDev), mp = util::shellQuote(p.mountPoint);
+        for (auto& cmd : {"mount.exfat " + dev + " " + mp, "mount.exfat-fuse " + dev + " " + mp, "ntfs-3g " + dev + " " + mp,
+                          "mount.ntfs " + dev + " " + mp})
+            if (util::haveBinary(util::splitWs(cmd)[0]) && util::run(cmd + " 2>/dev/null") == 0) {
+                LOGI("Mounted %s via %s", p.mountPoint.c_str(), util::splitWs(cmd)[0].c_str());
+                p.mounted = true;
+                return true;
+            }
+    }
     LOGE("Failed to mount %s: %s", p.mountPoint.c_str(), e.c_str());
     if (err) *err = e;
     return false;
@@ -425,7 +445,109 @@ bool Partitions::format(Partition& p, Task& t, const std::string& newFs) {
     bool ok = mount(p);
     if (ok && p.mountPoint == "/data") util::mkdirs("/data/media/0", 0770);
     t.print("  done");
-    return true;
+    return ok;
+}
+
+namespace {
+int runFs(const std::string& cmd, Task& t) {
+    t.print("$ %s", cmd.c_str());
+    return util::run(cmd, [&](const std::string& l) { t.print("  %s", l.c_str()); });
+}
+}  // namespace
+
+bool Partitions::repair(Partition& p, Task& t) {
+    if (p.isImage()) { t.print("%s is a raw image, not a filesystem", p.displayName.c_str()); return false; }
+    t.setStatus("Checking " + p.displayName);
+    if (device::isSim()) { t.print("[simulator] fsck %s (%s): clean", p.blockDev.c_str(), p.fsType.c_str()); return true; }
+    if (!unmount(p)) { t.print("Cannot unmount %s - is something using it?", p.mountPoint.c_str()); return false; }
+    std::string dev = util::shellQuote(p.blockDev);
+    int rc;
+    if (p.fsType == "ext4" || p.fsType == "ext3" || p.fsType == "ext2") {
+        rc = runFs("e2fsck -fy " + dev, t);
+        rc = rc >= 0 && rc < 4 ? 0 : rc;  // 1/2 = errors corrected
+    } else if (p.fsType == "f2fs") {
+        rc = runFs("fsck.f2fs -f -a " + dev, t);
+    } else if (p.fsType == "vfat") {
+        rc = runFs("fsck_msdos -y " + dev + " || fsck.fat -a " + dev, t);
+    } else if (p.fsType == "exfat") {
+        rc = runFs("fsck.exfat -y " + dev + " || exfatfsck " + dev, t);
+    } else if (p.fsType == "ntfs") {
+        rc = runFs("ntfsfix " + dev, t);
+    } else {
+        t.print("No checker known for %s", p.fsType.c_str());
+        return false;
+    }
+    t.print(rc == 0 ? "Filesystem is clean (or was repaired)." : "fsck reported errors (exit %d)", rc);
+    mount(p);
+    return rc == 0;
+}
+
+bool Partitions::resizeFs(Partition& p, Task& t) {
+    if (p.isImage()) return false;
+    t.setStatus("Resizing " + p.displayName);
+    if (device::isSim()) { t.print("[simulator] resize filesystem on %s to fill the partition", p.blockDev.c_str()); return true; }
+    if (!unmount(p)) { t.print("Cannot unmount %s", p.mountPoint.c_str()); return false; }
+    std::string dev = util::shellQuote(p.blockDev);
+    int rc;
+    if (p.fsType == "ext4" || p.fsType == "ext3" || p.fsType == "ext2") {
+        runFs("e2fsck -fy " + dev, t);
+        rc = runFs("resize2fs " + dev, t);
+    } else if (p.fsType == "f2fs") {
+        rc = runFs("resize.f2fs " + dev, t);
+    } else {
+        t.print("Resizing %s is not supported", p.fsType.c_str());
+        return false;
+    }
+    mount(p);
+    t.print(rc == 0 ? "Filesystem now fills the partition." : "Resize failed (exit %d)", rc);
+    return rc == 0;
+}
+
+std::string Partitions::fsInfo(Partition& p) {
+    std::string out = "Device: " + p.blockDev + "\nSize: " + util::humanSize(blockSize(p.blockDev)) + "\nType (fstab): " + p.fsType + "\n";
+    if (device::isSim()) return out + "[simulator]\n";
+    std::string o;
+    util::runCapture("blkid " + util::shellQuote(p.blockDev) + " 2>/dev/null", o);
+    out += o;
+    if (p.fsType.rfind("ext", 0) == 0) {
+        util::runCapture("dumpe2fs -h " + util::shellQuote(p.blockDev) + " 2>/dev/null | head -n 40", o);
+        out += o;
+    }
+    return out;
+}
+
+int Partitions::rescanRemovable() {
+    int found = 0;
+    // USB mass storage shows up as sd* disks that are not UFS LUNs (those are not removable).
+    std::string usbDev;
+    for (auto& e : util::listDir(device::path("/sys/block"))) {
+        if (!util::startsWith(e.name, "sd")) continue;
+        if (util::readLine(device::path("/sys/block/" + e.name + "/removable")) != "1") continue;
+        std::string base = device::path("/dev/block/" + e.name);
+        usbDev = util::exists(base + "1") ? base + "1" : base;
+        break;
+    }
+    Partition* otg = find("/usb_otg");
+    if (!usbDev.empty()) {
+        if (!otg) {
+            Partition p;
+            p.mountPoint = "/usb_otg";
+            p.fsType = "auto";
+            p.removable = p.storage = true;
+            p.displayName = "USB OTG";
+            p.blockDev = usbDev;
+            finalize(p);
+        } else {
+            otg->blockDev = usbDev;
+        }
+        found++;
+    }
+    if (Partition* sd = find("/external_sd")) {
+        for (auto c : {"/dev/block/mmcblk1p1", "/dev/block/mmcblk1"})
+            if (util::exists(device::path(c))) { sd->blockDev = device::path(c); found++; break; }
+    }
+    refresh();
+    return found;
 }
 
 bool Partitions::wipeDalvik(Task& t) {

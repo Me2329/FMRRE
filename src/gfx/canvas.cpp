@@ -91,6 +91,9 @@ Canvas::IRect Canvas::clipFor(float x0, float y0, float x1, float y1) const {
     r.y0 = std::max(c.y0, (int)std::floor(y0 + oy_));
     r.x1 = std::min(c.x1, (int)std::ceil(x1 + ox_));
     r.y1 = std::min(c.y1, (int)std::ceil(y1 + oy_));
+    // Fully clipped rects must come out empty, never inverted (callers loop/fill from x0 to x1).
+    r.x1 = std::max(r.x1, r.x0);
+    r.y1 = std::max(r.y1, r.y0);
     return r;
 }
 

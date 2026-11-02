@@ -15,14 +15,17 @@ cc_binary {
     srcs: [
         "src/**/*.cpp",
         "third_party/miniz/miniz.c",
+        "third_party/xz/*.c",
     ],
     local_include_dirs: [
         "src",
         "third_party/stb",
         "third_party/miniz",
+        "third_party/xz",
     ],
     cflags: [
         "-DMINIZ_NO_ZLIB_COMPATIBLE_NAMES",
+        "-D_FILE_OFFSET_BITS=64",
         "-DTW_BUILD_DATE=\"aosp\"",
         "-Wno-unused-parameter",
         "-Wno-missing-field-initializers",

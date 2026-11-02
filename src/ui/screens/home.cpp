@@ -116,10 +116,13 @@ public:
             {Icon::Folder, "Files", "Browse & manage", th.accent2, 5},
             {Icon::Terminal, "Terminal", "Root shell", rgb(0x94A3B8), 6},
             {Icon::Advanced, "Advanced", "Power tools", rgb(0xC084FC), 7},
+            {Icon::Phone, "GSI", "Flash system images", rgb(0x2DD4BF), 8},
+            {Icon::Key, "Root", "Magisk & modules", rgb(0xFBBF24), 9},
         };
+        const int nTiles = int(sizeof(tiles) / sizeof(tiles[0]));
         float gap = ui.dp(12);
         float tw = (inner.w - gap) / 2, tH = ui.dp(124);
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < nTiles; i++) {
             Rect r(inner.x + (i % 2) * (tw + gap), y + (i / 2) * (tH + gap), tw, tH);
             // staggered entrance
             float appear = ui.anim(ui.id("tile_in", i), 1.f, 9.f - i * 0.6f);
@@ -134,10 +137,12 @@ public:
                     case 5: app.push(makeFilesScreen()); break;
                     case 6: app.push(makeTerminalScreen()); break;
                     case 7: app.push(makeAdvancedScreen()); break;
+                    case 8: app.push(makeGsiScreen()); break;
+                    case 9: app.push(makeRootScreen()); break;
                 }
             }
         }
-        y += 4 * (tH + gap) + ui.dp(4);
+        y += ((nTiles + 1) / 2) * (tH + gap) + ui.dp(4);
 
         // Wide rows: Settings & Reboot
         Rect sRow(inner.x, y, inner.w, ui.dp(72));

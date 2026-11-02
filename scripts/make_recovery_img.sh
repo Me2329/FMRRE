@@ -45,6 +45,8 @@ else
   TARGET=system/bin/recovery
 fi
 "$MB" cpio "$CPIO" "add 0755 $TARGET $BIN"
+# `twrp` command line tool (adb shell twrp ...): the same binary, selected by its name.
+"$MB" cpio "$CPIO" "ln /$TARGET $(dirname "$TARGET")/twrp" 2>/dev/null || echo "  (could not add the twrp symlink - use: recovery twrp ...)"
 if [ -n "$FSTAB" ]; then
   "$MB" cpio "$CPIO" "mkdir 0755 system/etc" 2>/dev/null || true
   "$MB" cpio "$CPIO" "add 0644 system/etc/twrp.fstab $FSTAB"

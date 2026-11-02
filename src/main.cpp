@@ -25,8 +25,10 @@
 #include "platform/display.h"
 #include "platform/input.h"
 #include "sim.h"
+#include "sys/ors.h"
 #include "sys/partitions.h"
 #include "ui/app.h"
+#include "ui/screens/screens.h"
 
 using namespace tw;
 
@@ -37,7 +39,8 @@ static void usage() {
            "  --size WxH          simulator resolution (default 540x1170)\n"
            "  --headless          no window; use with --script\n"
            "  --script FILE       automation: tap X Y | swipe X1 Y1 X2 Y2 MS | wait MS | key NAME | text STR | shot FILE\n"
-           "  --out DIR           where 'shot' files are written\n");
+           "  --out DIR           where 'shot' files are written\n"
+           "  twrp <command>      command line mode (also when run as 'twrp'): twrp help\n");
 }
 
 static Key keyByName(const std::string& n) {
@@ -126,11 +129,14 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
 }
 
 int main(int argc, char** argv) {
-    bool sim = false, headless = false;
+    bool sim = false, headless = false, cli = util::basename(argv[0]) == "twrp";
     std::string simRoot = "sim_root", script, outDir = "shots";
+    std::vector<std::string> cliArgs;
     int sw = 540, sh = 1170;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
+        if (cli) { cliArgs.push_back(a); continue; }
+        if (a == "twrp") { cli = true; continue; }
         auto next = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--sim") sim = true;
         else if (a == "--sim-root") simRoot = next();
@@ -143,12 +149,15 @@ int main(int argc, char** argv) {
     }
     signal(SIGPIPE, SIG_IGN);
 
+    if (cli) log::setConsole(false);
     if (sim) {
         char real[4096];
         util::mkdirs(simRoot);
         if (realpath(simRoot.c_str(), real)) simRoot = real;
         sim::ensureRoot(simRoot);
-        log::init(simRoot + "/tmp/recovery.log");
+        log::init(simRoot + (cli ? "/tmp/twrp-cli.log" : "/tmp/recovery.log"));
+    } else if (cli) {
+        log::init("/tmp/twrp-cli.log");
     } else {
         util::mkdirs("/tmp");
         log::init("/tmp/recovery.log");
@@ -164,6 +173,11 @@ int main(int argc, char** argv) {
     std::string cfgDir = Partitions::get().storagePath() + "/TWRP";
     if (!util::mkdirs(cfgDir)) cfgDir = device::path("/tmp");
     Settings::get().load(cfgDir + "/.twrpv2.conf");
+    if (cli) {
+        int rc = ors::cliMain(cliArgs);
+        Task::get().join();
+        return rc;
+    }
 
     std::unique_ptr<Display> display;
     std::unique_ptr<EvdevInput> input;
@@ -195,14 +209,25 @@ int main(int argc, char** argv) {
     LOGI("display: %s %dx%d", display->name(), display->width(), display->height());
 
     App app(display.get(), input.get(), &queue);
+    app.idleHook = orsIdle;
+    util::mkdirs(util::dirname(ors::uiPidFile()));
+    util::writeFile(ors::uiPidFile(), std::to_string(getpid()) + "\n");
+    ors::Script pending;
+    if (ors::takePending(pending)) {
+        LOGI("ors: %zu command(s) from %s", pending.lines.size(), pending.source.c_str());
+        app.push(makeOrsScreen(pending));
+    }
     if (headless) {
         if (script.empty()) {
             fprintf(stderr, "headless mode needs --script\n");
             return 1;
         }
-        return runScript(app, script, outDir);
+        int rc = runScript(app, script, outDir);
+        unlink(ors::uiPidFile().c_str());
+        return rc;
     }
     app.run();
     Task::get().join();
+    unlink(ors::uiPidFile().c_str());
     return 0;
 }

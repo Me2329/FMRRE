@@ -8,7 +8,11 @@
 
 #include "core/log.h"
 #include "core/util.h"
+#include "sys/super.h"
 #include "miniz.h"
+
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace tw::sim {
 
@@ -41,8 +45,130 @@ static void makeZip(const std::string& path, const std::string& script, bool mag
     mz_zip_writer_end(&z);
 }
 
+// Android sparse image whose expanded content starts with an ext4 superblock.
+static std::string sparseExt4(uint64_t expanded, const std::string& label) {
+    const uint32_t blk = 4096;
+    uint32_t total = uint32_t(expanded / blk);
+    std::string out;
+    auto u16 = [&](uint16_t v) { out.append((const char*)&v, 2); };
+    auto u32 = [&](uint32_t v) { out.append((const char*)&v, 4); };
+    const uint32_t dataBlocks = 64;  // 256 KiB of content after the superblock
+    u32(0xED26FF3A); u16(1); u16(0); u16(28); u16(12);
+    u32(blk); u32(total); u32(3); u32(0);
+    // chunk 1: raw, superblock + content
+    u16(0xCAC1); u16(0); u32(1 + dataBlocks); u32(12 + (1 + dataBlocks) * blk);
+    std::string sb(blk, '\0');
+    sb[1080] = 0x53; sb[1081] = (char)0xEF;
+    memcpy(&sb[1144], label.data(), std::min<size_t>(label.size(), 16));
+    out += sb;
+    std::mt19937 rng(42);
+    for (uint32_t i = 0; i < dataBlocks * blk; i++) out.push_back(char('A' + rng() % 8));
+    // chunk 2: don't care up to the last block
+    u16(0xCAC3); u16(0); u32(total - 2 - dataBlocks); u32(12);
+    // chunk 3: fill the last block with a pattern
+    u16(0xCAC2); u16(0); u32(1); u32(16); u32(0x54575632);  // "2VWT"
+    return out;
+}
+
+static void writeGzip(const std::string& path, const std::string& data) {
+    size_t clen = 0;
+    void* c = tdefl_compress_mem_to_heap(data.data(), data.size(), &clen, TDEFL_DEFAULT_MAX_PROBES);
+    if (!c) return;
+    std::string out("\x1f\x8b\x08\0\0\0\0\0\0\x03", 10);
+    out.append((const char*)c, clen);
+    mz_free(c);
+    uint32_t crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, (const unsigned char*)data.data(), data.size()), sz = (uint32_t)data.size();
+    out.append((const char*)&crc, 4);
+    out.append((const char*)&sz, 4);
+    util::writeFile(path, out);
+}
+
+// A Pixel-like virtual A/B super: 8 GiB, _b partitions empty, ~2.5 GiB free.
+static void ensureSuper(const std::string& root) {
+    std::string superDev = root + "/dev/block/by-name/super";
+    lp::Metadata probe;
+    std::string err;
+    if (lp::read(superDev, 0, probe, err)) return;
+    LOGI("sim: creating dynamic partitions (super)");
+    const uint64_t superSize = 8ull << 30;
+    int fd = open(superDev.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    if (ftruncate(fd, (off_t)superSize) != 0) { close(fd); return; }
+    close(fd);
+    lp::Metadata m;
+    m.slotCount = 3;
+    m.maxSize = 65536;
+    m.minor = 2;
+    m.headerSize = 256;
+    m.headerFlags = lp::kHeaderFlagVirtualAB;
+    m.devs.push_back({2048, 1 << 20, 0, superSize, "super", 0});
+    m.groups.push_back({"default", 0, 0});
+    m.groups.push_back({"google_dynamic_partitions_a", 0, superSize - (16ull << 20)});
+    m.groups.push_back({"google_dynamic_partitions_b", 0, superSize - (16ull << 20)});
+    struct P { const char* n; uint64_t mb; };
+    P layout[] = {{"system", 1840}, {"system_ext", 420}, {"product", 2650}, {"vendor", 610}, {"vendor_dlkm", 42}, {"odm", 8}};
+    for (const char* s : {"_a", "_b"})
+        for (auto& p : layout) {
+            std::string e;
+            m.add(std::string(p.n) + s, std::string("google_dynamic_partitions") + s, lp::kAttrReadonly, e);
+            if (std::string(s) == "_a") m.resize(std::string(p.n) + s, p.mb << 20, e);
+        }
+    if (!lp::format(superDev, m, err)) { LOGE("sim: super: %s", err.c_str()); return; }
+    for (auto& p : m.parts) {
+        std::string f = root + "/dev/block/mapper/" + p.name;
+        if (!p.bytes()) { unlink(f.c_str()); continue; }
+        int pf = open(f.c_str(), O_RDWR | O_CREAT, 0644);
+        if (pf >= 0) { if (ftruncate(pf, (off_t)p.bytes()) != 0) {} close(pf); }
+    }
+    // Real AVB headers in vbmeta so the verified-boot tools have something to patch.
+    for (auto v : {"vbmeta_a", "vbmeta_b"}) {
+        std::string vb(4096, '\0');
+        memcpy(&vb[0], "AVB0", 4);
+        vb[7] = 1;
+        memcpy(&vb[128], "avbtool 1.3.0", 13);
+        util::writeFile(root + "/dev/block/by-name/" + v, vb);
+    }
+    std::string dl = root + "/data/media/0/Download/";
+    // Boot images with real v4 headers (Pixel 8: ramdisk in init_boot, GKI kernel in boot).
+    auto bootHdr = [&](const std::string& f, uint32_t kernel, uint32_t ramdisk) {
+        std::string b(4 << 20, '\0');
+        memcpy(&b[0], "ANDROID!", 8);
+        auto put = [&](size_t o, uint32_t v) { memcpy(&b[o], &v, 4); };
+        put(8, kernel); put(12, ramdisk);
+        put(16, ((15u << 14) << 11) | ((26u << 4) | 10u));  // Android 15, 2026-10
+        put(20, 4096); put(40, 4);
+        util::writeFile(f, b);
+    };
+    for (auto s2 : {"_a", "_b"}) {
+        bootHdr(root + "/dev/block/by-name/boot" + std::string(s2), 3 << 20, 0);
+        bootHdr(root + "/dev/block/by-name/init_boot" + std::string(s2), 0, 900 << 10);
+    }
+    util::mkdirs(root + "/data/adb/magisk");
+    util::writeFile(root + "/data/adb/magisk/util_functions.sh", "MAGISK_VER='29.0'\nMAGISK_VER_CODE=29000\n");
+    struct M { const char* id; const char* prop; };
+    M mods[] = {{"playintegrityfix", "id=playintegrityfix\nname=Play Integrity Fix\nversion=v18.7\nauthor=chiteroman\n"},
+                {"zygisk_lsposed", "id=zygisk_lsposed\nname=LSPosed\nversion=v1.10.1\nauthor=LSPosed\n"},
+                {"bootloop_demo", "id=bootloop_demo\nname=Font changer (demo)\nversion=2.1\nauthor=someone\n"}};
+    for (auto& m : mods) {
+        util::mkdirs(root + "/data/adb/modules/" + m.id);
+        util::writeFile(root + "/data/adb/modules/" + m.id + "/module.prop", m.prop);
+    }
+    util::writeFile(dl + "magisk_patched-29000_Xy12z.img", "");
+    bootHdr(dl + "magisk_patched-29000_Xy12z.img", 0, 950 << 10);
+    // Demo GSIs as they are actually downloaded.
+    std::string gsi = sparseExt4(3300ull << 20, "/");
+    writeGzip(dl + "lineage-22.1-arm64_bvN-vndklite.img.gz", gsi);
+    std::string raw = dl + "system-td-arm64-ab-vanilla.img";
+    util::writeFile(raw, gsi);
+    // Desktop only: use the host's xz to produce the .img.xz most GSIs ship as (keeps the raw .img otherwise).
+    if (util::haveBinary("xz") && util::run("xz -T0 -f " + util::shellQuote(raw)) == 0) LOGI("sim: created %s.xz", raw.c_str());
+    // A GSI saved with a name the image picker can't recognise - the "can't find my file" case.
+    util::writeFile(dl + "GSI_A15_download(1)", gsi);
+    util::writeFile(dl + "pixel-gsi.img.crdownload", std::string(4096, '\0'));
+}
+
 void ensureRoot(const std::string& root) {
-    if (util::exists(root + "/sim.prop")) return;
+    if (util::exists(root + "/sim.prop")) { ensureSuper(root); return; }
     LOGI("sim: creating sandbox in %s", root.c_str());
     for (auto d : {"/data/media/0/Download", "/data/media/0/TWRP", "/data/media/0/Pictures", "/data/app", "/data/data/com.android.settings",
                    "/data/dalvik-cache/arm64", "/data/system", "/cache/recovery", "/system_root/system/app", "/vendor/etc",
@@ -59,6 +185,7 @@ void ensureRoot(const std::string& root) {
                     "/system_root  ext4   system       flags=display=\"System\";logical;slotselect;backup=1\n"
                     "/vendor       ext4   vendor       flags=display=\"Vendor\";logical;slotselect;backup=1\n"
                     "/product      ext4   product      flags=display=\"Product\";logical;slotselect\n"
+                    "/system_ext   ext4   system_ext   flags=display=\"System Ext\";logical;slotselect\n"
                     "/metadata     ext4   /dev/block/by-name/metadata  flags=display=\"Metadata\"\n"
                     "/data         f2fs   /dev/block/by-name/userdata  flags=display=\"Data\";backup=1;wipeingui;storage\n"
                     "/cache        ext4   /dev/block/by-name/cache     flags=display=\"Cache\";wipeingui\n"
@@ -104,6 +231,7 @@ void ensureRoot(const std::string& root) {
     util::writeFile(root + "/data/media/0/Download/notes.txt",
                     "TWRP v2 simulator\n\nThis sandbox mimics an Android device.\nEverything you do here stays inside this folder.\n");
     util::writeFile(root + "/external_sd/Music/song.mp3", std::string(500000, '\x11'));
+    ensureSuper(root);
 }
 
 }  // namespace tw::sim
