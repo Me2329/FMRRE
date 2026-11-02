@@ -1,0 +1,47 @@
+wait 1600
+swipe 270 950 270 250 250
+wait 1500
+tap 270 775
+wait 800
+shot 19_settings.png
+tap 130 256
+wait 300
+tap 300 389
+wait 900
+shot 20_settings_aurora.png
+key home
+wait 700
+swipe 270 300 270 1000 200
+wait 1500
+tap 140 672
+wait 800
+swipe 62 1005 520 1005 400
+wait 300
+shot 21_backup_running.png
+waittask
+shot 22_backup_done.png
+key home
+wait 700
+tap 397 672
+wait 800
+shot 23_restore_list.png
+tap 270 194
+wait 800
+shot 24_restore_detail.png
+key home
+wait 700
+tap 397 855
+wait 800
+tap 270 318
+wait 800
+shot 25_files.png
+tap 270 662
+wait 800
+shot 26_sheet.png
+key back
+wait 400
+longpress 270 318
+wait 300
+tap 270 404
+wait 500
+shot 27_select.png

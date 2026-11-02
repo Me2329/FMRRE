@@ -1,0 +1,30 @@
+wait 1600
+tap 488 88
+wait 700
+shot 13_reboot.png
+tap 140 345
+wait 600
+shot 14_dialog.png
+key back
+key home
+wait 600
+tap 397 1010
+wait 800
+shot 15_advanced.png
+tap 270 220
+wait 2200
+shot 16_monitor.png
+key back
+wait 600
+tap 270 768
+wait 700
+text uname -a; echo; df -h /
+wait 100
+tap 489 708
+wait 900
+shot 17_terminal.png
+key home
+wait 600
+swipe 270 950 270 250 250
+wait 1500
+shot 18_home_scrolled.png

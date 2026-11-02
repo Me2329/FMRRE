@@ -1,0 +1,66 @@
+# Screenshots for the README (540x1170 simulator, fresh sandbox)
+wait 1700
+shot home.png
+tap 140 490
+wait 600
+tap 270 502
+wait 600
+tap 270 318
+wait 600
+tap 270 404
+wait 900
+shot install.png
+swipe 62 1005 520 1005 400
+wait 700
+shot flashing.png
+waittask
+key home
+wait 600
+tap 140 672
+wait 900
+shot backup.png
+key home
+wait 600
+tap 397 490
+wait 900
+shot wipe.png
+key home
+wait 600
+tap 488 88
+wait 700
+tap 140 345
+wait 700
+shot dialog.png
+key back
+key home
+wait 600
+tap 397 1010
+wait 700
+tap 270 220
+wait 2500
+shot monitor.png
+key back
+wait 600
+tap 270 768
+wait 600
+text getprop | grep product; uname -r
+tap 489 708
+wait 900
+shot terminal.png
+key home
+wait 600
+tap 397 855
+wait 700
+tap 270 318
+wait 700
+tap 270 662
+wait 800
+shot files.png
+key back
+key home
+wait 600
+swipe 270 950 270 250 250
+wait 1500
+tap 270 874
+wait 900
+shot settings.png

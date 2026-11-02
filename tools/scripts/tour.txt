@@ -1,0 +1,47 @@
+# Guided tour used to generate the README screenshots (540x1170 simulator)
+wait 1600
+shot 01_home.png
+tap 140 490
+wait 700
+shot 02_install.png
+tap 270 502
+wait 700
+tap 270 318
+wait 700
+shot 03_picker.png
+tap 270 404
+wait 800
+shot 04_queue.png
+swipe 62 1005 520 1005 400
+wait 1200
+shot 05_flashing.png
+waittask
+shot 06_done.png
+key home
+wait 700
+tap 140 672
+wait 800
+shot 07_backup.png
+key home
+wait 600
+tap 397 490
+wait 800
+shot 08_wipe.png
+key home
+wait 600
+tap 140 855
+wait 800
+shot 09_mount.png
+key home
+wait 600
+tap 432 1120
+wait 900
+shot 10_console.png
+tap 432 1120
+wait 600
+tap 488 88
+wait 800
+shot 11_reboot.png
+tap 140 300
+wait 700
+shot 12_dialog.png

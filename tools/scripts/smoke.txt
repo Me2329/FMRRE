@@ -1,0 +1,2 @@
+wait 1600
+shot 01_home.png

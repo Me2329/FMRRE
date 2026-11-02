@@ -1,0 +1,13 @@
+wait 1600
+tap 148 459
+tap 270 459
+tap 391 459
+tap 148 558
+wait 200
+shot 31_pin.png
+tap 391 757
+wait 900
+shot 32_light_home.png
+tap 397 490
+wait 800
+shot 33_light_wipe.png

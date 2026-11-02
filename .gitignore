@@ -1,0 +1,5 @@
+build*/
+out/
+sim_root/
+shots/
+*.o

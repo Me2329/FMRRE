@@ -1,0 +1,35 @@
+// TWRP v2 - build inside an AOSP / LineageOS / TWRP-minimal-manifest tree.
+//
+// Clone this repo to bootable/twrpv2 (or anywhere in the tree) and add
+//     PRODUCT_PACKAGES += twrpv2_recovery
+// to your device makefile. The module installs as /system/bin/recovery inside
+// the recovery ramdisk and replaces the stock recovery UI.
+
+cc_binary {
+    name: "twrpv2_recovery",
+    stem: "recovery",
+    recovery: true,
+    static_executable: true,
+    overrides: ["recovery"],
+
+    srcs: [
+        "src/**/*.cpp",
+        "third_party/miniz/miniz.c",
+    ],
+    local_include_dirs: [
+        "src",
+        "third_party/stb",
+        "third_party/miniz",
+    ],
+    cflags: [
+        "-DMINIZ_NO_ZLIB_COMPATIBLE_NAMES",
+        "-DTW_BUILD_DATE=\"aosp\"",
+        "-Wno-unused-parameter",
+        "-Wno-missing-field-initializers",
+        "-Wno-sign-compare",
+        "-Wno-unused-function",
+        "-Wno-#pragma-messages",
+    ],
+    cppflags: ["-fexceptions"],
+    stl: "libc++_static",
+}

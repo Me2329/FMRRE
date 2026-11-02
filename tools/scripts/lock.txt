@@ -1,0 +1,2 @@
+wait 1600
+shot 30_lock.png

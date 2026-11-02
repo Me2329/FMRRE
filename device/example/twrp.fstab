@@ -1,0 +1,29 @@
+# TWRP v2 fstab example for a modern A/B device with dynamic partitions.
+# Format:  <mount point>  <fs>  <block device>  flags=<flag;flag;...>
+#   display="Name"   name in the UI          backup=1      offered in Backup
+#   wipeingui        offered in Advanced wipe flashimg=1    image target in Install
+#   slotselect       append _a/_b             logical       lives in super (dm-linear)
+#   storage          can hold backups         removable     SD card / USB OTG
+#
+# Copy to your recovery ramdisk as /system/etc/twrp.fstab or /etc/twrp.fstab.
+# If no twrp.fstab exists, TWRP v2 reads the regular AOSP fstab instead.
+
+/system_root  ext4   system       flags=display="System";logical;slotselect;backup=1
+/vendor       ext4   vendor       flags=display="Vendor";logical;slotselect;backup=1
+/product      ext4   product      flags=display="Product";logical;slotselect
+/system_ext   ext4   system_ext   flags=display="System Ext";logical;slotselect
+/odm          ext4   odm          flags=display="ODM";logical;slotselect
+/metadata     ext4   /dev/block/by-name/metadata   flags=display="Metadata"
+/data         f2fs   /dev/block/by-name/userdata   flags=display="Data";backup=1;wipeingui;storage
+/persist      ext4   /dev/block/by-name/persist    flags=display="Persist";backup=1
+
+/boot         emmc   /dev/block/by-name/boot         flags=display="Boot";slotselect;backup=1;flashimg=1
+/init_boot    emmc   /dev/block/by-name/init_boot    flags=display="Init Boot";slotselect;backup=1;flashimg=1
+/vendor_boot  emmc   /dev/block/by-name/vendor_boot  flags=display="Vendor Boot";slotselect;backup=1;flashimg=1
+/dtbo         emmc   /dev/block/by-name/dtbo         flags=display="DTBO";slotselect;backup=1;flashimg=1
+/vbmeta       emmc   /dev/block/by-name/vbmeta       flags=display="VBMeta";slotselect;flashimg=1
+/modemst1     emmc   /dev/block/by-name/modemst1     flags=display="EFS modemst1";backup=1
+/modemst2     emmc   /dev/block/by-name/modemst2     flags=display="EFS modemst2";backup=1
+
+/external_sd  auto   /dev/block/mmcblk1p1  flags=display="MicroSD";storage;wipeingui;removable
+/usb_otg      auto   /dev/block/sda1       flags=display="USB OTG";storage;removable

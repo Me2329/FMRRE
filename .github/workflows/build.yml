@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libx11-dev
+          pip install ziglang
+      - name: Simulator build + UI smoke test
+        run: |
+          scripts/build.sh sim
+          build-host/twrpv2_selftest
+          out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
+      - name: Android arm64 (static)
+        run: scripts/build.sh arm64
+      - name: Android armv7 (static)
+        run: scripts/build.sh arm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twrpv2-recovery
+          path: |
+            out/arm64/recovery
+            out/arm/recovery
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: shots/

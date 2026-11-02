@@ -1,0 +1,9 @@
+wait 1600
+swipe 270 950 270 250 250
+wait 1500
+tap 270 874
+wait 900
+shot 28_settings.png
+swipe 270 900 270 300 300
+wait 1500
+shot 29_settings2.png

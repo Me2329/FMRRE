@@ -1,0 +1,17 @@
+# CMake toolchain: cross-compile TWRP v2 for Android with Zig (no NDK needed).
+# Produces a fully static musl binary that runs inside any recovery ramdisk.
+set(CMAKE_SYSTEM_NAME Linux)
+if(NOT ZIG_TARGET)
+  set(ZIG_TARGET "aarch64-linux-musl")
+endif()
+string(REGEX MATCH "^[^-]+" CMAKE_SYSTEM_PROCESSOR "${ZIG_TARGET}")
+set(ENV{ZIG_TARGET} "${ZIG_TARGET}")
+set(CMAKE_C_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zig-cc")
+set(CMAKE_CXX_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zig-cxx")
+set(CMAKE_AR "${CMAKE_CURRENT_LIST_DIR}/zig-ar")
+set(CMAKE_RANLIB "${CMAKE_CURRENT_LIST_DIR}/zig-ranlib")
+set(TW_X11 OFF CACHE BOOL "" FORCE)
+set(TW_STATIC ON CACHE BOOL "" FORCE)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
