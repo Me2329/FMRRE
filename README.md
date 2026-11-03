@@ -11,6 +11,7 @@ It does not need Android, a framework or a GPU.
 ![Tools](docs/screenshots/tools.png)
 ![Themes](docs/screenshots/themes.png)
 ![GSI wizard, Find & flash, dd command, Root](docs/screenshots/gsi_root.png)
+![A/B ROM / OTA install, built-in fastbootd, Bootloop rescue, Romanian UI](docs/screenshots/ota_fastboot_rescue.png)
 
 > **Status: experimental - NOT tested on a real phone yet.** Everything here builds (host and static binaries
 > for 7 CPU architectures, each one also run on an emulated CPU with qemu-user), runs in the desktop simulator
