@@ -110,6 +110,42 @@ bool setProp(const std::string& key, const std::string& value) {
 
 const Info& info() { return g_info; }
 
+const char* buildAbi() {
+#if defined(__aarch64__)
+    return "arm64-v8a";
+#elif defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 7
+    return "armeabi-v7a";
+#elif defined(__arm__)
+    return "armeabi";
+#elif defined(__x86_64__)
+    return "x86_64";
+#elif defined(__i386__)
+    return "x86";
+#elif defined(__riscv) && __riscv_xlen == 64
+    return "riscv64";
+#elif defined(__mips__) && !defined(__mips64)
+    return "mips";
+#else
+    return "unknown";
+#endif
+}
+
+bool animationsByDefault() { return std::string(buildAbi()) != "armeabi"; }
+
+std::string machine() {
+    struct utsname u;
+    return uname(&u) == 0 ? u.machine : "";
+}
+
+std::string abiAdvice() {
+    std::string m = machine(), b = buildAbi();
+    bool kernel64 = m == "aarch64" || m == "armv8l" || m == "armv8b" || m == "x86_64";
+    if (kernel64 && (b == "armeabi-v7a" || b == "armeabi")) return "64-bit CPU: the arm64 build is faster and works where 32-bit apps are not supported";
+    if (m == "x86_64" && b == "x86") return "64-bit CPU: the x86_64 build is faster";
+    if ((m == "armv7l" || m == "armv8l") && b == "armeabi") return "ARMv7 CPU: the armeabi-v7a build is much faster (hardware floating point)";
+    return "";
+}
+
 static std::string psDir() {
     std::string base = path("/sys/class/power_supply");
     for (auto n : {"battery", "Battery", "BAT0", "bms"})

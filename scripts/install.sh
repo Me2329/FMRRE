@@ -19,6 +19,7 @@
 #   --disable-vbmeta               also flash a generated empty vbmeta (flags 3) - GSI/Samsung style
 #   --no-vbmeta                    Samsung: don't put vbmeta in the package
 #   --build-from STOCK.img         first build the image from your stock recovery/boot/vendor_boot image
+#                                  (the CPU architecture is detected from it; TW_BINARY=out/<arch>/recovery overrides)
 #   --odin-only                    Samsung: only build the .tar.md5, don't flash
 #   -y, --yes                      don't ask for confirmation
 #   --dry-run                      print the fastboot/heimdall commands instead of running them
@@ -61,8 +62,8 @@ confirm() {
 # ---- image ------------------------------------------------------------------
 if [ -n "$BUILD_FROM" ]; then
   say "Building TWRP v2 from $(basename "$BUILD_FROM")"
-  [ -f out/arm64/recovery ] || scripts/build.sh arm64
-  scripts/make_recovery_img.sh "$BUILD_FROM" out/arm64/recovery
+  # "auto": the CPU architecture is taken from the stock ramdisk (and built if needed).
+  scripts/make_recovery_img.sh "$BUILD_FROM" "${TW_BINARY:-auto}"
   IMG="$ROOT/twrpv2-$(basename "$BUILD_FROM")"
 fi
 if [ -z "$IMG" ]; then
@@ -82,7 +83,9 @@ esac
 say "Image: $(basename "$IMG") ($KIND format, $(du -h "$IMG" | cut -f1))"
 
 # ---- detect the phone -----------------------------------------------------------
-fb_devices()  { have "$FASTBOOT" && "$FASTBOOT" devices 2>/dev/null | grep -q . ; }
+# Output is captured first and parsed afterwards: with pipefail, `tool | grep -q` can fail when grep
+# exits early and the tool gets SIGPIPE writing its next line (fastboot always prints "Finished...").
+fb_devices()  { have "$FASTBOOT" && [ -n "$("$FASTBOOT" devices 2>/dev/null)" ]; }
 heim_detect() { have "$HEIMDALL" && "$HEIMDALL" detect >/dev/null 2>&1 ; }
 adb_state()   { have "$ADB" && "$ADB" get-state 2>/dev/null || true; }
 
@@ -171,7 +174,18 @@ fi
 [ "$MODE" = fastboot ] || die "unknown --mode $MODE"
 have "$FASTBOOT" || die "fastboot not found. Install Android platform-tools: https://developer.android.com/tools/releases/platform-tools"
 [ "$DRY" = 1 ] || fb_devices || die "No phone in fastboot mode."
-gv() { "$FASTBOOT" getvar "$1" 2>&1 | sed -n "s/^$1: *//p" | head -n1 | tr -d '\r'; }
+gv() {  # value of a fastboot variable, "" if the bootloader doesn't have it
+  local out line
+  out="$("$FASTBOOT" getvar "$1" 2>&1)" || true
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    if [[ "$line" == "$1:"* ]]; then
+      line="${line#"$1:"}"
+      echo "${line#"${line%%[! ]*}"}"
+      return 0
+    fi
+  done <<< "$out"
+}
 PRODUCT="$(gv product)"; UNLOCKED="$(gv unlocked)"; SLOT="$(gv current-slot)"; USERSPACE="$(gv is-userspace)"
 say "Phone: ${PRODUCT:-unknown}  unlocked: ${UNLOCKED:-?}  slot: ${SLOT:-none}"
 if [ "$UNLOCKED" = no ]; then
@@ -182,7 +196,7 @@ if [ "$USERSPACE" = yes ]; then
   run "$FASTBOOT" reboot bootloader
   [ "$DRY" = 1 ] || wait_for fastboot || die "Bootloader didn't come back."
 fi
-haspart() { "$FASTBOOT" getvar "partition-size:$1" 2>&1 | grep -q "^partition-size:$1: *0x"; }
+haspart() { [[ "$(gv "partition-size:$1")" == 0x* ]]; }
 if [ -z "$PARTITION" ]; then
   if [ "$KIND" = vendor_boot ]; then PARTITION=vendor_boot
   elif haspart recovery || haspart "recovery_${SLOT:-a}"; then PARTITION=recovery

@@ -12,8 +12,9 @@ It does not need Android, a framework or a GPU.
 ![Themes](docs/screenshots/themes.png)
 ![GSI wizard, Find & flash, dd command, Root](docs/screenshots/gsi_root.png)
 
-> **Status: experimental - NOT tested on a real phone yet.** Everything here builds (host, static arm64 and
-> armv7), runs in the desktop simulator and passes the host self-tests (real `update-binary` protocol, sparse
+> **Status: experimental - NOT tested on a real phone yet.** Everything here builds (host and static binaries
+> for 7 CPU architectures, each one also run on an emulated CPU with qemu-user), runs in the desktop simulator
+> and passes the self-tests (real `update-binary` protocol, sparse
 > and compressed images, super metadata rewrite, backup → wipe → restore, OpenRecoveryScript). The features that
 > touch `super`, `vbmeta`, `misc` and device-mapper follow the AOSP on-disk formats exactly and are covered by
 > tests, but they have **never run on hardware**. Always try it with `fastboot boot` first, keep a working
@@ -64,7 +65,7 @@ It does not need Android, a framework or a GPU.
 | **Terminal** | Root shell with on-screen keyboard, history, quick-command chips, Ctrl-C |
 | **Advanced** | **System monitor** (CPU graph, per-core frequency, RAM, battery details, every thermal zone), partition info, **input and touch tester**, copy log, fix contexts, restart ADB, A/B **slot switching** |
 | **Reboot** | System, Recovery, Bootloader, **Fastbootd**, **Download** (Samsung), **EDL** (Qualcomm), Power off |
-| **Devices** | DRM/KMS and fbdev (32 bpp in any channel order, RGB565), multitouch protocol A/B and single touch, touch calibration (swap/flip), A/B slots, **dynamic/logical partitions** (`/dev/block/mapper`), reads **TWRP or AOSP fstabs** |
+| **Devices** | DRM/KMS and fbdev (32 bpp in any channel order, RGB565), multitouch protocol A/B and single touch, touch calibration (swap/flip), A/B slots, **dynamic/logical partitions** (`/dev/block/mapper`), reads **TWRP or AOSP fstabs**, **7 CPU architectures**: arm64-v8a, armeabi-v7a, armeabi (ARMv5), x86, x86_64, riscv64, mips. The right build is picked automatically from your stock image |
 
 ---
 
@@ -84,8 +85,10 @@ src/
   sim.cpp     fake device sandbox for desktop development
 tests/        host self-tests, installer tests (fake fastboot/adb/heimdall)
 device/       example twrp.fstab and device-tree snippet
-scripts/      build, make a recovery image, install it (fastboot / Samsung), try on a device
-tools/        odin_pack.py (Odin .tar.md5, disabled vbmeta), resource embedding, toolchain
+scripts/      build (7 architectures), test them on emulated CPUs, make a recovery image, install it
+              (fastboot / Samsung), try on a device
+tools/        odin_pack.py (Odin .tar.md5, disabled vbmeta), elf_abi.py (which build fits a phone),
+              resource embedding, Zig toolchain
 ```
 
 ---
@@ -99,16 +102,48 @@ recovery ramdisk regardless of the bionic version.
 ```bash
 pip install ziglang
 ```
-
 ```bash
 scripts/build.sh arm64
 ```
+This produces `out/arm64/recovery` (about 1.7 MB). Every Android CPU architecture is supported:
 
-This produces `out/arm64/recovery` (about 1.3 MB). Use `scripts/build.sh arm` for 32-bit armv7 devices.
+| `scripts/build.sh` | Android ABI | Oldest CPU it runs on | Typical devices |
+|---|---|---|---|
+| `arm64` | `arm64-v8a` | ARMv8-A (Cortex-A53) | almost every phone since ~2015 |
+| `arm` | `armeabi-v7a` | ARMv7-A + VFPv3 + NEON (Cortex-A8) | 32-bit phones 2011-2016, 32-bit-only Android builds |
+| `armv5` | `armeabi` | ARMv5TE (ARM926), no FPU | very old phones (Android 2.x-4.x, ARMv5/ARMv6 SoCs) |
+| `x86` | `x86` | i686 + SSSE3 (Core 2 / Atom) | Intel Atom phones and tablets, emulators |
+| `x86_64` | `x86_64` | x86-64 | emulators, Chromebooks, Android-x86 |
+| `riscv64` | `riscv64` | RV64GC | RISC-V Android boards |
+| `mips` | `mips` | MIPS32r2 + FPU, little-endian | Android 4.x MIPS tablets (Ingenic JZ47xx...) |
+
+`scripts/build.sh all` builds all of them, `scripts/build.sh list` prints the table, and the Android ABI names
+(`armeabi-v7a`, `arm64-v8a`...) work as aliases. **You don't have to pick**: `scripts/make_recovery_img.sh` reads
+the CPU type from the binaries already in your stock ramdisk and uses (and builds if needed) the matching one.
+`scripts/try_on_device.sh` asks the phone over adb. A binary for the wrong CPU is refused, because such a
+recovery would never start. In the recovery, Settings → About shows the build and the CPU, and suggests the
+64-bit build if a 32-bit one runs on a 64-bit phone.
+
+ARMv5 has no atomic instructions, so `src/platform/arm_atomics.cpp` supplies them through the Linux kernel's
+user helpers, like libgcc does. ARMv5/ARMv6 chips also have no usable FPU for this build (soft-float), so the
+software-rendered UI is slow there. The armeabi build turns animations off by default, and flashing, backups
+and wipes work at normal speed. MIPS64 is not offered: no Android device shipped with it, and the compiler
+backend can't build it.
+
+**Every architecture is run, not just compiled:** `scripts/test_archs.sh` starts each build on an emulated CPU
+of the oldest kind it supports (qemu-user). It runs the full self-test suite, boots the recovery UI headless and
+compares the screenshot with the desktop build, and uses the `twrp` CLI to resize super and flash a GSI from
+`.img.xz`. CI does this for all seven architectures.
+```bash
+TW_SELFTEST=1 scripts/build.sh all
+```
+```bash
+scripts/test_archs.sh
+```
 
 ### With the Android NDK
 ```bash
-ANDROID_NDK=/path/to/ndk scripts/build.sh ndk
+ANDROID_NDK=/path/to/ndk scripts/build.sh ndk arm64-v8a     # or armeabi-v7a, x86, x86_64, riscv64
 ```
 
 ### Inside an AOSP / LineageOS / TWRP tree
@@ -118,6 +153,7 @@ PRODUCT_PACKAGES += twrpv2_recovery
 ```
 It installs as `/system/bin/recovery` in the recovery ramdisk and overrides the stock recovery.
 See `device/example/` for an fstab and a device-tree snippet.
+Soong builds it for whatever CPU the device tree targets (arm64, arm, x86, x86_64, riscv64), like any other module.
 
 ---
 
@@ -133,7 +169,7 @@ can take from the Magisk APK):
 scripts/build.sh arm64
 ```
 ```bash
-scripts/make_recovery_img.sh recovery.img out/arm64/recovery device/example/twrp.fstab
+scripts/make_recovery_img.sh recovery.img auto device/example/twrp.fstab
 ```
 This writes `twrpv2-recovery.img` (or `twrpv2-boot.img` / `twrpv2-vendor_boot.img`).
 `scripts/install.sh --build-from recovery.img` does steps 1 and 2 in one go.
@@ -161,7 +197,7 @@ first, refuses images whose header doesn't match the phone's boot, verifies the 
 backups for a one-tap undo.
 
 Already in a recovery with root adb (TWRP, OrangeFox, LineageOS recovery)? You can also run TWRP v2 without
-building an image at all: `scripts/try_on_device.sh out/arm64/recovery`.
+building an image at all: `scripts/try_on_device.sh` (it picks the build for the phone's CPU).
 
 The installers are tested against fake `fastboot`/`adb`/`heimdall` (`tests/install_test.sh`), **not yet with
 a real phone**. `install.ps1` hasn't been run on Windows yet either. Please report anything that goes wrong.

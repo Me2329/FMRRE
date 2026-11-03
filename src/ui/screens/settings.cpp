@@ -74,7 +74,7 @@ public:
             cxp += cw + ui.dp(8);
         }
         float yy = ap.y + ui.dp(204);
-        bool anim = s.flag("animations", true);
+        bool anim = s.flag("animations", device::animationsByDefault());
         if (ui.toggleRow(ui.id("anim"), Rect(ap.x + ui.dp(4), yy, ap.w - ui.dp(8), ui.dp(64)), Icon::Bolt, "Animations",
                          "Transitions, ripples and motion", anim)) {
             s.setFlag("animations", anim);
@@ -187,7 +187,7 @@ public:
         if (ui.button(ui.id("reset"), Rect(x, y, w, ui.dp(50)), "Reset appearance", Icon::Refresh, BtnStyle::Outline)) {
             s.set("accent", 0);
             s.set("style", 0);
-            s.setFlag("animations", true);
+            s.setFlag("animations", device::animationsByDefault());
             s.set("anim_speed", 100);
             changed = true;
         }
@@ -234,6 +234,7 @@ public:
             {"Slot", i.ab ? std::string(1, (char)toupper(i.slot.back())) : "not A/B"}, {"Serial", i.serial},
             {"Display", std::to_string(c.width()) + " x " + std::to_string(c.height())},
             {"fstab", Partitions::get().fstabPath()},
+            {"Build", std::string(device::buildAbi()) + "  \xE2\x80\xA2  CPU " + device::machine()},
         };
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Device");
         y += ui.dp(30);
@@ -246,7 +247,12 @@ public:
                          th.text, AlignRight);
             ky += ui.dp(44);
         }
-        y += card.h + ui.dp(18);
+        y += card.h + ui.dp(12);
+        if (!device::abiAdvice().empty()) {
+            icons::drawCentered(c, Icon::Info, x + ui.dp(10), y + ui.dp(9), ui.dp(15), th.warn);
+            y += ui.textBlock(x + ui.dp(26), y, w - ui.dp(26), device::abiAdvice(), ui.dp(12.5f), th.warn) + ui.dp(10);
+        }
+        y += ui.dp(6);
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Credits");
         y += ui.dp(30);
         Rect cr(x, y, w, ui.dp(150));

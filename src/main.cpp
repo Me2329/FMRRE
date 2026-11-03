@@ -163,7 +163,8 @@ int main(int argc, char** argv) {
         log::init("/tmp/recovery.log");
         setenv("PATH", "/system/bin:/sbin:/bin:/vendor/bin:/system/xbin", 1);
     }
-    LOGI("TWRP v2 starting (%s)", sim ? "simulator" : "device");
+    LOGI("TWRP v2 starting (%s, %s build, cpu %s)", sim ? "simulator" : "device", device::buildAbi(), device::machine().c_str());
+    if (!device::abiAdvice().empty()) LOGW("%s", device::abiAdvice().c_str());
     device::init(sim, simRoot);
     Partitions::get().load();
     Partitions::get().mountAllStorage();

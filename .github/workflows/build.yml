@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  host:
+    name: simulator, self-tests, installer tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -16,31 +17,70 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libx11-dev
-          pip install ziglang
-      - name: Simulator build + UI smoke test
+          sudo apt-get install -y cmake libx11-dev xz-utils
+      - name: Simulator build + self-tests + UI tour
         run: |
           scripts/build.sh sim
           build-host/twrpv2_selftest
           out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
-      - name: Installer tests (fake fastboot / adb / heimdall)
+      - name: Installer tests (fake fastboot / adb / heimdall / magiskboot)
         run: tests/install_test.sh
-      - name: Android arm64 (static)
-        run: scripts/build.sh arm64
-      - name: Android armv7 (static)
-        run: scripts/build.sh arm
-      - uses: actions/upload-artifact@v4
-        with:
-          name: twrpv2-installer-kit
-          path: |
-            out/arm64/recovery
-            out/arm/recovery
-            scripts/install.sh
-            scripts/install.ps1
-            scripts/make_recovery_img.sh
-            tools/odin_pack.py
-            device/example/
       - uses: actions/upload-artifact@v4
         with:
           name: screenshots
           path: shots/
+
+  android:
+    name: ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, arm, armv5, x86, x86_64, riscv64, mips]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake qemu-user-static xz-utils
+          pip install ziglang pillow
+      - name: Build (static, with self-tests)
+        run: TW_SELFTEST=1 scripts/build.sh ${{ matrix.arch }}
+      - name: Host build for the reference screenshot
+        run: cmake -S . -B build-host -DTW_X11=OFF -DCMAKE_BUILD_TYPE=Release && cmake --build build-host -j"$(nproc)" --target twrpv2
+      - name: Run on an emulated CPU (self-tests, UI, CLI + GSI flash)
+        run: scripts/test_archs.sh ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twrpv2-${{ matrix.arch }}
+          path: |
+            out/${{ matrix.arch }}/recovery
+            out/${{ matrix.arch }}/ABI
+
+  kit:
+    name: installer kit
+    needs: android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: twrpv2-*
+          path: artifacts
+      - name: Assemble
+        run: |
+          mkdir -p kit/out
+          for d in artifacts/twrpv2-*; do a="${d#artifacts/twrpv2-}"; mkdir -p "kit/out/$a"; cp "$d"/* "kit/out/$a/"; done
+          mkdir -p kit/scripts kit/tools kit/device
+          cp scripts/install.sh scripts/install.ps1 scripts/make_recovery_img.sh scripts/try_on_device.sh scripts/build.sh kit/scripts/
+          cp tools/odin_pack.py tools/elf_abi.py kit/tools/
+          cp -r device/example kit/device/
+          cp README.md LICENSE kit/
+          find kit -type f | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twrpv2-installer-kit
+          path: kit/

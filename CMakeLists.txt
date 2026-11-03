@@ -36,8 +36,14 @@ if(TW_STATIC)
   target_link_options(twrpv2 PRIVATE -static -s)
 endif()
 
-# Host self-tests (installer protocol, sparse images, backup/restore round trip)
-if(NOT CMAKE_CROSSCOMPILING)
+# Self-tests (installer protocol, images, super metadata, backup/restore round trip). Cross builds can
+# include them too (-DTW_SELFTEST=ON) to run under qemu-user: scripts/test_archs.sh does that.
+if(CMAKE_CROSSCOMPILING)
+  option(TW_SELFTEST "Build the self-test binary (run it with qemu-user)" OFF)
+else()
+  option(TW_SELFTEST "Build the self-test binary" ON)
+endif()
+if(TW_SELFTEST)
   set(TW_TEST_SOURCES ${TW_SOURCES})
   list(FILTER TW_TEST_SOURCES EXCLUDE REGEX ".*/src/main\\.cpp$")
   list(FILTER TW_TEST_SOURCES EXCLUDE REGEX ".*/src/(ui|gfx)/.*")

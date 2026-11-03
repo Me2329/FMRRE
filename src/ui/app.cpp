@@ -34,7 +34,7 @@ App::App(Display* d, EvdevInput* in, InputQueue* q) : display_(d), input_(in), q
 void App::applySettings() {
     Settings& s = Settings::get();
     ui.th = makeTheme(s.integer("accent", 0), s.integer("style", 0));
-    ui.animations = s.flag("animations", true);
+    ui.animations = s.flag("animations", device::animationsByDefault());
     ui.animSpeed = s.integer("anim_speed", 100) / 100.0f;
     topInset = ui.dp((float)s.integer("inset_top", device::isSim() ? 0 : 24));
     bottomInset = ui.dp((float)s.integer("inset_bottom", device::isSim() ? 0 : 8));

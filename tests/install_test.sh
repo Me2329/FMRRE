@@ -36,6 +36,9 @@ case "$1" in
       is-userspace) echo "is-userspace: no" >&2 ;;
       partition-size:recovery*) [ "${FB_RECOVERY:-0}" = 1 ] && echo "$2: 0x4000000" >&2 || echo "getvar:$2 FAILED (remote: 'Variable not found')" >&2 ;;
     esac
+    # Like a real phone over USB: the summary line comes a moment later. A `fastboot | grep -q`
+    # under pipefail breaks on this (grep exits, fastboot gets SIGPIPE) - the installer must not.
+    sleep 0.05
     echo "Finished. Total time: 0.001s" >&2 ;;
 esac
 exit 0
@@ -116,6 +119,83 @@ python3 tools/odin_pack.py check out/samsung/twrpv2-recovery-odin.tar.md5 > "$T/
 scenario "nothing connected"
 inst "$IMG"
 [ "$(rc)" != 0 ] && grep -q "No phone found" "$T/out" && pass "explains how to connect" || fail "no-phone message"
+
+echo "--- make_recovery_img.sh: picks the binary for the phone's CPU"
+# Fake magiskboot: the "ramdisk" is a folder (rd/) next to ramdisk.cpio; repack writes a manifest.
+cat > "$T/bin/magiskboot" <<'MAGISKBOOT'
+#!/bin/bash
+cmd="$1"; shift
+case "$cmd" in
+  unpack) cp -a "$FAKE_RAMDISK" rd; : > ramdisk.cpio ;;
+  repack)
+    { printf 'ANDROID!\n'
+      for f in system/bin/recovery system/bin/twrp; do
+        if [ -L "rd/$f" ]; then echo "$f -> $(readlink "rd/$f")"
+        elif [ -f "rd/$f" ]; then echo "$f $(sha256sum < "rd/$f" | cut -c1-16)"; fi
+      done; } > "$2" ;;
+  cpio)
+    shift
+    for c in "$@"; do
+      set -- $c
+      case "$1" in
+        exists) [ -e "rd/$2" ] || [ -L "rd/$2" ] || exit 1 ;;
+        mv) mv "rd/$2" "rd/$3" ;;
+        mkdir) mkdir -p "rd/$3" ;;
+        add) mkdir -p "$(dirname "rd/$3")"; cp "$4" "rd/$3" ;;
+        ln) ln -s "$2" "rd/$3" ;;
+        extract) { [ -e "rd/$2" ] || [ -L "rd/$2" ]; } || exit 1; cp -P "rd/$2" "$3" ;;
+      esac
+    done ;;
+esac
+exit 0
+MAGISKBOOT
+chmod +x "$T/bin/magiskboot"
+# Minimal stock binaries for each CPU (ARM ones carry real .ARM.attributes: v7 vs v5TE).
+python3 - "$T" <<'PYELF'
+import os, struct, sys
+T = sys.argv[1]
+def elf64(machine):
+    return b"\x7fELF" + bytes([2, 1, 1]) + bytes(9) + struct.pack("<HHI", 2, machine, 1) + bytes(64 - 24)
+def elf32(machine, arm_arch=None):
+    hdr = bytearray(b"\x7fELF" + bytes([1, 1, 1]) + bytes(9) + struct.pack("<HHI", 2, machine, 1) + bytes(52 - 24))
+    if arm_arch is None:
+        return bytes(hdr)
+    attrs = bytes([5]) + b"cpu\0" + bytes([6, arm_arch])                 # Tag_CPU_name, Tag_CPU_arch
+    filesub = bytes([1]) + struct.pack("<I", 1 + 4 + len(attrs)) + attrs  # Tag_File
+    sub = b"aeabi\0" + filesub
+    sec = b"A" + struct.pack("<I", 4 + len(sub)) + sub
+    shoff = 52 + len(sec)
+    shoff += (-shoff) % 4
+    sh_attr = struct.pack("<10I", 0, 0x70000003, 0, 0, 52, len(sec), 0, 0, 1, 0)
+    struct.pack_into("<I", hdr, 0x20, shoff)            # e_shoff
+    struct.pack_into("<HHH", hdr, 0x2E, 40, 2, 0)       # e_shentsize, e_shnum, e_shstrndx
+    out = bytes(hdr) + sec
+    return out + bytes(shoff - len(out)) + bytes(40) + sh_attr
+stock = {"arm64": elf64(183), "arm": elf32(40, 10), "armv5": elf32(40, 4), "x86": elf32(3), "x86_64": elf64(62), "riscv64": elf64(243)}
+for arch, data in stock.items():
+    os.makedirs(f"{T}/rd-{arch}/system/bin")
+    open(f"{T}/rd-{arch}/system/bin/recovery", "wb").write(data)                 # the phone's stock recovery
+    os.makedirs(f"{T}/builds/{arch}", exist_ok=True)
+    open(f"{T}/builds/{arch}/recovery", "wb").write(data + b"TWRPv2-" + arch.encode())  # "our" build for that CPU
+os.makedirs(f"{T}/rd-none/lib/modules")                 # vendor_boot style ramdisk: no binaries
+open(f"{T}/stock.img", "wb").write(b"ANDROID!" + bytes(1024))
+PYELF
+MK="$PWD/scripts/make_recovery_img.sh"
+mk() { (cd "$T" && FAKE_RAMDISK="$T/rd-$1" TW_OUT_DIR="$T/builds" "$MK" stock.img ${2:+"$2"}) > "$T/mk.log" 2>&1; }
+for arch in arm64 arm armv5 x86 x86_64 riscv64; do
+  rm -f "$T/twrpv2-stock.img"
+  mk "$arch"
+  want="$(sha256sum < "$T/builds/$arch/recovery" | cut -c1-16)"
+  if grep -q "system/bin/recovery $want" "$T/twrpv2-stock.img" 2>/dev/null && grep -q "Architecture: $arch" "$T/mk.log"; then
+    pass "stock $arch ramdisk -> out/$arch/recovery"
+  else fail "stock $arch ramdisk"; sed 's/^/       /' "$T/mk.log"; fi
+done
+grep -q "system/bin/twrp -> /system/bin/recovery" "$T/twrpv2-stock.img" && pass "twrp CLI symlink added" || fail "twrp symlink"
+mk arm "$T/builds/arm64/recovery" && fail "arm64 binary accepted for an armeabi-v7a phone" || pass "wrong-CPU binary refused"
+grep -q "would never start" "$T/mk.log" && pass "explains the CPU mismatch" || fail "mismatch message"
+mk arm "$T/builds/armv5/recovery" && pass "armeabi binary allowed on an ARMv7 phone" || { fail "armeabi on ARMv7"; sed 's/^/       /' "$T/mk.log"; }
+(cd "$T" && FAKE_RAMDISK="$T/rd-none" TW_OUT_DIR="$T/builds" PATH="$T/bin:/usr/bin:/bin" "$MK" stock.img) > "$T/mk.log" 2>&1
+grep -q "assuming arm64" "$T/mk.log" && pass "no binaries in the ramdisk -> warns and assumes arm64" || { fail "fallback"; sed 's/^/       /' "$T/mk.log"; }
 
 echo "--- odin_pack"
 python3 tools/odin_pack.py vbmeta-disabled -o "$T/vd.img" >/dev/null

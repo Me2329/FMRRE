@@ -1,3 +1,4 @@
 #!/bin/sh
 # C compiler wrapper: zig's clang targeting static musl (runs from any Android ramdisk).
-exec ${ZIG:-python3 -m ziglang} cc -target "${ZIG_TARGET:-aarch64-linux-musl}" "$@"
+# ZIG_TARGET / ZIG_CPU come from scripts/build.sh (see its architecture table).
+exec ${ZIG:-python3 -m ziglang} cc -target "${ZIG_TARGET:-aarch64-linux-musl}" ${ZIG_CPU:+"-mcpu=$ZIG_CPU"} "$@"
