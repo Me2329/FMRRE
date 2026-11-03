@@ -28,6 +28,7 @@ struct Finding {
 
 struct Report {
     std::string bootReason;    // ro.boot.bootreason (e.g. kernel_panic, reboot,recovery)
+    std::string androidReason; // why Android itself sent the phone here (--reason=RescueParty, init_user0_failed ...)
     std::string logSource;     // which file the previous boot's log came from ("" = none)
     std::string log;           // that log (may be long)
     std::vector<std::string> otherLogs;  // more pstore files (panic dumps, ...)
@@ -40,12 +41,16 @@ struct Report {
 
 Report analyze();
 // The pattern matcher on its own (self-tests feed it sample logs).
-std::vector<Finding> scan(const std::string& log, const std::string& bootReason);
+std::vector<Finding> scan(const std::string& log, const std::string& bootReason, const std::string& androidReason = "");
 const char* fixLabel(Fix f);
 // Android writes its log to /dev/pmsg0 too; the kernel keeps it across a reboot as pstore's
 // pmsg-ramoops-N. Returns "E/AndroidRuntime: FATAL EXCEPTION ..." lines (warnings and worse,
 // plus everything from the crash buffer).
 std::string decodePmsg(const std::string& raw);
+// When Android gives up it reboots to recovery with --prompt_and_wipe_data --reason=<why> (Rescue Party,
+// /data that won't decrypt or mount). The reason is kept in /tmp until the next reboot.
+void setAndroidReason(const std::string& reason);
+std::string androidReason();
 // Copy the logs to <storage>/TWRP/logs/<date>/; returns the folder ("" on failure).
 std::string saveLogs(const Report& r);
 

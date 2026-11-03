@@ -24,7 +24,14 @@ static void randomFile(const std::string& p, size_t size) {
         for (int k = 0; k < 4 && i + k < size; k++) data[i + k] = char(v >> (8 * k));
     }
     // Recognisable header for boot images
-    if (util::basename(p).find("boot") != std::string::npos) memcpy(&data[0], "ANDROID!", 8);
+    if (util::basename(p).find("vendor_boot") == 0) {  // vendor boot header v4, page 4096, 1 MiB vendor ramdisk
+        memcpy(&data[0], "VNDRBOOT", 8);
+        const uint32_t f[] = {4, 4096, 0, 0, 1 << 20};
+        for (int k = 0; k < 20; k++) data[8 + k] = char(f[k / 4] >> (8 * (k % 4)));  // little-endian on every host
+        memset(&data[28], 0, 2048);
+    } else if (util::basename(p).find("boot") != std::string::npos) {
+        memcpy(&data[0], "ANDROID!", 8);
+    }
     util::writeFile(p, data);
 }
 

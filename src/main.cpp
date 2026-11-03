@@ -25,6 +25,7 @@
 #include "platform/display.h"
 #include "platform/input.h"
 #include "sim.h"
+#include "sys/autofix.h"
 #include "sys/ors.h"
 #include "sys/pathcheck.h"
 #include "sys/partitions.h"
@@ -128,6 +129,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "advanced") sc = makeAdvancedScreen();
             else if (name == "fastboot") sc = makeFastbootScreen(arg != "--no-start");
             else if (name == "rescue") sc = makeRescueScreen();
+            else if (name == "autofix") sc = makeAutoRepairScreen(arg == "--auto", arg == "--prompt");
             else if (name == "settings") sc = makeSettingsScreen();
             else if (name == "backup") sc = makeBackupScreen();
             else if (name == "restore") sc = makeRestoreScreen();
@@ -240,7 +242,11 @@ int main(int argc, char** argv) {
     if (ors::takePending(pending)) {
         LOGI("ors: %zu command(s) from %s", pending.lines.size(), pending.source.c_str());
         if (pending.lines.size() == 1 && pending.lines[0] == "fastboot") app.push(makeFastbootScreen(true));  // reboot fastboot
+        else if (pending.lines.size() == 1 && pending.lines[0] == "autofix --prompt")  // Android gave up booting
+            app.push(makeAutoRepairScreen(Settings::get().flag("autofix_auto"), true));
         else app.push(makeOrsScreen(pending));
+    } else if (Settings::get().flag("autofix_auto") && autofix::lastBootFailed()) {
+        app.push(makeAutoRepairScreen(true, false));  // "Repair automatically after a failed boot"
     }
     if (headless) {
         if (script.empty()) {

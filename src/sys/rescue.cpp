@@ -166,7 +166,7 @@ std::string slotInfo() {
 
 std::string decodePmsg(const std::string& raw) { return decodePmsgImpl(raw); }
 
-std::vector<Finding> scan(const std::string& log, const std::string& bootReason) {
+std::vector<Finding> scan(const std::string& log, const std::string& bootReason, const std::string& androidReason) {
     std::vector<Finding> out;
     for (auto& r : kRules) {
         std::string ev = firstLine(log, r.any);
@@ -189,13 +189,46 @@ std::vector<Finding> scan(const std::string& log, const std::string& bootReason)
     if (!has("The system froze (watchdog reset)") && br.find("watchdog") != std::string::npos)
         out.push_back({1, "The system froze (watchdog reset)", "The last reset came from the watchdog: something hung. Try the other slot.",
                        "boot reason: " + bootReason, Fix::SwitchSlot});
+    auto rule = [&](const char* title, int severity, const std::string& ev) {
+        if (has(title)) return;
+        for (auto& r : kRules)
+            if (std::string(r.title) == title) out.push_back({severity, r.title, r.explanation, ev, r.fix});
+    };
+    if (br.find("rescueparty") != std::string::npos) rule("Android gave up after repeated crashes (Rescue Party)", 2, "boot reason: " + bootReason);
+    // What Android said when it sent the phone to recovery (bootloader message --reason=).
+    std::string ar = util::toLower(androidReason);
+    if (!ar.empty()) {
+        std::string ev = "Android: --reason=" + androidReason;
+        auto any = [&](std::initializer_list<const char*> ws) { for (auto w : ws) if (ar.find(w) != std::string::npos) return true; return false; };
+        if (any({"rescueparty", "rescue_party"})) {
+            rule("Android gave up after repeated crashes (Rescue Party)", 2, ev);
+        } else if (any({"init_user0", "set_policy_failed", "enablefilecrypto", "fbe", "vold", "keystore", "encrypt", "fs_mgr_mount_all",
+                        "mount_userdata", "userdata", "metadata"})) {
+            rule("Android couldn't decrypt or mount /data", 2, ev);
+        } else if (!has("Android sent the phone to recovery")) {
+            out.push_back({1, "Android sent the phone to recovery", "Android stopped the boot itself and asked for recovery, with the reason "
+                           "below. Auto repair tries the safe fixes first.", ev, Fix::None});
+        }
+    }
     std::stable_sort(out.begin(), out.end(), [](const Finding& a, const Finding& b) { return a.severity > b.severity; });
     return out;
 }
 
+namespace {
+std::string reasonFile() { return device::path("/tmp/twrpv2/android_reason"); }
+}  // namespace
+
+void setAndroidReason(const std::string& reason) {
+    util::mkdirs(util::dirname(reasonFile()));
+    util::writeFile(reasonFile(), reason + "\n");
+}
+
+std::string androidReason() { return util::readLine(reasonFile()); }
+
 Report analyze() {
     Report r;
     r.bootReason = device::prop("ro.boot.bootreason");
+    r.androidReason = androidReason();
     for (auto& f : pstoreFiles()) {
         std::string b = util::basename(f);
         if (r.logSource.empty() && util::startsWith(b, "console-ramoops")) {
@@ -217,10 +250,13 @@ Report analyze() {
     }
     // The exception line that follows "FATAL EXCEPTION IN SYSTEM PROCESS" is the interesting part.
     extra += r.logcat;
-    r.findings = scan(r.log + "\n" + extra, r.bootReason);
+    r.findings = scan(r.log + "\n" + extra, r.bootReason, r.androidReason);
     r.slotInfo = slotInfo();
-    for (auto& e : history::recent(5))
-        r.changes.push_back(e.action + ": " + e.detail + (e.ok ? "" : " (failed)") + "  \xE2\x80\xA2  " + history::ago(e.time));
+    for (auto& e : history::recent(5)) {
+        std::string d = e.detail;  // auto repair entries end with " [step id]" - not for people
+        if (!d.empty() && d.back() == ']' && d.rfind(" [") != std::string::npos) d.erase(d.rfind(" ["));
+        r.changes.push_back(e.action + ": " + d + (e.ok ? "" : " (failed)") + "  \xE2\x80\xA2  " + history::ago(e.time));
+    }
     for (auto& m : bootimg::modules()) r.magiskModules |= !m.disabled;
     // Modules are the first thing to try for framework crashes when there are any.
     if (r.magiskModules) {

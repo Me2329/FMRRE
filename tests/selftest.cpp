@@ -4,6 +4,7 @@
 //   - Android sparse image flashing
 //   - backup -> wipe -> restore round trip (tar + gzip + sha256) in the simulator sandbox
 //   - bzip2 / xz decoding, Reed-Solomon, dm-verity hash tree + FEC, A/B OTA payload extraction
+#include <algorithm>
 #include <cstdio>
 #include <map>
 #include <cstring>
@@ -20,9 +21,11 @@
 #include "core/util.h"
 #include "platform/device.h"
 #include "sim.h"
+#include "sys/autofix.h"
 #include "sys/avb.h"
 #include "sys/backup.h"
 #include "sys/bootimg.h"
+#include "sys/history.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
 #include "sys/partitions.h"
@@ -738,6 +741,76 @@ static void testRescue() {
     CHECK(!f2.empty() && f2[0].evidence.find("IllegalStateException: boom") != std::string::npos);
 }
 
+// Auto repair on the simulator (its pstore holds a Rescue Party bootloop, /data has 3 Magisk modules).
+static void testAutofix(const std::string& dir) {
+    std::string root = dir + "/sim";
+    auto find = [](const autofix::Plan& p, const std::string& id) -> const autofix::Step* {
+        for (auto& s : p.steps)
+            if (s.id == id) return &s;
+        return nullptr;
+    };
+    // Android asked recovery to *offer* a factory reset: never erase on our own.
+    CHECK(ors::fromAospArgs({"--prompt_and_wipe_data", "--reason=RescueParty", "--locale=en-US"}) == std::vector<std::string>{"autofix --prompt"});
+    CHECK(ors::fromAospArgs({"--wipe_data"}) == std::vector<std::string>{"wipe data"});
+
+    autofix::Plan p = autofix::diagnose();
+    CHECK(p.bootFailed && p.headline.find("Rescue Party") != std::string::npos);
+    const autofix::Step* mods = find(p, "disable_modules");
+    CHECK(mods && mods->recommended && mods->risk == autofix::Risk::Undoable);
+    CHECK(find(p, "wipe_caches") && find(p, "wipe_caches")->recommended);
+    for (auto& s : p.steps) CHECK(!(s.risk == autofix::Risk::ErasesData && s.recommended));  // never on the first run
+    CHECK(!p.checks.empty() && p.checks[0].title.find("boot") != std::string::npos);
+
+    // What Android said counts: /data that won't unlock -> repair the file system, offer Format Data.
+    rescue::setAndroidReason("init_user0_failed");
+    p = autofix::diagnose();
+    CHECK(p.report.androidReason == "init_user0_failed");
+    CHECK(find(p, "repair_data_fs") && find(p, "repair_data_fs")->recommended && find(p, "format_data") && !find(p, "format_data")->recommended);
+    rescue::setAndroidReason("");
+
+    // The last change was a boot flash and boot is now damaged: restore the stock copy saved before.
+    std::string bn = root + "/dev/block/by-name/", stock;
+    CHECK(util::readFile(bn + "boot_a", stock));
+    std::string sdir = bootimg::backupDir();
+    util::mkdirs(sdir);
+    CHECK(util::writeFile(sdir + "/boot_a_stock_2026-10.img", stock));
+    history::record("Flash image", "boot_a <- custom-kernel.img", true);
+    {
+        int fd = open((bn + "boot_a").c_str(), O_WRONLY);
+        CHECK(fd >= 0 && pwrite(fd, "BROKEN!!", 8, 0) == 8);
+        close(fd);
+    }
+    p = autofix::diagnose();
+    const autofix::Step* rb = find(p, "restore_boot");
+    CHECK(rb && rb->recommended && util::basename(rb->file) == "boot_a_stock_2026-10.img");
+    CHECK(p.lastChange.find("custom-kernel.img") != std::string::npos);
+    bool damagedShown = false;
+    for (auto& c : p.checks) damagedShown |= c.title == "Boot image (boot_a)" && c.level == 2;
+    CHECK(damagedShown);
+    autofix::Options o;
+    o.only = {"restore_boot"};
+    CHECK(runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));
+    std::string after;
+    CHECK(util::readFile(bn + "boot_a", after) && after == stock);
+    auto h = history::recent(3);
+    CHECK(h.size() >= 2 && h[0].action == "Auto repair" && h[0].detail.find("[restore_boot]") != std::string::npos);
+    CHECK(h[1].detail.find("(by auto repair)") != std::string::npos);  // its own flash isn't "the last change"
+    // Next run: escalation - what was tried is not planned again.
+    p = autofix::diagnose();
+    CHECK(p.lastChange.find("custom-kernel.img") != std::string::npos);
+    rb = find(p, "restore_boot");
+    CHECK(rb && rb->triedBefore && !rb->recommended);
+    CHECK(p.earlierFixes >= 1);
+    // Format Data only with explicit permission.
+    o.only = {"format_data"};
+    o.allowFormatData = false;
+    if (find(p, "format_data")) CHECK(!runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));
+    // Unattended runs: at most 3 a day.
+    CHECK(autofix::autoRunAllowed());
+    for (int i = 0; i < 3; i++) autofix::noteAutoRun();
+    CHECK(!autofix::autoRunAllowed());
+}
+
 static void testI18n() {
     i18n::setLanguage("en");
     CHECK(i18n::tr("Back") == "Back");
@@ -786,6 +859,7 @@ int main() {
     testDecoders(dir);
     testPayload(dir);
     testRescue();
+    testAutofix(dir);
     testI18n();
     util::removeTree(dir);
     if (g_fail) {

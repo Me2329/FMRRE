@@ -5,6 +5,7 @@
 #include "core/settings.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/autofix.h"
 #include "sys/partitions.h"
 
 namespace tw {
@@ -90,11 +91,16 @@ public:
         Rect bar(hx, hero.b() - ui.dp(46), hero.w - ui.dp(40), ui.dp(8));
         c.fillRoundRect(bar, ui.dp(4), rgba(255, 255, 255, 40));
         if (frac > 0) c.fillRoundRect(Rect(bar.x, bar.y, std::max(bar.h, bar.w * frac), bar.h), ui.dp(4), heroText);
-        std::string st = encrypted_ ? "Data is encrypted \xE2\x80\xA2 internal storage unavailable"
+        // After a failed boot the card says so, in place of the storage line (same layout), and opens auto repair.
+        bool bootFailed = autofix::lastBootFailed();
+        std::string st = bootFailed ? "Last boot failed \xE2\x80\xA2 tap here for auto repair"
+                         : encrypted_ ? "Data is encrypted \xE2\x80\xA2 internal storage unavailable"
                          : dataMounted_ ? ("Internal storage  " + util::humanSize(dataUsed_) + " / " + util::humanSize(dataSize_))
                                         : "Data not mounted";
-        font::drawIn(c, Face::SemiBold, ui.dp(12.5f), Rect(hx, hero.b() - ui.dp(32), hero.w - ui.dp(40), ui.dp(20)), st, heroText);
-        if (dataSize_ && !encrypted_) {
+        if (bootFailed) icons::drawCentered(c, Icon::Warning, hx + ui.dp(8), hero.b() - ui.dp(22), ui.dp(15), rgb(0xFFD166));
+        font::drawIn(c, Face::SemiBold, ui.dp(12.5f), Rect(hx + (bootFailed ? ui.dp(22) : 0), hero.b() - ui.dp(32), hero.w - ui.dp(40), ui.dp(20)),
+                     st, bootFailed ? rgb(0xFFD166) : heroText);
+        if (dataSize_ && !encrypted_ && !bootFailed) {
             char pct[16];
             snprintf(pct, sizeof(pct), "%d%%", int(frac * 100 + 0.5f));
             font::drawIn(c, Face::Bold, ui.dp(12.5f), Rect(hx, hero.b() - ui.dp(32), hero.w - ui.dp(40), ui.dp(20)), pct, heroText,
@@ -102,7 +108,7 @@ public:
         }
         int heroRes = ui.clickable(ui.id("hero"), hero);
         ui.drawPressFx(ui.id("hero"), hero, rad, rgb(0xFFFFFF));
-        if (heroRes & Clicked) app.push(makeAboutScreen());
+        if (heroRes & Clicked) app.push(bootFailed ? makeAutoRepairScreen() : makeAboutScreen());
         y = hero.b() + ui.dp(20);
 
         // Main action grid

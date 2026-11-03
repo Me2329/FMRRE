@@ -92,7 +92,9 @@ for a in "$@"; do
     run "$bin" --sim --sim-root "$sim" twrp gsi "$gsi" > "$T/gsi-$a.log" 2>&1 &&
     grep -q "Verified" "$T/gsi-$a.log" && grep -q "$want" "$T/gsi-$a.log" &&
     run "$bin" --sim --sim-root "$sim" twrp payload install /sdcard/Download/lineage-22.2-20261101-nightly-husky-signed.zip > "$T/ota-$a.log" 2>&1 &&
-    grep -q "OTA installed to slot B" "$T/ota-$a.log" && grep -q "system_b .* verified" "$T/ota-$a.log"
+    grep -q "OTA installed to slot B" "$T/ota-$a.log" && grep -q "system_b .* verified" "$T/ota-$a.log" &&
+    run "$bin" --sim --sim-root "$sim" twrp autofix --dry-run > "$T/autofix-$a.log" 2>&1 &&
+    grep -q "Rescue Party" "$T/autofix-$a.log" && grep -q "\[x\] disable_modules" "$T/autofix-$a.log"
   } > "$T/cli-$a.log" 2>&1 && cli=ok || FAIL=1
 
   # fastbootd on this CPU, driven by the computer's real fastboot client (if installed)

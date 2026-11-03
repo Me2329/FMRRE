@@ -46,6 +46,14 @@ Info read(const std::string& dev) {
     uint8_t h[1660] = {};
     ssize_t n = pread(fd, h, sizeof(h), 0);
     close(fd);
+    if (n >= 64 && memcmp(h, "VNDRBOOT", 8) == 0) {  // vendor_boot (header v3/v4): no kernel, no OS version
+        i.headerVersion = le32(h + 8);
+        i.pageSize = le32(h + 12);
+        i.ramdiskSize = le32(h + 24);
+        i.cmdline.assign((const char*)h + 28, strnlen((const char*)h + 28, 2048 < n - 28 ? 2048 : size_t(n - 28)));
+        i.ok = true;
+        return i;
+    }
     if (n < 64 || memcmp(h, "ANDROID!", 8) != 0) { i.error = "no Android boot image header"; return i; }
     i.headerVersion = le32(h + 40);
     if (i.headerVersion >= 3) {

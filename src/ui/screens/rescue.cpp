@@ -40,6 +40,11 @@ public:
         ui.beginScroll(ui.id("rs_scroll"), area);
         float x = area.x + pad, w = area.w - pad * 2, y = area.y;
 
+        // ---- don't know what's wrong? one tap
+        if (ui.button(ui.id("rs_auto"), Rect(x, y, w, ui.dp(52)), "Auto repair - find and fix it for me", Icon::Wrench))
+            app.push(makeAutoRepairScreen());
+        y += ui.dp(66);
+
         // ---- last boot
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Last boot");
         y += ui.dp(30);
@@ -47,6 +52,7 @@ public:
             {"Boot reason", prettyReason(r_.bootReason)},
             {"Kernel log", r_.logSource.empty() ? "none kept" : util::basename(r_.logSource) + " (" + util::humanSize(r_.log.size()) + ")"},
         };
+        if (!r_.androidReason.empty()) rows.push_back({"Android said", r_.androidReason});
         float slotH = textH(r_.slotInfo, ui.dp(12.5f), w - ui.dp(32));
         Rect lc(x, y, w, ui.dp(26) * rows.size() + slotH + ui.dp(30));
         ui.card(lc);

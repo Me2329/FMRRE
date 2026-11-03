@@ -14,6 +14,14 @@ struct Entry {
 };
 
 void record(const std::string& action, const std::string& detail, bool ok);
+// While one lives on a thread, what is recorded there gets " (by <who>)" appended - auto repair uses it
+// so its own wipes and flashes aren't mistaken for "the last thing the user changed".
+struct By {
+    explicit By(const char* who);
+    ~By();
+    const char* prev;
+};
+extern const char kByAutoRepair[];
 std::vector<Entry> recent(size_t n);  // newest first
 std::string ago(int64_t t);           // "5 min ago", "yesterday"
 std::string path();

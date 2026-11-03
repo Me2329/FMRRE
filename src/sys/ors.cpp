@@ -1,5 +1,6 @@
 #include "sys/ors.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -10,6 +11,7 @@
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/autofix.h"
 #include "sys/avb.h"
 #include "sys/backup.h"
 #include "sys/bootimg.h"
@@ -220,8 +222,12 @@ std::vector<std::string> fromAospArgs(const std::vector<std::string>& args) {
         if (util::startsWith(a, "--update_package=")) {
             if (util::startsWith(v, "@")) out.push_back("print Block-map OTA packages (" + v + ") are not supported - flash the zip from storage.");
             else out.push_back("install " + v);
-        } else if (a == "--wipe_data" || a == "--prompt_and_wipe_data") {
+        } else if (a == "--wipe_data") {  // the user chose "Erase all data" in Android's settings
             out.push_back("wipe data");
+        } else if (a == "--prompt_and_wipe_data") {
+            // Android couldn't start (Rescue Party, /data won't decrypt or mount) and asks recovery to OFFER a
+            // factory reset. Never erase on our own: open auto repair, which tries the harmless fixes first.
+            out.push_back("autofix --prompt");
         } else if (a == "--wipe_cache") {
             out.push_back("wipe cache");
         } else if (a == "--sideload" || a == "--sideload_auto_reboot") {
@@ -256,6 +262,10 @@ bool takePending(Script& out) {
     }
     if (readBcb(args) && out.source.empty()) out.source = "bootloader message (misc)";
     clearBcb();
+    bool prompt = false;
+    for (auto& a : args) prompt |= a == "--prompt_and_wipe_data";
+    for (auto& a : args)
+        if (prompt && util::startsWith(a, "--reason=")) rescue::setAndroidReason(a.substr(9));
     out.lines = fromAospArgs(args);
     return !out.lines.empty();
 }
@@ -277,6 +287,8 @@ std::string help() {
            "  lp resize <name> <MB> | lp delete <name> | lp list | lp export [--empty] <file>\n"
            "  fastboot [--tcp PORT]     fastbootd: flash from a computer (USB; TCP for emulators)\n"
            "  rescue [save]             why did the last boot fail? (kernel log, boot reason, slots)\n"
+           "  autofix [--dry-run] [--bootloop] [--only=id,id] [--allow-slot-switch] [--allow-format-data] [--reboot]\n"
+           "                            find what stops the phone booting and fix it, safest fix first\n"
            "  history [N]               what was flashed / wiped / restored, newest first\n"
            "  payload info <ota.zip|payload.bin>\n"
            "  payload extract <ota.zip> [partition...] [--out DIR]   e.g. boot init_boot for Magisk\n"
@@ -287,6 +299,35 @@ std::string help() {
            "  dd <image> <partition>    print the equivalent dd command\n"
            "  print <text>, sleep <seconds>\n"
            "  reboot [recovery|bootloader|fastboot|edl|download|poweroff]\n";
+}
+
+// autofix [--dry-run|--prompt] [--bootloop] [--only=a,b] [--allow-slot-switch] [--allow-format-data] [--reboot]
+static bool doAutofix(const std::vector<std::string>& a, Task& t) {
+    bool dry = false, bootloop = false;
+    autofix::Options o;
+    for (auto& v : a) {
+        if (v == "--dry-run" || v == "--prompt") dry = true;
+        else if (v == "--bootloop") bootloop = true;
+        else if (v == "--allow-slot-switch") o.allowSlotSwitch = true;
+        else if (v == "--allow-format-data") o.allowFormatData = true;
+        else if (v == "--reboot") o.reboot = true;
+        else if (util::startsWith(v, "--only="))
+            for (auto& id : util::split(v.substr(7), ',')) o.only.insert(id);
+        else { t.print("autofix: unknown option %s", v.c_str()); return false; }
+    }
+    autofix::Plan p = autofix::diagnose(bootloop);
+    t.print("%s", p.headline.c_str());
+    if (!p.lastChange.empty()) t.print("Last change: %s", p.lastChange.c_str());
+    if (!p.report.androidReason.empty()) t.print("Android's reason: %s", p.report.androidReason.c_str());
+    for (auto& c : p.checks) t.print("%s %-28s %s", c.level >= 2 ? "[!!]" : c.level ? "[! ]" : "[ok]", c.title.c_str(), c.status.c_str());
+    if (p.steps.empty()) t.print("No automatic fix applies.");
+    for (auto& s : p.steps)
+        t.print("%s %-18s %s  (%s%s)", s.recommended ? "[x]" : "[ ]", s.id.c_str(), s.title.c_str(), autofix::riskName(s.risk),
+                s.triedBefore ? ", tried already" : "");
+    for (auto& adv : p.advice) t.print("Advice: %s", adv.c_str());
+    if (dry) return true;
+    t.print("Repairing:");
+    return autofix::apply(p, o, t);
 }
 
 bool run(const std::vector<std::string>& lines, Task& t) {
@@ -428,6 +469,8 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 if (f.fix != rescue::Fix::None) t.print("     fix: %s", rescue::fixLabel(f.fix));
             }
             if (rest == "save") t.print("Logs saved to %s", pathcheck::pretty(rescue::saveLogs(r)).c_str());
+        } else if (cmd == "autofix") {
+            ok = doAutofix(a, t);
         } else if (cmd == "payload") {
             ok = doPayload(a, t);
         } else if (cmd == "vbmeta") {
@@ -519,7 +562,8 @@ int cliMain(const std::vector<std::string>& args) {
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
     bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
                     (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
-                    (args[0] == "payload" && args.size() > 1 && args[1] == "info") || (args[0] == "rescue" && args.size() == 1) || args[0] == "history";
+                    (args[0] == "payload" && args.size() > 1 && args[1] == "info") || (args[0] == "rescue" && args.size() == 1) || args[0] == "history" ||
+                    (args[0] == "autofix" && std::find(args.begin(), args.end(), "--dry-run") != args.end());
     if (uiAlive && !readOnly) {
         util::mkdirs(queueDir());
         std::string id = std::to_string(getpid()) + "_" + std::to_string(util::nowMs());

@@ -11,6 +11,7 @@ namespace tw::history {
 
 namespace {
 std::mutex g_mu;
+thread_local const char* g_by = nullptr;
 
 std::string clean(std::string s) {
     for (auto& c : s)
@@ -25,7 +26,13 @@ std::string path() {
     return device::path("/tmp/twrpv2-history.txt");
 }
 
-void record(const std::string& action, const std::string& detail, bool ok) {
+const char kByAutoRepair[] = "auto repair";
+
+By::By(const char* who) : prev(g_by) { g_by = who; }
+By::~By() { g_by = prev; }
+
+void record(const std::string& action, const std::string& detailIn, bool ok) {
+    std::string detail = g_by ? detailIn + " (by " + g_by + ")" : detailIn;
     std::lock_guard<std::mutex> l(g_mu);
     std::string f = path(), old;
     util::readFile(f, old, 1 << 20);
