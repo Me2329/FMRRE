@@ -8,6 +8,7 @@
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/imagesrc.h"
 #include "sys/partitions.h"
 
 namespace tw::bootimg {
@@ -169,33 +170,108 @@ int disableAllModules() {
 
 std::string backupDir() { return Partitions::get().storagePath() + "/TWRP/root"; }
 
-std::vector<std::string> stockBackups() {
+std::string stockDir() { return Partitions::get().storagePath() + "/TWRP/stock"; }
+
+std::vector<std::string> imagesIn(const std::string& dir) {
     std::vector<std::string> v;
-    for (auto& e : util::listDir(backupDir()))
-        if (!e.dir && util::endsWith(e.name, ".img")) v.push_back(backupDir() + "/" + e.name);
+    for (auto& e : util::listDir(dir))
+        if (!e.dir && util::endsWith(e.name, ".img")) v.push_back(dir + "/" + e.name);
     return v;
 }
 
-bool backupStock(const RootTarget& t, Task& task, std::string* outFile) {
+std::vector<std::string> stockBackups() { return imagesIn(backupDir()); }
+
+bool backupPartition(const RootTarget& t, const std::string& dir, Task& task, std::string* outFile) {
     if (t.dev.empty()) { task.print("No %s partition to back up", t.name.c_str()); return false; }
     std::string tag = t.info.patchLevel.empty() ? util::dateStamp() : t.info.patchLevel;
-    std::string f = backupDir() + "/" + t.name + device::info().slot + "_stock_" + tag + ".img";
+    std::string f = dir + "/" + t.name + device::info().slot + "_stock_" + tag + ".img";
     task.setStatus("Backing up stock " + t.name);
     std::string want = Sha256::hexOfFile(t.dev);
-    for (auto& b : stockBackups())
+    for (auto& b : imagesIn(dir))
         if (util::fileSize(b) == Partitions::blockSize(t.dev) && Sha256::hexOfFile(b) == want) {
             task.print("Stock %s already backed up: %s", t.name.c_str(), util::basename(b).c_str());
             if (outFile) *outFile = b;
             return true;
         }
-    util::mkdirs(backupDir());
+    util::mkdirs(dir);
     if (!util::copyFile(t.dev, f, [&](uint64_t d, uint64_t tot) { if (tot) task.setSubProgress(float(d) / tot); })) {
         task.print("Backup of %s failed", t.name.c_str());
+        return false;
+    }
+    if (util::fileSize(f) != Partitions::blockSize(t.dev) && !device::isSim()) {
+        task.print("Backup of %s is incomplete - not continuing", t.name.c_str());
         return false;
     }
     util::writeFile(f + ".sha256", want + "  " + util::basename(f) + "\n");
     task.print("Saved stock %s to %s", t.name.c_str(), f.c_str());
     if (outFile) *outFile = f;
+    return true;
+}
+
+bool backupStock(const RootTarget& t, Task& task, std::string* outFile) { return backupPartition(t, backupDir(), task, outFile); }
+
+RootTarget recoveryTarget(const std::string& image) {
+    RootTarget t;
+    char magic[8] = {};
+    int fd = open(image.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) { if (pread(fd, magic, 8, 0) != 8) memset(magic, 0, 8); close(fd); }
+    if (!memcmp(magic, "VNDRBOOT", 8)) {
+        t.name = "vendor_boot";
+        t.dev = slotDev("vendor_boot");
+        t.why = "vendor_boot image: the recovery ramdisk lives in vendor_boot on this kind of device.";
+    } else {
+        std::string rec = slotDev("recovery");
+        if (!rec.empty()) {
+            t = {"recovery", rec, read(rec), "This phone has a recovery partition - the normal, safe place for TWRP v2."};
+        } else {
+            t.name = "boot";
+            t.dev = slotDev("boot");
+            t.why = "No recovery partition (A/B phone): the recovery ramdisk lives in boot. The image MUST be built "
+                    "from this phone's own boot.img, or Android won't boot.";
+        }
+    }
+    if (!t.dev.empty() && !t.info.ok) t.info = read(t.dev);
+    if (t.dev.empty()) t.why = "No " + t.name + " partition found on this device.";
+    return t;
+}
+
+bool installRecovery(const std::string& image, Task& task) {
+    std::string real = image;
+    char magic[8] = {};
+    int fd = open(real.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) { task.print("Cannot open %s", real.c_str()); return false; }
+    bool hdr = pread(fd, magic, 8, 0) == 8;
+    close(fd);
+    if (!hdr || (memcmp(magic, "ANDROID!", 8) && memcmp(magic, "VNDRBOOT", 8))) {
+        task.print("%s is not a recovery / boot image", util::basename(real).c_str());
+        return false;
+    }
+    RootTarget t = recoveryTarget(real);
+    if (t.dev.empty()) { task.print("%s", t.why.c_str()); return false; }
+    task.print("Installing %s to %s%s", util::basename(real).c_str(), t.name.c_str(), device::info().slot.c_str());
+    task.print("%s", t.why.c_str());
+    if (t.name == "boot") {
+        Info in = read(real), cur = t.info;
+        if (in.ok && cur.ok && (in.headerVersion != cur.headerVersion || (in.kernelSize == 0) != (cur.kernelSize == 0))) {
+            task.print("Refusing: the image (header v%u, kernel %s) doesn't match this phone's boot (header v%u, kernel %s).",
+                       in.headerVersion, in.kernelSize ? "yes" : "no", cur.headerVersion, cur.kernelSize ? "yes" : "no");
+            task.print("Build it from this phone's boot.img:  scripts/make_recovery_img.sh boot.img");
+            return false;
+        }
+    }
+    float base = task.rangeStart(), len = task.rangeLen();
+    task.setRange(base, len * 0.3f);
+    std::string saved;
+    if (!backupPartition(t, stockDir(), task, &saved)) { task.print("Not continuing without a backup."); return false; }
+    task.setRange(base + len * 0.3f, len * 0.7f);
+    img::FlashOptions o;
+    o.verify = true;
+    if (!img::flash(real, "", t.dev, o, task)) {
+        task.print("Flashing failed. Your original %s is saved as %s", t.name.c_str(), saved.c_str());
+        return false;
+    }
+    task.print("TWRP v2 installed to %s%s. Undo: flash %s back to %s.", t.name.c_str(), device::info().slot.c_str(),
+               util::basename(saved).c_str(), t.name.c_str());
     return true;
 }
 

@@ -52,6 +52,7 @@ It does not need Android, a framework or a GPU.
 | **Super partitions** | Reads and rewrites the LP metadata like fastbootd: usage map, groups, **resize / delete / create** logical partitions, free the inactive slot, map read-write, **automatic metadata backup + restore** before every change (written to all slots, backup copy first, verified by read-back) |
 | **Find & flash a file** | "Can't find your file?": type a path (`/sdcard/...` is mapped to recovery's real path), get a **diagnosis** (wrong folder, typo with fuzzy suggestions, unfinished download, encrypted or unmounted storage, missing extension - files are recognised by their content) and a **ready-to-run command** (`dd`, `xz -dc \| dd`, `simg2img` for sparse, `blockdev --setrw` for logical partitions) to open in the terminal, save as a script, or flash with the built-in streamer |
 | **Verified boot** | Show and change vbmeta flags for both slots (`--disable-verity --disable-verification` equivalent), original header saved first; flashing a `vbmeta.img` can patch it on the fly |
+| **Install TWRP v2** | From a computer: `scripts/install.sh` / `install.ps1` handle **fastboot** (test boot or permanent, A/B slots, vbmeta) and **Samsung Download mode** (Odin `.tar.md5` + Heimdall). From inside the recovery: **Install TWRP v2 permanently** after a `fastboot boot`, with an automatic stock backup |
 | **Root** | Detects Magisk / KernelSU / APatch and whether the ramdisk is in `boot` or `init_boot`; installs from zip/APK or flashes a `magisk_patched` image to the right partition **after an automatic stock backup**; one-tap unroot; **module manager** (enable, disable, remove, "bootloop? disable all") |
 | **Automation** | **OpenRecoveryScript** (`/cache/recovery/openrecoveryscript`) with a cancellable countdown, AOSP `/cache/recovery/command` and the **bootloader message in `misc`** (read and cleared, no recovery boot loops), and a **`twrp` command line tool** for `adb shell` (see below) |
 | **Wipe** | Factory reset (keeps internal storage), Advanced wipe checklist, **Format Data** (mkfs + metadata), ART/Dalvik wipe |
@@ -81,9 +82,10 @@ src/
   ui/screens/ home, install, GSI wizard, super, vbmeta, find & flash, root, fs tools, wipe,
               backup/restore, mount, files, terminal, advanced, settings, reboot, ORS
   sim.cpp     fake device sandbox for desktop development
-tests/        host self-tests
+tests/        host self-tests, installer tests (fake fastboot/adb/heimdall)
 device/       example twrp.fstab and device-tree snippet
-scripts/      build, make a recovery image, try on a device
+scripts/      build, make a recovery image, install it (fastboot / Samsung), try on a device
+tools/        odin_pack.py (Odin .tar.md5, disabled vbmeta), resource embedding, toolchain
 ```
 
 ---
@@ -121,23 +123,48 @@ See `device/example/` for an fstab and a device-tree snippet.
 
 ## Putting it on a phone
 
-**1. Try it without flashing anything.** This works if you're already in a recovery with root adb (TWRP,
-OrangeFox, LineageOS recovery):
-```bash
-scripts/try_on_device.sh out/arm64/recovery
-```
+You need **an unlocked bootloader**, and a TWRP v2 image built from **your phone's own** stock
+`recovery.img` (or `boot.img` / `vendor_boot.img` on phones without a recovery partition). Get the stock
+image from your firmware package; for Samsung it's inside the `AP_*.tar.md5`.
 
-**2. Build a bootable image from your current recovery** by swapping the binary in its ramdisk
-(needs `magiskboot`, which you can take from the Magisk APK):
+**1. Build the image** by swapping the recovery binary in the stock ramdisk (needs `magiskboot`, which you
+can take from the Magisk APK):
+```bash
+scripts/build.sh arm64
+```
 ```bash
 scripts/make_recovery_img.sh recovery.img out/arm64/recovery device/example/twrp.fstab
 ```
-```bash
-fastboot boot twrpv2-recovery.img
-```
-Only flash it once `fastboot boot` works.
+This writes `twrpv2-recovery.img` (or `twrpv2-boot.img` / `twrpv2-vendor_boot.img`).
+`scripts/install.sh --build-from recovery.img` does steps 1 and 2 in one go.
 
-**3. Build it into a device tree** as described above.
+**2. Install it** with `scripts/install.sh` (Linux / macOS) or `scripts\install.ps1` (Windows). It finds the
+phone in fastboot, Download mode or plain Android (USB debugging), and reboots it into the right mode.
+
+| Phone | Command | What happens |
+|---|---|---|
+| **Fastboot** (Pixel, Xiaomi, OnePlus, Motorola, Nothing, Sony...) | `scripts/install.sh` | **Test boot** (`fastboot boot`): TWRP v2 runs once from RAM, **nothing is written** |
+| | `scripts/install.sh --permanent` | Flashes it: to `recovery`, or to `boot` / `vendor_boot` on phones without a recovery partition (with a warning). `--both-slots`, `--vbmeta stock_vbmeta.img` or `--disable-vbmeta` as needed |
+| **Samsung** (Download mode) | `scripts/install.sh` | Builds an **Odin package** (`out/samsung/twrpv2-recovery-odin.tar.md5`: recovery.img + a vbmeta with verification disabled) and flashes it with **Heimdall** |
+| | Windows: `scripts\install.ps1 -Samsung` | Builds the same package: put it in Odin's **AP** slot, untick **Auto Reboot**, Start |
+| Windows, fastboot | `scripts\install.ps1` / `-Permanent` | Same as the first two rows |
+
+Samsung has no test boot, so it's always permanent. After flashing, boot **straight into recovery**
+(Volume Down + Power until the screen goes black, then immediately Volume Up + Power). Otherwise stock
+Android puts its own recovery back. The bootloader must be unlocked (OEM unlocking on) and the KG state must
+not be `Prenormal`.
+
+**3. Or make it permanent from inside TWRP v2.** After a test boot, copy the image to the phone
+(`adb push twrpv2-recovery.img /sdcard/Download/`). Then use **Advanced → Install TWRP v2 permanently** or
+`twrp recovery /sdcard/Download/twrpv2-recovery.img`. It saves the stock recovery/boot to `TWRP/stock`
+first, refuses images whose header doesn't match the phone's boot, verifies the write, and lists the stock
+backups for a one-tap undo.
+
+Already in a recovery with root adb (TWRP, OrangeFox, LineageOS recovery)? You can also run TWRP v2 without
+building an image at all: `scripts/try_on_device.sh out/arm64/recovery`.
+
+The installers are tested against fake `fastboot`/`adb`/`heimdall` (`tests/install_test.sh`), **not yet with
+a real phone**. `install.ps1` hasn't been run on Windows yet either. Please report anything that goes wrong.
 
 ### fstab
 TWRP v2 looks for `/etc/twrp.fstab`, `/etc/recovery.fstab`, `/system/etc/recovery.fstab` and finally
@@ -192,7 +219,7 @@ adb shell /system/bin/recovery twrp check /sdcard/Download/system.img
 `ln -s /system/bin/recovery /sbin/twrp` lets you just type `twrp ...`. Commands (the same ones work in
 OpenRecoveryScript files): `install`, `flash <image> <partition>`, `gsi`, `wipe`, `format data`, `backup`,
 `restore`, `mount`, `unmount`, `mkdir`, `cmd`, `sideload`, `lp list|resize|delete|free-other-slot`,
-`vbmeta disable|enable|status`, `root status|backup|modules-off`, `check <path>`, `dd <image> <partition>`,
+`vbmeta disable|enable|status`, `root status|backup|modules-off`, `recovery <image>`, `check <path>`, `dd <image> <partition>`,
 `print`, `sleep`, `reboot [target]`. `twrp help` lists them.
 
 In the simulator: `out/sim/twrpv2 --sim twrp lp list`.

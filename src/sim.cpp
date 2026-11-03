@@ -153,6 +153,7 @@ static void ensureSuper(const std::string& root) {
         util::mkdirs(root + "/data/adb/modules/" + m.id);
         util::writeFile(root + "/data/adb/modules/" + m.id + "/module.prop", m.prop);
     }
+    bootHdr(dl + "twrpv2-recovery.img", 3 << 20, 1 << 20);  // as built by scripts/make_recovery_img.sh from boot.img
     util::writeFile(dl + "magisk_patched-29000_Xy12z.img", "");
     bootHdr(dl + "magisk_patched-29000_Xy12z.img", 0, 950 << 10);
     // Demo GSIs as they are actually downloaded.

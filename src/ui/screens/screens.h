@@ -20,6 +20,7 @@ std::unique_ptr<Screen> makeSuperScreen();
 std::unique_ptr<Screen> makeVbmetaScreen();
 std::unique_ptr<Screen> makeFsToolsScreen(const std::string& mountPoint);
 std::unique_ptr<Screen> makeRootScreen();
+std::unique_ptr<Screen> makeInstallRecoveryScreen();
 std::unique_ptr<Screen> makeWipeScreen();
 std::unique_ptr<Screen> makeFormatDataScreen();
 std::unique_ptr<Screen> makeBackupScreen();

@@ -198,6 +198,7 @@ std::string help() {
            "  install <zip>             flash a zip\n"
            "  flash <image> <partition> flash any image (.img .xz .gz .zst .zip, sparse)\n"
            "  gsi <image>               resize system, flash GSI, disable AVB\n"
+           "  recovery <image>          install TWRP v2 permanently (stock recovery/boot saved first)\n"
            "  wipe <data|cache|dalvik|system|...>\n"
            "  format data\n"
            "  backup <SDCRBIVEP>[O][M] [name]   O=compress M=no digest\n"
@@ -314,6 +315,9 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 avb::Info i = avb::read(avb::vbmetaDevice(slot()));
                 t.print(i.ok ? "vbmeta%s flags=%u" : "vbmeta%s: unavailable", slot().c_str(), i.flags);
             }
+        } else if (cmd == "recovery") {
+            if (rest.empty()) { t.print("usage: recovery <twrpv2-recovery.img>"); ok = false; }
+            else ok = bootimg::installRecovery(pathcheck::resolve(rest), t);
         } else if (cmd == "root") {
             if (rest == "modules-off") {
                 t.print("Disabled %d module(s)", bootimg::disableAllModules());

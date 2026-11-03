@@ -6,6 +6,8 @@
 #include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -211,7 +213,9 @@ bool copyFile(const std::string& from, const std::string& to, const std::functio
     if (in < 0) return false;
     struct stat st;
     fstat(in, &st);
-    int out = open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, st.st_mode & 0777);
+    uint64_t total = st.st_size;
+    if (S_ISBLK(st.st_mode)) ioctl(in, BLKGETSIZE64, &total);  // stat() reports 0 for block devices
+    int out = open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, S_ISREG(st.st_mode) ? (st.st_mode & 0777) : 0644);
     if (out < 0) { close(in); return false; }
     std::vector<char> buf(1 << 20);
     uint64_t done = 0;
@@ -223,7 +227,7 @@ bool copyFile(const std::string& from, const std::string& to, const std::functio
         if (n == 0) break;
         if (write(out, buf.data(), n) != n) { ok = false; break; }
         done += n;
-        if (progress) progress(done, st.st_size);
+        if (progress) progress(done, total);
     }
     fsync(out);
     close(in);

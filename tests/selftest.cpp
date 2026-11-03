@@ -17,6 +17,7 @@
 #include "sim.h"
 #include "sys/avb.h"
 #include "sys/backup.h"
+#include "sys/bootimg.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
 #include "sys/partitions.h"
@@ -402,6 +403,44 @@ static void testPathcheck(const std::string& dir) {
     CHECK(util::isDir(root + "/tmp/ors-test-dir"));
     CHECK(!runTask("ors-fail", [](Task& t) { return ors::run({"print a", "bogus", "mkdir /tmp/never"}, t); }));
     CHECK(!util::exists(root + "/tmp/never"));
+
+    // Installing TWRP v2 permanently: A/B phone without a recovery partition -> boot, stock saved first
+    auto bootImg = [](const std::string& f, uint32_t hv, uint32_t kernel, char fill) {
+        std::string b(2 << 20, fill);
+        memcpy(&b[0], "ANDROID!", 8);
+        memcpy(&b[8], &kernel, 4);
+        memcpy(&b[40], &hv, 4);
+        util::writeFile(f, b);
+    };
+    std::string bootA = root + "/dev/block/by-name/boot_a", stockBoot;
+    bootImg(bootA, 4, 1 << 20, 'S');
+    util::readFile(bootA, stockBoot);
+    std::string twrp = root + "/data/media/0/Download/twrpv2-test.img", junk = root + "/data/media/0/Download/junk.img";
+    bootImg(twrp, 4, 1 << 20, 'T');
+    CHECK(bootimg::recoveryTarget(twrp).name == "boot");
+    CHECK(runTask("install-recovery", [&](Task& t) { return bootimg::installRecovery(twrp, t); }));
+    std::string now, img;
+    util::readFile(bootA, now);
+    util::readFile(twrp, img);
+    CHECK(now == img);
+    auto saved = bootimg::imagesIn(bootimg::stockDir());
+    std::string savedData;
+    CHECK(saved.size() == 1 && util::readFile(saved[0], savedData) && savedData == stockBoot);
+    // header mismatch with the phone's boot is refused, and boot stays untouched
+    bootImg(root + "/data/media/0/Download/v2.img", 2, 1 << 20, 'X');
+    CHECK(!runTask("install-mismatch", [&](Task& t) { return bootimg::installRecovery(root + "/data/media/0/Download/v2.img", t); }));
+    util::readFile(bootA, now);
+    CHECK(now == img);
+    util::writeFile(junk, std::string(8192, 'j'));
+    CHECK(!runTask("install-junk", [&](Task& t) { return bootimg::installRecovery(junk, t); }));
+    // with a recovery partition the image goes there instead
+    util::writeFile(root + "/dev/block/by-name/recovery_a", std::string(2 << 20, 'R'));
+    CHECK(bootimg::recoveryTarget(twrp).name == "recovery");
+    CHECK(runTask("install-recovery-part", [&](Task& t) { return bootimg::installRecovery(twrp, t); }));
+    util::readFile(root + "/dev/block/by-name/recovery_a", now);
+    CHECK(now == img);
+    CHECK(bootimg::imagesIn(bootimg::stockDir()).size() == 2);
+    unlink((root + "/dev/block/by-name/recovery_a").c_str());
 }
 
 int main() {

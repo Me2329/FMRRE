@@ -23,16 +23,23 @@ jobs:
           scripts/build.sh sim
           build-host/twrpv2_selftest
           out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
+      - name: Installer tests (fake fastboot / adb / heimdall)
+        run: tests/install_test.sh
       - name: Android arm64 (static)
         run: scripts/build.sh arm64
       - name: Android armv7 (static)
         run: scripts/build.sh arm
       - uses: actions/upload-artifact@v4
         with:
-          name: twrpv2-recovery
+          name: twrpv2-installer-kit
           path: |
             out/arm64/recovery
             out/arm/recovery
+            scripts/install.sh
+            scripts/install.ps1
+            scripts/make_recovery_img.sh
+            tools/odin_pack.py
+            device/example/
       - uses: actions/upload-artifact@v4
         with:
           name: screenshots
