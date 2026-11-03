@@ -1,4 +1,5 @@
 #include "sys/backup.h"
+#include "sys/history.h"
 #include "core/crypt.h"
 #include "core/log.h"
 #include "core/sha256.h"
@@ -535,7 +536,7 @@ bool checkPassword(const Set& s, const std::string& password, std::string& err) 
     return true;
 }
 
-bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFirst, Task& t, const std::string& password) {
+static bool restoreImpl(const Set& s, const std::vector<std::string>& parts, bool verifyFirst, Task& t, const std::string& password) {
     std::vector<const Item*> todo;
     for (auto& i : s.items)
         if (std::find(parts.begin(), parts.end(), i.part) != parts.end()) todo.push_back(&i);
@@ -590,6 +591,14 @@ bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFir
     }
     sync();
     return true;
+}
+
+bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFirst, Task& t, const std::string& password) {
+    bool ok = restoreImpl(s, parts, verifyFirst, t, password);
+    std::string what;
+    for (auto& p : parts) what += (what.empty() ? "" : ", ") + p;
+    history::record("Restore", s.name + " (" + what + ")", ok);
+    return ok;
 }
 
 }  // namespace tw::backup

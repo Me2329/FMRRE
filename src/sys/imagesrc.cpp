@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "sys/history.h"
 #include "core/log.h"
 #include "core/sha256.h"
 #include "core/task.h"
@@ -683,7 +684,7 @@ struct Writer {
 
 }  // namespace
 
-bool flash(const std::string& path, const std::string& zipEntry, const std::string& dev, const FlashOptions& o, Task& t) {
+static bool flashImpl(const std::string& path, const std::string& zipEntry, const std::string& dev, const FlashOptions& o, Task& t) {
     Info info = inspect(path, zipEntry);
     if (!info.ok) { t.print("Cannot read %s: %s", util::basename(path).c_str(), info.error.c_str()); return false; }
     t.print("Image: %s", util::basename(path).c_str());
@@ -826,6 +827,12 @@ bool flash(const std::string& path, const std::string& zipEntry, const std::stri
         t.print("Verified: SHA-256 of written data matches (%s...)", want.substr(0, 16).c_str());
     }
     return true;
+}
+
+bool flash(const std::string& path, const std::string& zipEntry, const std::string& dev, const FlashOptions& o, Task& t) {
+    bool ok = flashImpl(path, zipEntry, dev, o, t);
+    history::record("Flash image", util::basename(dev) + " <- " + util::basename(zipEntry.empty() ? path : zipEntry), ok);
+    return ok;
 }
 
 // ---- dd command generation ----------------------------------------------------

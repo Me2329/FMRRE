@@ -1,4 +1,5 @@
 #include "sys/installer.h"
+#include "sys/history.h"
 #include "core/log.h"
 #include "core/sha256.h"
 #include "core/task.h"
@@ -148,7 +149,7 @@ static bool simulateInstall(const std::string& path, const ZipInfo& zi, Task& t)
     return true;
 }
 
-bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
+static bool installZipImpl(const std::string& path, const InstallOptions& o, Task& t) {
     t.setStatus("Inspecting " + util::basename(path));
     t.print("Installing zip: %s", path.c_str());
     ZipInfo zi = inspectZip(path);
@@ -263,6 +264,14 @@ bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
         Partitions::get().wipeDalvik(t);
     }
     unlink(bin.c_str());
+    return ok;
+}
+
+bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
+    bool ota = payload::isOtaZip(path);  // A/B OTAs are recorded by payload::install
+    bool ok = installZipImpl(path, o, t);
+    if (!ota && !device::isSim()) history::record("Install zip", util::basename(path), ok);
+    else if (!ota) history::record("Install zip (simulated)", util::basename(path), ok);
     return ok;
 }
 

@@ -1,4 +1,5 @@
 #include "sys/partitions.h"
+#include "sys/history.h"
 #include "core/log.h"
 #include "core/settings.h"
 #include "core/task.h"
@@ -380,72 +381,80 @@ void Partitions::unmountAll() {
 }
 
 bool Partitions::wipe(Partition& p, Task& t) {
-    if (p.isImage()) {
-        t.print("Erasing %s (zero-fill)...", p.displayName.c_str());
-        int fd = open(p.blockDev.c_str(), O_WRONLY | O_CLOEXEC);
-        if (fd < 0) { t.print("  cannot open %s", p.blockDev.c_str()); return false; }
-        uint64_t sz = blockSize(p.blockDev);
-        std::vector<char> zero(1 << 20, 0);
-        uint64_t done = 0;
-        while (done < sz) {
-            size_t n = std::min<uint64_t>(zero.size(), sz - done);
-            if (write(fd, zero.data(), n) != (ssize_t)n) break;
-            done += n;
-            t.setSubProgress(float(done) / sz);
+    bool ok_ = [&]() -> bool {
+        if (p.isImage()) {
+            t.print("Erasing %s (zero-fill)...", p.displayName.c_str());
+            int fd = open(p.blockDev.c_str(), O_WRONLY | O_CLOEXEC);
+            if (fd < 0) { t.print("  cannot open %s", p.blockDev.c_str()); return false; }
+            uint64_t sz = blockSize(p.blockDev);
+            std::vector<char> zero(1 << 20, 0);
+            uint64_t done = 0;
+            while (done < sz) {
+                size_t n = std::min<uint64_t>(zero.size(), sz - done);
+                if (write(fd, zero.data(), n) != (ssize_t)n) break;
+                done += n;
+                t.setSubProgress(float(done) / sz);
+            }
+            fsync(fd);
+            close(fd);
+            return done == sz;
         }
-        fsync(fd);
-        close(fd);
-        return done == sz;
-    }
-    t.print("Wiping %s...", p.displayName.c_str());
-    if (!mount(p)) {
-        t.print("  %s can't be mounted - formatting instead", p.displayName.c_str());
-        return format(p, t);
-    }
-    std::vector<std::string> keep;
-    if (p.mountPoint == "/data") keep = {"media"};  // never wipe internal storage on a factory reset
-    if (p.mountPoint == "/data") t.print("  (internal storage /data/media is preserved)");
-    bool ok = util::removeTree(p.contentPath(), keep.empty() ? std::vector<std::string>{"lost+found"} : std::vector<std::string>{"media", "lost+found"});
-    t.print(ok ? "  done" : "  some files could not be removed");
-    return ok;
+        t.print("Wiping %s...", p.displayName.c_str());
+        if (!mount(p)) {
+            t.print("  %s can't be mounted - formatting instead", p.displayName.c_str());
+            return format(p, t);
+        }
+        std::vector<std::string> keep;
+        if (p.mountPoint == "/data") keep = {"media"};  // never wipe internal storage on a factory reset
+        if (p.mountPoint == "/data") t.print("  (internal storage /data/media is preserved)");
+        bool ok = util::removeTree(p.contentPath(), keep.empty() ? std::vector<std::string>{"lost+found"} : std::vector<std::string>{"media", "lost+found"});
+        t.print(ok ? "  done" : "  some files could not be removed");
+        return ok;
+    }();
+    history::record("Wipe", p.displayName, ok_);
+    return ok_;
 }
 
 bool Partitions::format(Partition& p, Task& t, const std::string& newFs) {
-    std::string fs = newFs.empty() ? p.fsType : newFs;
-    t.print("Formatting %s as %s...", p.displayName.c_str(), fs.c_str());
-    if (device::isSim()) {
-        util::removeTree(p.contentPath(), {"__keep__"});
-        util::mkdirs(p.contentPath());
+    bool ok_ = [&]() -> bool {
+        std::string fs = newFs.empty() ? p.fsType : newFs;
+        t.print("Formatting %s as %s...", p.displayName.c_str(), fs.c_str());
+        if (device::isSim()) {
+            util::removeTree(p.contentPath(), {"__keep__"});
+            util::mkdirs(p.contentPath());
+            if (!newFs.empty()) p.fsType = newFs;
+            t.print("  formatted (simulated)");
+            return true;
+        }
+        unmount(p);
+        std::string dev = util::shellQuote(p.blockDev);
+        std::string cmd;
+        if (fs == "ext4") {
+            cmd = util::haveBinary("mke2fs") ? "mke2fs -F -t ext4 -b 4096 " + dev
+                                              : "make_ext4fs " + dev;
+        } else if (fs == "f2fs") {
+            cmd = "make_f2fs -f -g android " + dev + " || mkfs.f2fs -f " + dev;
+        } else if (fs == "vfat") {
+            cmd = "mkfs.fat " + dev + " || newfs_msdos -F 32 " + dev;
+        } else if (fs == "exfat") {
+            cmd = "mkfs.exfat " + dev;
+        } else {
+            t.print("  unsupported filesystem '%s'", fs.c_str());
+            return false;
+        }
+        int rc = util::run(cmd, [&](const std::string& l) { t.print("  %s", l.c_str()); });
+        if (rc != 0) {
+            t.print("  mkfs failed (exit %d)", rc);
+            return false;
+        }
         if (!newFs.empty()) p.fsType = newFs;
-        t.print("  formatted (simulated)");
-        return true;
-    }
-    unmount(p);
-    std::string dev = util::shellQuote(p.blockDev);
-    std::string cmd;
-    if (fs == "ext4") {
-        cmd = util::haveBinary("mke2fs") ? "mke2fs -F -t ext4 -b 4096 " + dev
-                                          : "make_ext4fs " + dev;
-    } else if (fs == "f2fs") {
-        cmd = "make_f2fs -f -g android " + dev + " || mkfs.f2fs -f " + dev;
-    } else if (fs == "vfat") {
-        cmd = "mkfs.fat " + dev + " || newfs_msdos -F 32 " + dev;
-    } else if (fs == "exfat") {
-        cmd = "mkfs.exfat " + dev;
-    } else {
-        t.print("  unsupported filesystem '%s'", fs.c_str());
-        return false;
-    }
-    int rc = util::run(cmd, [&](const std::string& l) { t.print("  %s", l.c_str()); });
-    if (rc != 0) {
-        t.print("  mkfs failed (exit %d)", rc);
-        return false;
-    }
-    if (!newFs.empty()) p.fsType = newFs;
-    bool ok = mount(p);
-    if (ok && p.mountPoint == "/data") util::mkdirs("/data/media/0", 0770);
-    t.print("  done");
-    return ok;
+        bool ok = mount(p);
+        if (ok && p.mountPoint == "/data") util::mkdirs("/data/media/0", 0770);
+        t.print("  done");
+        return ok;
+    }();
+    history::record("Format", p.displayName + (newFs.empty() ? "" : " as " + newFs), ok_);
+    return ok_;
 }
 
 namespace {

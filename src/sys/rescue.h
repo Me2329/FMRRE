@@ -34,6 +34,7 @@ struct Report {
     std::string logcat;        // the previous boot's Android log (pstore pmsg), decoded; may be empty
     std::string slotInfo;      // "slot A: active, successful; slot B: unbootable"
     bool magiskModules = false;
+    std::vector<std::string> changes;  // the last entries of the flash history, newest first
     std::vector<Finding> findings;
 };
 

@@ -1,6 +1,7 @@
 // Bootloop rescue: what the previous boot left behind, in plain words, with a fix next to each cause.
 #include "ui/screens/screens.h"
 
+#include "core/i18n.h"
 #include "core/util.h"
 #include "platform/device.h"
 #include "sys/bootimg.h"
@@ -57,6 +58,24 @@ public:
         }
         ui.textBlock(x + ui.dp(16), ly + ui.dp(2), w - ui.dp(32), r_.slotInfo, ui.dp(12.5f), th.textDim);
         y += lc.h + ui.dp(16);
+
+        // ---- what was changed last (TWRP/history.txt)
+        if (!r_.changes.empty()) {
+            ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Recent changes");
+            y += ui.dp(30);
+            Rect hc(x, y, w, ui.dp(30) * r_.changes.size() + ui.dp(16));
+            ui.card(hc);
+            float hy = y + ui.dp(8);
+            {
+                i18n::NoTranslate raw;  // file and partition names
+                for (auto& ch : r_.changes) {
+                    font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(x + ui.dp(16), hy, w - ui.dp(32), ui.dp(24)), ch,
+                                 ch.find("(failed)") != std::string::npos ? th.danger : th.textDim);
+                    hy += ui.dp(30);
+                }
+            }
+            y += hc.h + ui.dp(16);
+        }
 
         // ---- findings
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), r_.findings.empty() ? "Nothing suspicious found" : "What went wrong");

@@ -24,6 +24,7 @@
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/history.h"
 #include "sys/ors.h"
 #include "sys/partitions.h"
 #include "sys/super.h"
@@ -770,6 +771,7 @@ private:
         }
         if (ok && fsync(fd) != 0 && errno != EINVAL) { ok = false; err = std::string("fsync: ") + strerror(errno); }
         ::close(fd);
+        history::record("fastboot flash", tg.name + " (" + util::humanSize(size_) + ")", ok);
         if (!ok) return fail(err);
         if (isSuper) lp::simSyncFromSuper();
         t_.print("fastboot: %s flashed", tg.name.c_str());
@@ -848,6 +850,7 @@ private:
         }
         fsync(fd);
         ::close(fd);
+        history::record("fastboot erase", tg.name, ok);
         if (!ok) return fail(std::string("erase failed: ") + strerror(errno));
         t_.print("fastboot: erased %s", tg.name.c_str());
         return okay();
@@ -856,7 +859,9 @@ private:
     bool doSetActive(const std::string& s) {
         std::string msg;
         if (s != "a" && s != "b" && s != "_a" && s != "_b") return fail("slot must be a or b");
-        if (!device::setActiveSlot(s[0] == '_' ? s : "_" + s, msg)) return fail(msg);
+        bool ok = device::setActiveSlot(s[0] == '_' ? s : "_" + s, msg);
+        history::record("fastboot set_active", s, ok);
+        if (!ok) return fail(msg);
         t_.print("fastboot: %s", msg.c_str());
         return okay();
     }
@@ -919,7 +924,9 @@ private:
         if (haveCur && !lp::saveMetadataRegion(dev, backup, err)) return fail("cannot back up the current metadata: " + err);
         // The partition table changes under any mapped partition: unmap them all (remapped on demand).
         if (!lp::unmapAll(t_)) return fail("a logical partition is still in use; unmount it first");
-        if (!lp::write(dev, nm, err)) return fail("writing metadata failed: " + err);
+        bool wrote = lp::write(dev, nm, err);
+        history::record("fastboot update-super", wipe ? "wipe" : "keep other slot", wrote);
+        if (!wrote) return fail("writing metadata failed: " + err);
         t_.print("fastboot: super partition table updated%s (backup: %s)", wipe ? " (wiped)" : "", backup.c_str());
         return okay();
     }

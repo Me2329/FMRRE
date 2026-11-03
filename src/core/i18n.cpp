@@ -223,6 +223,7 @@ const Entry kRo[] = {
     {"Backup password", "Parola backup-ului"}, {"Repeat the password", "Repetă parola"}, {"The passwords don't match", "Parolele nu se potrivesc"},
     {"Use at least 4 characters", "Folosește cel puțin 4 caractere"}, {"At least 4 characters", "Cel puțin 4 caractere"},
     {"Wrong password", "Parolă greșită"}, {"Encrypted - you'll be asked for the password", "Criptat - ți se va cere parola"},
+    {"Recent changes", "Modificări recente"},
     // settings
     {"Appearance", "Aspect"}, {"Accent colour", "Culoare de accent"}, {"Background style", "Stilul fundalului"}, {"Animations", "Animații"},
     {"Transitions, ripples and motion", "Tranziții, unde și mișcare"}, {"Display", "Ecran"}, {"Screen timeout", "Stingerea ecranului"},

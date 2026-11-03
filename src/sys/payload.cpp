@@ -10,6 +10,7 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 
+#include "sys/history.h"
 #include "core/bunzip2.h"
 #include "core/log.h"
 #include "core/sha256.h"
@@ -772,7 +773,7 @@ Plan plan(const Payload& p, const InstallOptions& o) {
     return pl;
 }
 
-bool install(const Payload& p, const InstallOptions& o, Task& t) {
+static bool installImpl(const Payload& p, const InstallOptions& o, Task& t) {
     Plan pl = plan(p, o);
     auto md = [&](const char* k) {
         auto it = p.metadata.find(k);
@@ -844,6 +845,13 @@ bool install(const Payload& p, const InstallOptions& o, Task& t) {
     t.setSubProgress(1);
     t.print("OTA installed to slot %s.", slot == "_b" ? "B" : "A");
     return true;
+}
+
+bool install(const Payload& p, const InstallOptions& o, Task& t) {
+    bool ok = installImpl(p, o, t);
+    std::string slot = o.slot.empty() ? (device::info().slot == "_b" ? "A" : "B") : o.slot.substr(1);
+    history::record("A/B OTA", util::basename(p.path) + " -> slot " + util::toLower(slot) , ok);
+    return ok;
 }
 
 }  // namespace tw::payload

@@ -8,6 +8,7 @@
 #include "core/util.h"
 #include "platform/device.h"
 #include "sys/bootimg.h"
+#include "sys/history.h"
 #include "sys/partitions.h"
 
 namespace tw::rescue {
@@ -218,6 +219,8 @@ Report analyze() {
     extra += r.logcat;
     r.findings = scan(r.log + "\n" + extra, r.bootReason);
     r.slotInfo = slotInfo();
+    for (auto& e : history::recent(5))
+        r.changes.push_back(e.action + ": " + e.detail + (e.ok ? "" : " (failed)") + "  \xE2\x80\xA2  " + history::ago(e.time));
     for (auto& m : bootimg::modules()) r.magiskModules |= !m.disabled;
     // Modules are the first thing to try for framework crashes when there are any.
     if (r.magiskModules) {
@@ -242,7 +245,9 @@ std::string saveLogs(const Report& r) {
     for (auto& f : files) util::copyFile(f, dir + "/" + util::basename(f));
     util::copyFile(log::filePath(), dir + "/recovery.log");
     if (!r.logcat.empty()) util::writeFile(dir + "/logcat-previous-boot.txt", r.logcat);
-    std::string summary = "boot reason: " + r.bootReason + "\n" + r.slotInfo + "\n\n";
+    std::string summary = "boot reason: " + r.bootReason + "\n" + r.slotInfo + "\n\nrecent changes:\n";
+    for (auto& c : r.changes) summary += "  " + c + "\n";
+    summary += "\n";
     for (auto& f : r.findings) summary += f.title + "\n  " + f.evidence + "\n\n";
     util::writeFile(dir + "/diagnosis.txt", summary);
     return dir;

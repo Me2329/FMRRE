@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "sys/history.h"
 #include "core/sha256.h"
 #include "core/task.h"
 #include "core/util.h"
@@ -235,7 +236,7 @@ RootTarget recoveryTarget(const std::string& image) {
     return t;
 }
 
-bool installRecovery(const std::string& image, Task& task) {
+static bool installRecoveryImpl(const std::string& image, Task& task) {
     std::string real = image;
     char magic[8] = {};
     int fd = open(real.c_str(), O_RDONLY | O_CLOEXEC);
@@ -273,6 +274,12 @@ bool installRecovery(const std::string& image, Task& task) {
     task.print("TWRP v2 installed to %s%s. Undo: flash %s back to %s.", t.name.c_str(), device::info().slot.c_str(),
                util::basename(saved).c_str(), t.name.c_str());
     return true;
+}
+
+bool installRecovery(const std::string& image, Task& task) {
+    bool ok = installRecoveryImpl(image, task);
+    history::record("Install TWRP v2", util::basename(image), ok);
+    return ok;
 }
 
 }  // namespace bootimg

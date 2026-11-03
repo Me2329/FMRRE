@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "sys/history.h"
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
@@ -98,14 +99,26 @@ bool setFlags(const std::string& dev, uint32_t flags, std::string& err) {
     return true;
 }
 
-bool disableVerification(bool bothSlots, Task& t) {
+static bool disableVerificationImpl(bool bothSlots, Task& t) {
     t.print("Disabling dm-verity and AVB verification...");
     return patch(bothSlots, true, t);
 }
 
-bool enableVerification(bool bothSlots, Task& t) {
+bool disableVerification(bool bothSlots, Task& t) {
+    bool ok = disableVerificationImpl(bothSlots, t);
+    history::record("vbmeta", std::string("verification disabled") + (bothSlots ? " (both slots)" : ""), ok);
+    return ok;
+}
+
+static bool enableVerificationImpl(bool bothSlots, Task& t) {
     t.print("Re-enabling dm-verity and AVB verification...");
     return patch(bothSlots, false, t);
+}
+
+bool enableVerification(bool bothSlots, Task& t) {
+    bool ok = enableVerificationImpl(bothSlots, t);
+    history::record("vbmeta", std::string("verification enabled") + (bothSlots ? " (both slots)" : ""), ok);
+    return ok;
 }
 
 }  // namespace tw::avb
