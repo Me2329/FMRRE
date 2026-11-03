@@ -19,6 +19,7 @@
 #include "sys/partitions.h"
 #include "sys/pathcheck.h"
 #include "sys/payload.h"
+#include "sys/rescue.h"
 #include "sys/sideload.h"
 #include "sys/super.h"
 
@@ -265,6 +266,7 @@ std::string help() {
            "  sideload\n"
            "  lp resize <name> <MB> | lp delete <name> | lp list | lp export [--empty] <file>\n"
            "  fastboot [--tcp PORT]     fastbootd: flash from a computer (USB; TCP for emulators)\n"
+           "  rescue [save]             why did the last boot fail? (kernel log, boot reason, slots)\n"
            "  payload info <ota.zip|payload.bin>\n"
            "  payload extract <ota.zip> [partition...] [--out DIR]   e.g. boot init_boot for Magisk\n"
            "  payload install <ota.zip> [--slot a|b] [--no-switch] [--no-verify] [--force]\n"
@@ -393,6 +395,18 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             }
             std::string target;
             ok = fastboot::run(o, t, target);
+        } else if (cmd == "rescue") {
+            rescue::Report r = rescue::analyze();
+            t.print("Boot reason: %s", r.bootReason.empty() ? "not reported" : r.bootReason.c_str());
+            t.print("Previous boot's log: %s", r.logSource.empty() ? "none kept" : pathcheck::pretty(r.logSource).c_str());
+            t.print("%s", r.slotInfo.c_str());
+            for (auto& f : r.findings) {
+                t.print("%s %s", f.severity >= 2 ? "[!!]" : f.severity == 1 ? "[! ]" : "[i ]", f.title.c_str());
+                t.print("     %s", f.explanation.c_str());
+                if (!f.evidence.empty()) t.print("     log: %s", f.evidence.c_str());
+                if (f.fix != rescue::Fix::None) t.print("     fix: %s", rescue::fixLabel(f.fix));
+            }
+            if (rest == "save") t.print("Logs saved to %s", pathcheck::pretty(rescue::saveLogs(r)).c_str());
         } else if (cmd == "payload") {
             ok = doPayload(a, t);
         } else if (cmd == "vbmeta") {
@@ -484,7 +498,7 @@ int cliMain(const std::vector<std::string>& args) {
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
     bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
                     (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
-                    (args[0] == "payload" && args.size() > 1 && args[1] == "info");
+                    (args[0] == "payload" && args.size() > 1 && args[1] == "info") || (args[0] == "rescue" && args.size() == 1);
     if (uiAlive && !readOnly) {
         util::mkdirs(queueDir());
         std::string id = std::to_string(getpid()) + "_" + std::to_string(util::nowMs());

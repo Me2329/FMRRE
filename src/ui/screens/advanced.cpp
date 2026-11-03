@@ -35,7 +35,8 @@ public:
               {Icon::Wrench, "File system tools", "Repair, resize, change file system", th.info, 23},
               {Icon::Search, "Find & flash a file", "Manual path, diagnostics, dd command", th.accent2, 24}}},
             {"Diagnostics",
-             {{Icon::Chart, "System monitor", "Live CPU, memory, battery & thermals", th.accent, 1},
+             {{Icon::Shield, "Bootloop rescue", "Why the last boot failed, with one-tap fixes", th.danger, 28},
+              {Icon::Chart, "System monitor", "Live CPU, memory, battery & thermals", th.accent, 1},
               {Icon::Storage, "Partition info", "Block devices, sizes and flags", th.info, 2},
               {Icon::Touch, "Input & touch test", "Check keys and touch calibration", th.ok, 3}}},
             {"Tools",
@@ -79,6 +80,7 @@ public:
             case 25: app.push(makeRootScreen()); break;
             case 26: app.push(makeInstallRecoveryScreen()); break;
             case 27: app.push(makeFastbootScreen(true)); break;
+            case 28: app.push(makeRescueScreen()); break;
             case 2: app.push(makePartInfoScreen()); break;
             case 3: app.push(makeInputTestScreen()); break;
             case 4: app.push(makeFilesScreen()); break;

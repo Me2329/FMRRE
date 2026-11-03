@@ -212,8 +212,29 @@ static void ensureOta(const std::string& root) {
     if (!writeOtaZip(zip, pl, meta)) LOGE("sim: cannot write %s", zip.c_str());
 }
 
+// What the kernel kept from a bootlooping previous boot (pstore), for Advanced > Bootloop rescue.
+static void ensurePstore(const std::string& root) {
+    std::string f = root + "/sys/fs/pstore/console-ramoops-0";
+    if (util::exists(f)) return;
+    util::mkdirs(root + "/sys/fs/pstore");
+    util::writeFile(f,
+                    "[    0.000000] Booting Linux on physical CPU 0x0000000000 [0x412fd050]\n"
+                    "[    0.000000] Linux version 6.1.75-android14-11-g2d1b3c4 (build-user@build-host) (clang 17.0.2) #1 SMP PREEMPT\n"
+                    "[    1.204111] init: init first stage started!\n"
+                    "[    1.388205] init: [libfs_mgr] Created logical partition system_a on device /dev/block/dm-0\n"
+                    "[    1.512004] init: Switching root to '/first_stage_ramdisk'\n"
+                    "[    2.021318] init: Loading SELinux policy\n"
+                    "[    2.311820] SELinux:  Loaded file_contexts\n"
+                    "[    3.902231] init: starting service 'zygote'...\n"
+                    "[    7.114002] init: Service 'zygote' (pid 1012) received signal 6\n"
+                    "[    7.120044] init: Service 'zygote' (pid 1012) crashed 4 times in 4 minutes; restarting\n"
+                    "[   11.450371] init: Service 'zygote' (pid 1188) received signal 6\n"
+                    "[   15.778120] init: Received sys.powerctl='reboot,rescueparty' from pid: 1412 (system_server)\n"
+                    "[   15.802311] init: Reboot start, reason: reboot,rescueparty, reboot_target: rescueparty\n");
+}
+
 void ensureRoot(const std::string& root) {
-    if (util::exists(root + "/sim.prop")) { ensureSuper(root); ensureOta(root); return; }
+    if (util::exists(root + "/sim.prop")) { ensureSuper(root); ensureOta(root); ensurePstore(root); return; }
     LOGI("sim: creating sandbox in %s", root.c_str());
     for (auto d : {"/data/media/0/Download", "/data/media/0/TWRP", "/data/media/0/Pictures", "/data/app", "/data/data/com.android.settings",
                    "/data/dalvik-cache/arm64", "/data/system", "/cache/recovery", "/system_root/system/app", "/vendor/etc",
@@ -224,7 +245,8 @@ void ensureRoot(const std::string& root) {
                     "ro.product.model=Pixel 8 Pro\nro.product.device=husky\nro.product.brand=google\n"
                     "ro.product.manufacturer=Google\nro.build.version.release=15\nro.build.version.sdk=35\n"
                     "ro.boot.slot_suffix=_a\nro.serialno=1A2B3C4D5E\nro.build.version.security_patch=2026-10-05\n"
-                    "ro.board.platform=zuma\nro.build.fingerprint=google/husky/husky:15/AP4A/12345:user/release-keys\n");
+                    "ro.board.platform=zuma\nro.build.fingerprint=google/husky/husky:15/AP4A/12345:user/release-keys\n"
+                    "ro.boot.bootreason=reboot,rescueparty\n");
     util::writeFile(root + "/etc/recovery.fstab",
                     "# TWRP v2 fstab (simulator)\n"
                     "/system_root  ext4   system       flags=display=\"System\";logical;slotselect;backup=1\n"
@@ -278,6 +300,7 @@ void ensureRoot(const std::string& root) {
     util::writeFile(root + "/external_sd/Music/song.mp3", std::string(500000, '\x11'));
     ensureSuper(root);
     ensureOta(root);
+    ensurePstore(root);
 }
 
 }  // namespace tw::sim

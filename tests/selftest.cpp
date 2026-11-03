@@ -25,6 +25,7 @@
 #include "sys/partitions.h"
 #include "sys/ors.h"
 #include "sys/pathcheck.h"
+#include "sys/rescue.h"
 #include "sys/payload.h"
 #include "sys/super.h"
 #include "sys/verity.h"
@@ -605,6 +606,26 @@ static void testPayload(const std::string& dir) {
     CHECK(payload::open(dir + "/delta.bin", d, err) && !d.full() && !payload::plan(d, payload::InstallOptions()).ok);
 }
 
+static void testRescue() {
+    auto has = [](const std::vector<rescue::Finding>& v, rescue::Fix f) {
+        for (auto& x : v)
+            if (x.fix == f) return true;
+        return false;
+    };
+    auto v = rescue::scan("[ 5.1] device-mapper: verity: 252:1: data block 12345 is corrupted\n", "");
+    CHECK(v.size() == 1 && v[0].fix == rescue::Fix::DisableVerity && v[0].severity == 2 && v[0].evidence.find("252:1") != std::string::npos);
+    v = rescue::scan("init: Failed to mount required partitions early ...\n", "");
+    CHECK(has(v, rescue::Fix::ReflashSystem));
+    v = rescue::scan("[ 9.0] Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b\n", "kernel_panic");
+    CHECK(v.size() == 1 && v[0].fix == rescue::Fix::RestoreBoot);
+    v = rescue::scan("init: Service 'zygote' (pid 1012) crashed 4 times\ninit: Received sys.powerctl='reboot,rescueparty'\n", "");
+    CHECK(v.size() == 2 && v[0].severity == 2 && has(v, rescue::Fix::DisableModules) && has(v, rescue::Fix::FormatData));
+    v = rescue::scan("vold: Failed to unlock user 0\n", "");
+    CHECK(has(v, rescue::Fix::FormatData));
+    CHECK(rescue::scan("", "watchdog").size() == 1);
+    CHECK(rescue::scan("[ 1.0] all good\n", "reboot,shell").empty());
+}
+
 int main() {
     char tmpl[] = "/tmp/twrpv2-selftest-XXXXXX";
     std::string dir = mkdtemp(tmpl);
@@ -619,6 +640,7 @@ int main() {
     testPathcheck(dir);
     testDecoders(dir);
     testPayload(dir);
+    testRescue();
     util::removeTree(dir);
     if (g_fail) {
         fprintf(stderr, "%d check(s) FAILED\n", g_fail);
