@@ -1,4 +1,5 @@
 #include "sys/backup.h"
+#include "core/crypt.h"
 #include "core/log.h"
 #include "core/sha256.h"
 #include "core/task.h"
@@ -11,6 +12,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#include <memory>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -41,10 +43,15 @@ uint64_t estimateSize(const std::string& mp) {
 // ---- streaming writer: optional gzip + sha256 + progress -------------------------
 class Sink {
 public:
-    bool open(const std::string& path, bool gzip) {
+    bool open(const std::string& path, bool gzip, const std::string& password = "") {
         fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         if (fd_ < 0) return false;
         gzip_ = gzip;
+        if (!password.empty()) {
+            enc_ = std::make_unique<crypt::Stream>();
+            std::string header;
+            if (!enc_->beginEncrypt(password, header) || !putRaw(header.data(), header.size())) return false;
+        }
         if (gzip_) {
             memset(&zs_, 0, sizeof(zs_));
             if (mz_deflateInit2(&zs_, 1, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 9, MZ_DEFAULT_STRATEGY) != MZ_OK) return false;
@@ -71,6 +78,10 @@ public:
             for (int i = 0; i < 4; i++) tail[4 + i] = uint8_t(uint32_t(in_) >> (8 * i));
             ok = ok && put(tail, 8);
         }
+        if (ok && enc_) {
+            std::string tag = enc_->tag();
+            ok = putRaw(tag.data(), tag.size());
+        }
         if (fd_ >= 0) { fsync(fd_); ::close(fd_); fd_ = -1; }
         return ok;
     }
@@ -79,6 +90,12 @@ public:
 
 private:
     bool put(const void* d, size_t n) {
+        if (!enc_) return putRaw(d, n);
+        tmp_.assign((const uint8_t*)d, (const uint8_t*)d + n);
+        enc_->process(tmp_.data(), n);
+        return putRaw(tmp_.data(), n);
+    }
+    bool putRaw(const void* d, size_t n) {
         sha_.update(d, n);
         out_ += n;
         const char* p = (const char*)d;
@@ -111,6 +128,8 @@ private:
     uint32_t crc_ = 0;
     uint64_t in_ = 0, out_ = 0;
     Sha256 sha_;
+    std::unique_ptr<crypt::Stream> enc_;
+    std::vector<uint8_t> tmp_;
 };
 
 // Spawn a shell command with its stdout (read) or stdin (write) connected to us.
@@ -170,13 +189,14 @@ static bool backupOne(Partition& p, const std::string& dir, const Options& o, Ta
     if (p.isImage()) {
         item.type = "img";
         item.compressed = o.compress;
-        item.file = p.name + ".emmc.win" + std::string(o.compress ? ".gz" : "");
+        item.file = p.name + ".emmc.win" + std::string(o.compress ? ".gz" : "") + (o.password.empty() ? "" : ".enc");
+        item.encrypted = !o.password.empty();
         t.setStatus("Backing up " + p.displayName);
         t.print("Backing up %s (image)...", p.displayName.c_str());
         int in = open(p.blockDev.c_str(), O_RDONLY | O_CLOEXEC);
         if (in < 0) { t.print("  cannot open %s: %s", p.blockDev.c_str(), strerror(errno)); return false; }
         uint64_t total = Partitions::blockSize(p.blockDev);
-        if (!sink.open(dir + "/" + item.file, o.compress)) { close(in); return false; }
+        if (!sink.open(dir + "/" + item.file, o.compress, o.password)) { close(in); return false; }
         uint64_t done = 0;
         bool ok = true;
         while (!t.cancelled()) {
@@ -199,7 +219,8 @@ static bool backupOne(Partition& p, const std::string& dir, const Options& o, Ta
     if (!Partitions::get().mount(p)) { t.print("  cannot mount %s", p.displayName.c_str()); return false; }
     item.type = "tar";
     item.compressed = o.compress;
-    item.file = p.name + "." + p.fsType + ".win" + std::string(o.compress ? ".gz" : "");
+    item.file = p.name + "." + p.fsType + ".win" + std::string(o.compress ? ".gz" : "") + (o.password.empty() ? "" : ".enc");
+    item.encrypted = !o.password.empty();
     t.setStatus("Backing up " + p.displayName);
     t.print("Backing up %s (%s)...", p.displayName.c_str(), p.fsType.c_str());
     uint64_t est = estimateSize(p.mountPoint);
@@ -210,7 +231,7 @@ static bool backupOne(Partition& p, const std::string& dir, const Options& o, Ta
     int fd = -1;
     pid_t pid = spawn(cmd, fd, true);
     if (pid < 0) return false;
-    if (!sink.open(dir + "/" + item.file, o.compress)) { close(fd); waitChild(pid); return false; }
+    if (!sink.open(dir + "/" + item.file, o.compress, o.password)) { close(fd); waitChild(pid); return false; }
     uint64_t done = 0;
     bool ok = true;
     while (!t.cancelled()) {
@@ -238,7 +259,7 @@ static void writeManifest(const std::string& dir, const std::vector<Item>& items
     m += "device=" + device::info().device + "\nmodel=" + device::info().model + "\ncreated=" + util::dateStamp() + "\n";
     for (auto& i : items) {
         m += "item=" + i.part + "|" + i.file + "|" + i.type + "|" + (i.compressed ? "1" : "0") + "|" +
-             std::to_string(i.size) + "|" + i.sha256 + "\n";
+             std::to_string(i.size) + "|" + i.sha256 + "|" + (i.encrypted ? "1" : "0") + "\n";
         if (!i.sha256.empty()) util::writeFile(dir + "/" + i.file + ".sha2", i.sha256 + "  " + i.file + "\n");
     }
     util::writeFile(dir + "/twrpv2.manifest", m);
@@ -251,7 +272,8 @@ bool create(const Options& o, Task& t) {
         return false;
     }
     t.print("Backup folder: %s", dir.c_str());
-    t.print("Compression: %s, SHA-256: %s", o.compress ? "gzip" : "off", o.digest ? "on" : "off");
+    t.print("Compression: %s, SHA-256: %s, encryption: %s", o.compress ? "gzip" : "off", o.digest ? "on" : "off",
+            o.password.empty() ? "off" : "AES-256");
     // Weight progress per partition by estimated size.
     std::vector<uint64_t> est;
     uint64_t total = 0;
@@ -300,6 +322,7 @@ std::vector<Set> list() {
                 auto f = util::split(line.substr(5), '|', false);
                 if (f.size() < 6) continue;
                 Item i{f[0], f[1], f[2], f[3] == "1", (uint64_t)std::stoull(f[4]), f[5]};
+                i.encrypted = f.size() > 6 ? f[6] == "1" : crypt::isEncrypted(s.path + "/" + i.file);
                 s.items.push_back(i);
             }
         } else {
@@ -325,21 +348,94 @@ std::vector<Set> list() {
     return out;
 }
 
-static bool isGzip(const std::string& path) {
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return false;
-    unsigned char m[2] = {0, 0};
-    bool r = read(fd, m, 2) == 2 && m[0] == 0x1f && m[1] == 0x8b;
-    close(fd);
-    return r;
-}
+// The plaintext of a backup file: decrypted if it is encrypted, with a one-shot peek for the gzip magic.
+class Reader {
+public:
+    bool open(const std::string& file, const std::string& password, std::string& err) {
+        fd_ = ::open(file.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd_ < 0) { err = strerror(errno); return false; }
+        total_ = util::fileSize(file);
+        left_ = total_;
+        if (crypt::isEncrypted(file)) {
+            uint8_t h[crypt::kHeaderSize];
+            if (total_ < crypt::kHeaderSize + crypt::kTagSize || ::read(fd_, h, sizeof(h)) != (ssize_t)sizeof(h)) { err = "truncated"; return false; }
+            if (password.empty()) { err = "this backup is encrypted - a password is needed"; return false; }
+            dec_ = std::make_unique<crypt::Stream>();
+            if (!dec_->beginDecrypt(password, h, err)) return false;
+            consumed_ = crypt::kHeaderSize;
+            left_ = total_ - crypt::kHeaderSize - crypt::kTagSize;
+        }
+        return true;
+    }
+    ~Reader() { if (fd_ >= 0) ::close(fd_); }
+    ssize_t read(uint8_t* b, size_t n) {
+        if (!peek_.empty()) {
+            size_t k = std::min(n, peek_.size());
+            memcpy(b, peek_.data(), k);
+            peek_.erase(0, k);
+            return (ssize_t)k;
+        }
+        n = (size_t)std::min<uint64_t>(n, left_);
+        if (!n) return 0;
+        ssize_t r;
+        do r = ::read(fd_, b, n); while (r < 0 && errno == EINTR);
+        if (r <= 0) return r;
+        if (dec_) dec_->process(b, (size_t)r);
+        left_ -= (uint64_t)r;
+        consumed_ += (uint64_t)r;
+        return r;
+    }
+    bool readFull(uint8_t* b, size_t n) {
+        while (n) {
+            ssize_t r = read(b, n);
+            if (r <= 0) return false;
+            b += r;
+            n -= (size_t)r;
+        }
+        return true;
+    }
+    bool skip(size_t n) {
+        uint8_t tmp[512];
+        while (n) {
+            size_t k = std::min(n, sizeof(tmp));
+            if (!readFull(tmp, k)) return false;
+            n -= k;
+        }
+        return true;
+    }
+    bool isGzip() {
+        uint8_t m[2];
+        if (!readFull(m, 2)) return false;
+        peek_.assign((const char*)m, 2);
+        return m[0] == 0x1f && m[1] == 0x8b;
+    }
+    // Encrypted files: read what's left of the data, then compare the HMAC at the end.
+    bool finish(std::string& err) {
+        if (!dec_) return true;
+        peek_.clear();
+        uint8_t tmp[1 << 16];
+        while (left_) if (read(tmp, sizeof(tmp)) <= 0) { err = "read error"; return false; }
+        uint8_t tag[crypt::kTagSize];
+        if (::read(fd_, tag, sizeof(tag)) != (ssize_t)sizeof(tag)) { err = "truncated"; return false; }
+        if (dec_->tag() != std::string((const char*)tag, sizeof(tag))) { err = "the backup was modified or is corrupt (HMAC mismatch)"; return false; }
+        return true;
+    }
+    uint64_t consumed() const { return consumed_; }
+    uint64_t total() const { return total_; }
 
-// Read a backup file, decompress if needed, and feed the raw bytes to `out`.
-static bool streamOut(const std::string& file, int out, Task& t, uint64_t& written) {
-    int in = open(file.c_str(), O_RDONLY | O_CLOEXEC);
-    if (in < 0) return false;
-    uint64_t total = util::fileSize(file), consumed = 0;
-    bool gz = isGzip(file);
+private:
+    int fd_ = -1;
+    uint64_t total_ = 0, left_ = 0, consumed_ = 0;
+    std::unique_ptr<crypt::Stream> dec_;
+    std::string peek_;
+};
+
+// Read a backup file, decrypt and decompress if needed, and feed the raw bytes to `out`.
+static bool streamOut(const std::string& file, int out, Task& t, uint64_t& written, const std::string& password) {
+    Reader in;
+    std::string err;
+    if (!in.open(file, password, err)) { t.print("  %s: %s", util::basename(file).c_str(), err.c_str()); return false; }
+    bool gz = in.isGzip();
     std::vector<unsigned char> ib(1 << 18), ob(1 << 18);
     mz_stream zs{};
     bool ok = true;
@@ -358,22 +454,19 @@ static bool streamOut(const std::string& file, int out, Task& t, uint64_t& writt
     if (gz) {
         // Parse gzip header (we accept FNAME/FEXTRA/FCOMMENT for classic TWRP/pigz backups).
         unsigned char h[10];
-        if (read(in, h, 10) != 10) { close(in); return false; }
-        consumed = 10;
+        if (!in.readFull(h, 10)) return false;
         int flg = h[3];
-        auto skipZ = [&]() { unsigned char c; while (read(in, &c, 1) == 1 && c) consumed++; consumed++; };
-        if (flg & 4) { unsigned char x[2] = {0, 0}; if (read(in, x, 2) != 2) {} int xl = x[0] | (x[1] << 8); lseek(in, xl, SEEK_CUR); consumed += 2 + xl; }
+        auto skipZ = [&]() { unsigned char c; while (in.readFull(&c, 1) && c) {} };
+        if (flg & 4) { unsigned char x[2] = {0, 0}; if (!in.readFull(x, 2) || !in.skip(size_t(x[0] | (x[1] << 8)))) return false; }
         if (flg & 8) skipZ();
         if (flg & 16) skipZ();
-        if (flg & 2) { lseek(in, 2, SEEK_CUR); consumed += 2; }
+        if (flg & 2 && !in.skip(2)) return false;
         mz_inflateInit2(&zs, -MZ_DEFAULT_WINDOW_BITS);
     }
     bool streamEnd = false;
     while (ok && !streamEnd && !t.cancelled()) {
-        ssize_t n = read(in, ib.data(), ib.size());
-        if (n < 0 && errno == EINTR) continue;
+        ssize_t n = in.read(ib.data(), ib.size());
         if (n <= 0) break;
-        consumed += n;
         if (!gz) {
             ok = writeAll(ib.data(), n);
         } else {
@@ -394,11 +487,11 @@ static bool streamOut(const std::string& file, int out, Task& t, uint64_t& writt
                 if (r == MZ_BUF_ERROR && zs.avail_in == 0) break;
             }
         }
-        t.setSubProgress(float(consumed) / std::max<uint64_t>(total, 1));
+        t.setSubProgress(float(in.consumed()) / std::max<uint64_t>(in.total(), 1));
         speed(t, written, t0);
     }
     if (gz) mz_inflateEnd(&zs);
-    close(in);
+    if (ok && !t.cancelled() && !in.finish(err)) { t.print("  %s", err.c_str()); ok = false; }
     return ok && !t.cancelled();
 }
 
@@ -427,11 +520,33 @@ bool verify(const Set& s, Task& t) {
     return ok;
 }
 
-bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFirst, Task& t) {
+bool encrypted(const Set& s) {
+    for (auto& i : s.items)
+        if (i.encrypted) return true;
+    return false;
+}
+
+bool checkPassword(const Set& s, const std::string& password, std::string& err) {
+    for (auto& i : s.items) {
+        if (!i.encrypted) continue;
+        Reader r;
+        if (!r.open(s.path + "/" + i.file, password, err)) { err = i.file + ": " + err; return false; }
+    }
+    return true;
+}
+
+bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFirst, Task& t, const std::string& password) {
     std::vector<const Item*> todo;
     for (auto& i : s.items)
         if (std::find(parts.begin(), parts.end(), i.part) != parts.end()) todo.push_back(&i);
     if (todo.empty()) { t.print("Nothing selected"); return false; }
+    // A wrong password must be found before any partition is wiped.
+    for (auto* i : todo)
+        if (i->encrypted) {
+            Reader r;
+            std::string err;
+            if (!r.open(s.path + "/" + i->file, password, err)) { t.print("%s: %s - nothing was changed.", i->file.c_str(), err.c_str()); return false; }
+        }
     float verifyShare = verifyFirst ? 0.25f : 0.f;
     if (verifyFirst) {
         t.print("Checking digests before restoring...");
@@ -456,7 +571,7 @@ bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFir
         if (i.type == "img") {
             int out = open(p->blockDev.c_str(), O_WRONLY | O_CLOEXEC);
             if (out < 0) { t.print("  cannot open %s", p->blockDev.c_str()); return false; }
-            bool ok = streamOut(file, out, t, written);
+            bool ok = streamOut(file, out, t, written, password);
             fsync(out);
             close(out);
             if (!ok) { t.print("  FAILED"); return false; }
@@ -466,7 +581,7 @@ bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFir
             int fd = -1;
             pid_t pid = spawn("cd " + util::shellQuote(p->contentPath()) + " && tar -xf -" + tarLabelFlags(), fd, false);
             if (pid < 0) return false;
-            bool ok = streamOut(file, fd, t, written);
+            bool ok = streamOut(file, fd, t, written, password);
             close(fd);
             int rc = waitChild(pid);
             if (!ok || rc != 0) { t.print("  FAILED (tar exit %d)", rc); return false; }

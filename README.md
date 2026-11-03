@@ -65,8 +65,8 @@ It does not need Android, a framework or a GPU.
 | **Root** | Detects Magisk / KernelSU / APatch and whether the ramdisk is in `boot` or `init_boot`; installs from zip/APK or flashes a `magisk_patched` image to the right partition **after an automatic stock backup**; one-tap unroot; **module manager** (enable, disable, remove, "bootloop? disable all") |
 | **Automation** | **OpenRecoveryScript** (`/cache/recovery/openrecoveryscript`) with a cancellable countdown, AOSP `/cache/recovery/command` and the **bootloader message in `misc`** (read and cleared, no recovery boot loops), and a **`twrp` command line tool** for `adb shell` (see below) |
 | **Wipe** | Factory reset (keeps internal storage), Advanced wipe checklist, **Format Data** (mkfs + metadata), ART/Dalvik wipe |
-| **Backup** | Streaming tar/raw backups with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
-| **Restore** | Reads TWRP v2 and **classic TWRP** backups, per-partition selection, **verify before restore** (refuses corrupt backups), verify-only and delete |
+| **Backup** | Streaming tar/raw backups with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), optional **password encryption** (AES-256-CTR + HMAC-SHA256, key from PBKDF2-HMAC-SHA256 with 200,000 iterations; the password is asked twice), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
+| **Restore** | Reads TWRP v2 and **classic TWRP** backups, per-partition selection, **verify before restore** (refuses corrupt backups; works on encrypted backups without the password), a wrong password is caught **before anything is wiped**, tampering is caught by the HMAC, verify-only and delete |
 | **Mount** | Toggle each partition with live usage bars, read-only system by default (dm-verity safe), unmount all, **USB OTG auto-detect** and rescan, **exFAT / NTFS** via kernel drivers (exfat, sdfat, ntfs3) or FUSE helpers |
 | **File systems** | Check & repair (e2fsck, fsck.f2fs, fsck.fat, fsck.exfat, ntfsfix), grow to fill the partition (resize2fs, resize.f2fs), change file system, info - long-press a partition in Mount |
 | **Files** | Full file manager: sort, hidden files, quick locations, **multi-select**, copy/move/paste, rename, chmod, delete, SHA-256, text and **hex viewer**, install/flash straight from a file, "flash as GSI", "dd command for this file". Pickers show **how many files the type filter hides** and have an **All files** switch |
@@ -249,7 +249,7 @@ In the window, the mouse acts as touch, ↑/↓ are Vol+/Vol−, Enter is Power,
 out/sim/twrpv2 --sim --headless --script tools/scripts/tour.txt --out shots/
 ```
 Script commands: `tap X Y`, `longpress X Y`, `swipe X1 Y1 X2 Y2 MS`, `wait MS`, `waittask`,
-`key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|files|root|advanced|fastboot|rescue [path]`.
+`key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|files|root|advanced|fastboot|rescue|settings|backup|restore [path]`.
 
 **Self-tests:**
 ```bash

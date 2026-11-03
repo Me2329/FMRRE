@@ -129,6 +129,8 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "fastboot") sc = makeFastbootScreen(arg != "--no-start");
             else if (name == "rescue") sc = makeRescueScreen();
             else if (name == "settings") sc = makeSettingsScreen();
+            else if (name == "backup") sc = makeBackupScreen();
+            else if (name == "restore") sc = makeRestoreScreen();
             if (sc) app.push(std::move(sc));
             else fprintf(stderr, "open: unknown screen %s\n", name.c_str());
             frames(450);

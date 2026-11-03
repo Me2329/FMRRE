@@ -120,6 +120,15 @@ bool doWipe(const std::string& what, Task& t) {
     return Partitions::get().wipe(*p, t);
 }
 
+// Command lines are logged: never with a password in them.
+std::string redact(std::string line) {
+    for (size_t p = line.find("--password="); p != std::string::npos; p = line.find("--password=", p + 1)) {
+        size_t e = line.find(' ', p);
+        line.replace(p + 11, (e == std::string::npos ? line.size() : e) - (p + 11), "***");
+    }
+    return line;
+}
+
 std::string payloadOutDir(const std::string& zip) {
     std::string b = util::basename(zip);
     for (auto ext : {".zip", ".bin"})
@@ -258,8 +267,8 @@ std::string help() {
            "  recovery <image>          install TWRP v2 permanently (stock recovery/boot saved first)\n"
            "  wipe <data|cache|dalvik|system|...>\n"
            "  format data\n"
-           "  backup <SDCRBIVEP>[O][M] [name]   O=compress M=no digest\n"
-           "  restore <name> [letters]\n"
+           "  backup <SDCRBIVEP>[O][M] [name] [--password=PW]   O=compress M=no digest, PW: AES-256\n"
+           "  restore <name> [letters] [--password=PW]\n"
            "  mount|unmount <mountpoint>\n"
            "  mkdir <path>\n"
            "  cmd <shell command>\n"
@@ -289,8 +298,8 @@ bool run(const std::vector<std::string>& lines, Task& t) {
         auto sp = line.find(' ');
         std::string cmd = util::toLower(line.substr(0, sp)), rest = sp == std::string::npos ? "" : util::trim(line.substr(sp + 1));
         auto a = util::splitWs(rest);
-        t.print("> %s", line.c_str());
-        t.setStatus(line);
+        t.print("> %s", redact(line).c_str());
+        t.setStatus(redact(line));
         bool ok = true;
         if (cmd == "install") {
             std::string p = pathcheck::resolve(rest);
@@ -322,6 +331,8 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             if (!p) t.print("format: unknown partition");
         } else if (cmd == "backup") {
             backup::Options o;
+            for (size_t k = 0; k < a.size(); k++)
+                if (util::startsWith(a[k], "--password=")) { o.password = a[k].substr(11); a.erase(a.begin() + (long)k); break; }
             std::string letters = a.empty() ? "SDB" : a[0];
             o.parts = mountPointsForLetters(letters);
             o.compress = letters.find_first_of("Oo") != std::string::npos;
@@ -330,6 +341,9 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             ok = !o.parts.empty() && backup::create(o, t);
         } else if (cmd == "restore") {
             ok = false;
+            std::string pw;
+            for (size_t k = 0; k < a.size(); k++)
+                if (util::startsWith(a[k], "--password=")) { pw = a[k].substr(11); a.erase(a.begin() + (long)k); break; }
             for (auto& s : backup::list())
                 if (!a.empty() && (s.name == a[0] || util::basename(s.path) == a[0])) {
                     std::vector<std::string> names;
@@ -337,7 +351,7 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                         for (auto& mp : mountPointsForLetters(a[1])) names.push_back(Partitions::get().find(mp)->name);
                     else
                         for (auto& it : s.items) names.push_back(it.part);
-                    ok = backup::restore(s, names, true, t);
+                    ok = backup::restore(s, names, true, t, pw);
                     break;
                 }
             if (!ok && !a.empty()) t.print("restore of '%s' failed or backup not found", a[0].c_str());
@@ -505,7 +519,7 @@ int cliMain(const std::vector<std::string>& args) {
         std::string base = queueDir() + "/" + id;
         util::writeFile(base + ".tmp", line + "\n");
         rename((base + ".tmp").c_str(), (base + ".cmd").c_str());
-        fprintf(stderr, "Queued for the recovery UI: %s\n", line.c_str());
+        fprintf(stderr, "Queued for the recovery UI: %s\n", redact(line).c_str());
         std::string done;
         for (int64_t start = util::nowMs(); !util::readFile(base + ".done", done); usleep(250 * 1000)) {
             if (util::nowMs() - start > 6 * 3600 * 1000) { fprintf(stderr, "timed out\n"); return 2; }
@@ -517,7 +531,7 @@ int cliMain(const std::vector<std::string>& args) {
         return rc;
     }
     Task& t = Task::get();
-    t.start("twrp " + line, [line](Task& tt) { return run({line}, tt); });
+    t.start("twrp " + redact(line), [line](Task& tt) { return run({line}, tt); });
     size_t cursor = 0;
     auto flush = [&]() {
         for (auto& l : t.linesSince(cursor)) printf("%s\n", l.c_str());

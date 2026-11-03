@@ -16,6 +16,7 @@ struct Item {
     bool compressed = false;
     uint64_t size = 0;     // bytes on disk
     std::string sha256;
+    bool encrypted = false;  // AES-256 (core/crypt.h); the SHA-256 above is of the encrypted file
 };
 
 struct Set {
@@ -31,13 +32,17 @@ struct Options {
     std::string name;
     bool compress = true;
     bool digest = true;
+    std::string password;  // non-empty: encrypt every file (AES-256-CTR + HMAC-SHA256, PBKDF2 key)
 };
 
 std::string backupRoot();  // <storage>/TWRP/BACKUPS/<serial>
 std::vector<Set> list();
 uint64_t estimateSize(const std::string& mountPoint);
 bool create(const Options& o, Task& t);
-bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFirst, Task& t);
+bool restore(const Set& s, const std::vector<std::string>& parts, bool verifyFirst, Task& t, const std::string& password = "");
+bool encrypted(const Set& s);
+// Checks the password against every encrypted file's header (nothing is decrypted yet).
+bool checkPassword(const Set& s, const std::string& password, std::string& err);
 bool verify(const Set& s, Task& t);
 
 }  // namespace backup

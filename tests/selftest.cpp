@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "core/bunzip2.h"
+#include "core/crypt.h"
 #include "core/i18n.h"
 #include "core/log.h"
 #include "core/sha256.h"
@@ -254,6 +255,47 @@ static void testBackupRestore(const std::string& dir) {
     util::writeFile(f, data);
     CHECK(!runTask("verify-bad", [&](Task& t) { return backup::verify(sets[0], t); }));
     CHECK(!runTask("restore-bad", [&](Task& t) { return backup::restore(sets[0], {"data"}, true, t); }));
+
+    // Encrypted backup: AES-256-CTR + HMAC, the password checked before anything is wiped.
+    backup::Options e = o;
+    e.name = "selftest-enc";
+    e.password = "c0rrect horse";
+    CHECK(runTask("backup-enc", [&](Task& t) { return backup::create(e, t); }));
+    backup::Set es;
+    for (auto& x : backup::list())
+        if (x.name == "selftest-enc") es = x;
+    CHECK(es.items.size() == 2 && backup::encrypted(es));
+    for (auto& it : es.items) {
+        std::string raw;
+        util::readFile(es.path + "/" + it.file, raw);
+        CHECK(it.encrypted && util::endsWith(it.file, ".enc") && raw.compare(0, 8, "TWV2ENC1") == 0);
+        CHECK(raw.find("com.example.app") == std::string::npos);  // no plaintext (tar names) in the file
+    }
+    std::string perr;
+    CHECK(!backup::checkPassword(es, "wrong", perr) && perr.find("wrong password") != std::string::npos);
+    CHECK(backup::checkPassword(es, e.password, perr));
+    CHECK(runTask("verify-enc", [&](Task& t) { return backup::verify(es, t); }));  // SHA-256 needs no password
+    util::removeTree(root + "/data/data");
+    util::writeFile(root + "/dev/block/by-name/boot_a", std::string(bootBefore.size(), '\0'));
+    util::writeFile(root + "/data/media/0/keep.txt", "keep");
+    CHECK(!runTask("restore-enc-wrong", [&](Task& t) { return backup::restore(es, {"data", "boot"}, false, t, "nope"); }));
+    CHECK(util::exists(root + "/data/media/0/keep.txt"));  // nothing was wiped
+    CHECK(!runTask("restore-enc-none", [&](Task& t) { return backup::restore(es, {"boot"}, false, t); }));
+    CHECK(runTask("restore-enc", [&](Task& t) { return backup::restore(es, {"data", "boot"}, true, t, e.password); }));
+    after.clear();
+    CHECK(util::readFile(marker, after) && after == before);
+    bootAfter.clear();
+    util::readFile(root + "/dev/block/by-name/boot_a", bootAfter);
+    CHECK(bootAfter == bootBefore);
+    // Tampering with the ciphertext: the HMAC catches it even without the digest check.
+    for (auto& it : es.items)
+        if (it.part == "boot") {
+            std::string fe = es.path + "/" + it.file, d2;
+            util::readFile(fe, d2);
+            d2[d2.size() / 2] ^= 0x01;
+            util::writeFile(fe, d2);
+        }
+    CHECK(!runTask("restore-enc-tampered", [&](Task& t) { return backup::restore(es, {"boot"}, false, t, e.password); }));
 }
 
 
@@ -548,6 +590,39 @@ static std::string fixturePlain() {
     return d;
 }
 
+static void testCrypt() {
+    uint8_t key[32], pt[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}, ct[16];
+    for (int i = 0; i < 32; i++) key[i] = uint8_t(i);
+    crypt::Aes256(key).encryptBlock(pt, ct);
+    CHECK(Sha256::toHex(std::string((const char*)ct, 16)) == "8ea2b7ca516745bfeafc49904b496089");  // FIPS-197 C.3
+    uint8_t k1[20];
+    memset(k1, 0x0b, 20);
+    crypt::HmacSha256 h1(k1, 20);
+    h1.update("Hi There", 8);
+    CHECK(Sha256::toHex(h1.final()) == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");  // RFC 4231 #1
+    uint8_t dk[40];
+    crypt::pbkdf2Sha256("password", (const uint8_t*)"salt", 4, 4096, dk, 40);
+    CHECK(Sha256::toHex(std::string((const char*)dk, 40)) ==
+          "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134af7ad98c1b458ce3f");
+    // Stream round trip in odd-sized pieces, and the tag binds the data.
+    crypt::Stream enc;
+    std::string hdr;
+    CHECK(enc.beginEncrypt("pw", hdr, 2000) && hdr.size() == crypt::kHeaderSize);
+    std::string plain(5000, '\0');
+    for (size_t i = 0; i < plain.size(); i++) plain[i] = char(i * 13);
+    std::string c = plain;
+    for (size_t off = 0, n = 1; off < c.size(); off += n, n = n * 3 % 37 + 1) enc.process((uint8_t*)&c[off], std::min(n, c.size() - off));
+    std::string tag = enc.tag();
+    CHECK(c != plain);
+    crypt::Stream dec;
+    std::string err;
+    CHECK(!crypt::Stream().beginDecrypt("PW", (const uint8_t*)hdr.data(), err) && err == "wrong password");
+    CHECK(dec.beginDecrypt("pw", (const uint8_t*)hdr.data(), err));
+    std::string d = c;
+    dec.process((uint8_t*)&d[0], d.size());
+    CHECK(d == plain && dec.tag() == tag);
+}
+
 static void testDecoders(const std::string& dir) {
     std::string out, err;
     CHECK(Bunzip2::decode(kBz2Fixture, sizeof kBz2Fixture, out, err));
@@ -707,6 +782,7 @@ int main() {
     testAvb(dir);
     testBackupRestore(dir);
     testPathcheck(dir);
+    testCrypt();
     testDecoders(dir);
     testPayload(dir);
     testRescue();
