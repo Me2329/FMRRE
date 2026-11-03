@@ -17,7 +17,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libx11-dev xz-utils fastboot
+          sudo apt-get install -y cmake libx11-dev xz-utils fastboot python3-tk xvfb
       - name: Simulator build + self-tests + UI tour
         run: |
           scripts/build.sh sim
@@ -31,6 +31,8 @@ jobs:
           out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/payload.txt --out shots
       - name: fastbootd tests (the real fastboot client over TCP)
         run: tests/fastboot_test.sh out/sim/twrpv2
+      - name: PC rescue tests (fake adb / fastboot / heimdall, the window under Xvfb)
+        run: tests/pc_rescue_test.sh
       - uses: actions/upload-artifact@v4
         with:
           name: screenshots

@@ -74,6 +74,7 @@ It does not need Android, a framework or a GPU.
 | **Terminal** | Root shell with on-screen keyboard, history, quick-command chips, Ctrl-C |
 | **Bootloop rescue** | Reads what the previous boot left behind (pstore `console-ramoops`, panic dumps, `last_kmsg`, **the previous boot's Android log** decoded from pstore `pmsg` - so the actual `FATAL EXCEPTION IN SYSTEM PROCESS` is shown -, the boot reason, A/B slot state) and explains it: verified boot rejecting a GSI, a system image that doesn't mount (wrong CPU type / not A/B), SELinux policy mismatch, encryption keys after a ROM switch, a zygote crash loop, Rescue Party, kernel panic or watchdog freeze, enabled Magisk modules. **Recent changes** come from the flash history (`TWRP/history.txt`: every zip, image, OTA, fastboot flash, wipe, format, restore and vbmeta change, with the time - `twrp history` prints it), so "it began after flashing X" is right there. Each cause comes with **the matching one-tap fix** (disable modules, disable vbmeta verification, other slot, Format Data, reflash system, restore stock boot) and the log line it is based on; logs can be saved for a bug report. `twrp rescue` prints the same |
 | **Auto repair** | For "my phone doesn't start and I don't know why": one screen **checks everything** (boot / init_boot / vendor_boot headers, vbmeta, the super partition table, both A/B slots, free space on /data, Magisk modules, battery), reads the previous boot's logs (Bootloop rescue), **what Android itself said** when it gave up (`--reason=RescueParty`, `init_user0_failed` ...) and **the last change** from the flash history - then plans the fixes **safest first**: disable modules → clear the ART/Dalvik and cache → disable verity (when verity stopped the boot) → restore the saved vbmeta header / super table → put back the **stock boot / init_boot / vendor_boot** saved before rooting or installing TWRP v2 (when that changed last, the header is damaged or the kernel panicked) → **boot the other slot** (rollback after an OTA that doesn't start, or a slot without system) → **fsck /data** → Format Data (offered last, never preselected, never unattended). Each step shows *why*, a risk label (Safe / Can be undone / Erases data) and can be switched off; swipe to repair. It **escalates across boots**: a fix an earlier run already made is not repeated, so coming back after another bootloop tries the next one. Phones that keep no log: "My phone doesn't start" plans the usual fixes anyway. After a failed boot the home card says so and opens it; Settings → **Repair automatically after a failed boot** runs the safe fixes after a 15 s countdown and reboots (at most 3 times a day - no endless loop). When Android asks recovery to *offer* a factory reset (`--prompt_and_wipe_data`), TWRP v2 opens auto repair instead of erasing anything. `twrp autofix --dry-run` prints the diagnosis; `twrp autofix [--allow-slot-switch] [--allow-format-data] [--reboot]` runs it |
+| **PC rescue** | `pc/twrpv2_rescue.py`: for phones that bootloop or can't reach recovery. From a computer it identifies the phone (model, mode, **bootloader locked or not**) and fixes it from fastboot or Samsung Download mode: boots TWRP v2 from RAM and runs Auto repair, rolls back to the other slot, disables vbmeta, flashes stock images (Samsung AP `.lz4` files unpacked). Nothing is written to a locked phone - [details below](#pc-rescue-the-phone-doesnt-start) |
 | **Advanced** | **System monitor** (CPU graph, per-core frequency, RAM, battery details, every thermal zone), partition info, **input and touch tester**, copy log, fix contexts, restart ADB, A/B **slot switching** |
 | **Reboot** | System, Recovery, Bootloader, **Fastbootd** (TWRP v2's own when it is the installed recovery), **Download** (Samsung), **EDL** (Qualcomm), Power off |
 | **Devices** | DRM/KMS and fbdev (32 bpp in any channel order, RGB565), multitouch protocol A/B and single touch, touch calibration (swap/flip), A/B slots, **dynamic/logical partitions** (`/dev/block/mapper`), reads **TWRP or AOSP fstabs**, **7 CPU architectures**: arm64-v8a, armeabi-v7a, armeabi (ARMv5), x86, x86_64, riscv64, mips. The right build is picked automatically from your stock image |
@@ -100,12 +101,13 @@ src/
               backup/restore, mount, files, terminal, advanced, settings, reboot, ORS
   sim.cpp     fake device sandbox for desktop development
 tests/        host self-tests, installer tests (fake fastboot/adb/heimdall), A/B OTA tests (payload_test.py),
-              fastbootd tests with the real fastboot client (fastboot_test.sh)
+              fastbootd tests with the real fastboot client (fastboot_test.sh), PC rescue tests (pc_rescue_test.sh)
 device/       example twrp.fstab and device-tree snippet
 scripts/      build (7 architectures), test them on emulated CPUs, make a recovery image, install it
               (fastboot / Samsung), try on a device
 tools/        odin_pack.py (Odin .tar.md5, disabled vbmeta), elf_abi.py (which build fits a phone),
               resource embedding, Zig toolchain
+pc/           PC rescue tool (twrpv2_rescue.py + a Windows launcher): fix a phone that doesn't start, from a computer
 ```
 
 ---
@@ -219,6 +221,52 @@ building an image at all: `scripts/try_on_device.sh` (it picks the build for the
 The installers are tested against fake `fastboot`/`adb`/`heimdall` (`tests/install_test.sh`), **not yet with
 a real phone**. `install.ps1` hasn't been run on Windows yet either. Please report anything that goes wrong.
 
+## PC rescue: the phone doesn't start
+
+`pc/twrpv2_rescue.py` (Windows: double-click `pc\twrpv2_rescue.bat`) is the same idea as Auto repair, run from a
+computer, for phones that bootloop, stop at a vbmeta / "verification failed" error or **can't get into recovery
+any more**. It is one Python 3 file, standard library only: a window (tkinter) or commands. It uses `adb` and
+`fastboot` (Android platform-tools) and, for Samsung, Heimdall.
+
+Plug the phone in, in whatever mode it is in, and it tells you:
+- **which phone** it is: model, codename, serial, Android version. The bootloader only reports a codename, so the
+  model seen over adb is remembered by serial (`~/.twrpv2_rescue.json`), and Pixel codenames are built in.
+- **which mode** it is in: Android, recovery (TWRP v2 or another one), sideload, bootloader, fastbootd, Samsung
+  Download mode, or connected but not authorized for USB debugging.
+- **whether the bootloader is unlocked**:
+  - fastboot: `getvar unlocked`, or `oem device-info`
+  - Android / recovery: `ro.boot.flash.locked`, `vbmeta.device_state`, `verifiedbootstate`, and whether **OEM
+    unlocking** is allowed in Developer options
+  - Samsung Download mode doesn't tell the computer. The tool says what to read on the phone's screen
+    (`OEM LOCK: OFF (U)`, `KG STATE`) and waits for you to confirm.
+
+On a **locked** phone it changes nothing: it explains how that maker's phones are unlocked (unlocking erases the
+phone), and which **official** tool restores the firmware instead (Pixel Repair, Smart Switch / Odin, sideloading the
+official OTA from the stock recovery...).
+
+**Fix it for me** (`twrpv2_rescue.py fix`) then works out the repair. It asks before every change (`--yes` to not
+ask; Format Data / `-w` always needs `ERASE` typed):
+
+| The phone is in | What it does |
+|---|---|
+| Bootloader, this slot marked unbootable / out of tries, other slot booted fine | `set_active` the other slot (rollback after a bad update; a pending Virtual A/B update is cancelled first) and reboots |
+| Bootloader, and you give a TWRP v2 image (`--recovery`) | `fastboot boot` - TWRP v2 runs from RAM, **nothing is written** - then runs **Auto repair** inside it over adb (`twrp autofix`) and reboots |
+| Bootloader, no image | Tries the installed recovery (`fastboot reboot recovery`): if it is TWRP v2, Auto repair runs there |
+| Android | Restarts to recovery and runs Auto repair (when TWRP v2 is installed) |
+| TWRP v2 | Shows Auto repair's diagnosis (`autofix --dry-run`), then repairs |
+| Samsung Download mode | `--recovery`: flashes TWRP v2 to RECOVERY + a vbmeta with verification disabled (Heimdall), you start recovery with the keys, Auto repair runs. `--ap AP_....tar.md5`: flashes the **stock** boot / init_boot / vendor_boot / recovery / vbmeta / dtbo from your firmware - the `.lz4` images inside are unpacked by the tool (pure Python LZ4), partition names come from the phone's PIT |
+
+Single repairs: `boot-twrp IMG`, `autofix`, `switch-slot`, `cancel-update`, `disable-vbmeta [--vbmeta stock.img]
+[--both-slots]` (the GSI fix: stock vbmeta with flags set, or a generated empty one), `flash PART IMG` (the image
+header is checked first), `samsung-twrp IMG`, `samsung-stock AP.tar.md5 [--parts boot,vbmeta]`, `wipe-data`,
+`reboot system|recovery|bootloader|fastboot|download`, and `logs [DIR]` (TWRP v2's rescue logs, recovery.log,
+`getvar all` or logcat, for a bug report). `status --json` is for scripts; `--dry-run` shows every command that would
+change the phone and runs none. Flashing and wiping are refused while a Virtual A/B update is still merging.
+
+Tested against fake `adb` / `fastboot` / `heimdall` that answer like phones in each mode (`tests/pc_rescue_test.sh`:
+92 checks, including the window driven under Xvfb and the LZ4 unpacker on compressed data), **not yet with a real
+phone**, and not yet on Windows or macOS (it only uses `subprocess` and tkinter, but that is untested there).
+
 ### fstab
 TWRP v2 looks for `/etc/twrp.fstab`, `/etc/recovery.fstab`, `/system/etc/recovery.fstab` and finally
 `/vendor/etc/fstab.<hardware>`. Both the TWRP format and the AOSP format work, and partitions such as boot,
@@ -321,6 +369,9 @@ fastboot -s tcp:127.0.0.1:5554 getvar all
 - SELinux labels are preserved only if the ramdisk's `tar` supports it (`--selinux` or `--xattrs`).
   Otherwise use *Advanced → Fix storage contexts*.
 - Download and EDL reboot targets only work where the bootloader supports them.
+- **Auto repair and the PC rescue tool haven't met a broken phone yet.** Their logic is tested on the simulator and
+  with fake adb / fastboot / heimdall. Every step is one the rest of TWRP v2 already does (wipe, flash, slot switch,
+  fsck); what can't be undone is never done unattended.
 
 ---
 
