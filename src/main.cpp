@@ -126,6 +126,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "files") sc = makeFilesScreen(arg);
             else if (name == "root") sc = makeRootScreen();
             else if (name == "advanced") sc = makeAdvancedScreen();
+            else if (name == "fastboot") sc = makeFastbootScreen(arg != "--no-start");
             if (sc) app.push(std::move(sc));
             else fprintf(stderr, "open: unknown screen %s\n", name.c_str());
             frames(450);
@@ -234,7 +235,8 @@ int main(int argc, char** argv) {
     ors::Script pending;
     if (ors::takePending(pending)) {
         LOGI("ors: %zu command(s) from %s", pending.lines.size(), pending.source.c_str());
-        app.push(makeOrsScreen(pending));
+        if (pending.lines.size() == 1 && pending.lines[0] == "fastboot") app.push(makeFastbootScreen(true));  // reboot fastboot
+        else app.push(makeOrsScreen(pending));
     }
     if (headless) {
         if (script.empty()) {

@@ -448,6 +448,8 @@ static void testPathcheck(const std::string& dir) {
     CHECK(m.find("system_a") && util::fileSize(root + "/dev/block/mapper/system_a") == m.find("system_a")->bytes());
 
     // AOSP recovery arguments -> ORS
+    // `adb reboot fastboot` / `fastboot reboot fastboot` put --fastboot in the bootloader message.
+    CHECK(ors::fromAospArgs({"--fastboot"}) == std::vector<std::string>{"fastboot"});
     auto l = ors::fromAospArgs({"--update_package=/data/ota.zip", "--wipe_cache", "--reason=foo", "--update_package=@/cache/recovery/block.map"});
     CHECK(l.size() == 3 && l[0] == "install /data/ota.zip" && l[1] == "wipe cache" && l[2].find("print") == 0);
     // bootloader message in misc is read and cleared

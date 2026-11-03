@@ -19,6 +19,8 @@ std::unique_ptr<Screen> makeGsiScreen(const std::string& image = "");
 // A/B ROM / OTA zip (payload.bin): install to the inactive slot, or extract images.
 std::unique_ptr<Screen> makePayloadScreen(const std::string& path);
 std::unique_ptr<Screen> makeSuperScreen();
+// fastbootd built into TWRP v2 (USB FunctionFS; TCP in the simulator).
+std::unique_ptr<Screen> makeFastbootScreen(bool autostart = true);
 std::unique_ptr<Screen> makeVbmetaScreen();
 std::unique_ptr<Screen> makeFsToolsScreen(const std::string& mountPoint);
 std::unique_ptr<Screen> makeRootScreen();

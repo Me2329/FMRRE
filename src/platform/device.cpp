@@ -350,9 +350,9 @@ bool setActiveSlot(const std::string& suffix, std::string& msg) {
     if (suffix != "_a" && suffix != "_b") { msg = "Unknown slot " + suffix; return false; }
     int target = suffix == "_b" ? 1 : 0;
     std::string name = target ? "B" : "A";
-    if (g_sim) {
-        g_info.slot = suffix;
-        msg = "Active slot set to " + name;
+    if (g_sim) {  // like a real phone: the booted slot stays current until the next boot
+        util::writeFile(path("/sim_next_slot"), suffix + "\n");
+        msg = "Next boot will use slot " + name;
         return true;
     }
     std::string out;

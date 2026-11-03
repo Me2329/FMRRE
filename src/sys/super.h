@@ -87,6 +87,11 @@ bool write(const std::string& dev, const Metadata& m, std::string& err);
 // Lay out a fresh super (geometry + metadata in all slots). Used by the simulator and tests.
 bool format(const std::string& dev, const Metadata& m, std::string& err);
 
+// Image files: lpmake's super_empty.img (geometry at 0, then one metadata copy), or a raw dump of
+// the start of super (4 KiB reserved, two geometries, the metadata slots). serializeImage writes the former.
+bool parseImage(const std::string& data, Metadata& m, std::string& err);
+std::string serializeImage(const Metadata& m);
+
 // Raw copy of everything before the first usable sector (geometry + all metadata slots).
 bool saveMetadataRegion(const std::string& dev, const std::string& file, std::string& err);
 bool restoreMetadataRegion(const std::string& dev, const std::string& file, std::string& err);
@@ -107,6 +112,12 @@ bool deletePartition(const std::string& name, Task& t);
 bool createPartition(const std::string& name, const std::string& group, uint64_t bytes, Task& t);
 // Shrink every partition of the other slot to zero (frees space for a GSI on virtual A/B devices).
 bool freeOtherSlot(Task& t);
+// Before super itself is overwritten (fastboot flash super): unmount and unmap every logical partition,
+// so nothing keeps using the old extents. Mappings are created again on demand.
+bool unmapAll(Task& t);
+// Simulator only: logical partitions are plain files there; refresh them from super's new contents,
+// which is what device-mapper views of super would show after super is rewritten.
+void simSyncFromSuper();
 // Where automatic metadata backups go.
 std::string backupDir();
 

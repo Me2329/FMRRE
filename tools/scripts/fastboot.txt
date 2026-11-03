@@ -1,0 +1,10 @@
+# Fastboot mode screen (the simulator listens on tcp:127.0.0.1:5554)
+wait 1000
+open fastboot
+wait 2500
+shot f1_fastboot_waiting.png
+wait 4000
+shot f2_fastboot_used.png
+key back
+wait 1200
+shot f3_fastboot_stopped.png

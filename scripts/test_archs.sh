@@ -5,9 +5,11 @@
 #   2. the recovery UI             simulator mode, headless: boots, renders, screenshot compared with the host build
 #   3. the twrp command line       super metadata, file check, image flash, a full GSI flash (.img.xz) and
 #                                  an A/B ROM install (payload.bin: dynamic partitions, verity, slot switch)
+#   4. fastbootd                   the computer's real `fastboot` client flashes it over TCP (if installed)
 #
 #   scripts/test_archs.sh [arch...]     default: every architecture that has out/<arch>/recovery
-# Needs qemu-user-static (apt install qemu-user-static) and python3 (+ Pillow for the screenshot comparison).
+# Needs qemu-user-static (apt install qemu-user-static) and python3 (+ Pillow for the screenshot comparison);
+# fastboot (apt install fastboot) for step 4.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -56,7 +58,7 @@ EOF
 }
 
 FAIL=0
-printf '%-8s %-12s %-10s %-22s %-16s %s\n' arch cpu selftest UI "CLI, GSI, OTA" size
+printf '%-8s %-12s %-10s %-22s %-18s %s\n' arch cpu selftest UI "CLI/GSI/OTA, fb" size
 for a in "$@"; do
   bin="out/$a/recovery"
   [ -f "$bin" ] || { printf '%-8s no build (scripts/build.sh %s)\n' "$a" "$a"; FAIL=1; continue; }
@@ -93,7 +95,25 @@ for a in "$@"; do
     grep -q "OTA installed to slot B" "$T/ota-$a.log" && grep -q "system_b .* verified" "$T/ota-$a.log"
   } > "$T/cli-$a.log" 2>&1 && cli=ok || FAIL=1
 
-  printf '%-8s %-12s %-10s %-22s %-16s %s\n' "$a" "${QCPU[$a]}" "$st" "$ui" "$cli" "$(du -h "$bin" | cut -f1)"
+  # fastbootd on this CPU, driven by the computer's real fastboot client (if installed)
+  if [ "$cli" = ok ] && command -v fastboot > /dev/null; then
+    port=$((30000 + RANDOM % 20000))
+    run "$bin" --sim --sim-root "$sim" twrp fastboot --tcp "$port" > "$T/fbs-$a.log" 2>&1 &
+    fbpid=$!
+    fb() { fastboot -s "tcp:127.0.0.1:$port" "$@" > "$T/fb-$a.log" 2>&1; }
+    up=0
+    for _ in $(seq 100); do fb getvar is-userspace && up=1 && break; sleep 0.2; done
+    head -c 1048576 /dev/urandom > "$T/fbboot-$a.img"
+    if [ "$up" = 1 ] && fb flash boot "$T/fbboot-$a.img" && cmp -s <(head -c 1048576 "$sim/dev/block/by-name/boot_a") "$T/fbboot-$a.img" &&
+       fb getvar partition-size:system_a && grep -q "partition-size:system_a: 0x" "$T/fb-$a.log" && fb reboot recovery && wait "$fbpid"; then
+      cli="ok, fastboot ok"
+    else
+      cli="fastboot FAIL"; FAIL=1; kill "$fbpid" 2> /dev/null
+      tail -3 "$T/fb-$a.log" "$T/fbs-$a.log" 2> /dev/null | sed 's/^/           /'
+    fi
+  fi
+
+  printf '%-8s %-12s %-10s %-22s %-18s %s\n' "$a" "${QCPU[$a]}" "$st" "$ui" "$cli" "$(du -h "$bin" | cut -f1)"
   if [ "$st" = FAIL ]; then grep -E "FAIL" "$T/selftest-$a.log" | head -5 | sed 's/^/           /'; fi
   if [ "$cli" = FAIL ]; then tail -5 "$T/gsi-$a.log" "$T/ota-$a.log" 2>/dev/null | sed 's/^/           /'; fi
 done

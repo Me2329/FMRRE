@@ -498,6 +498,21 @@ bool format(const std::string& dev, const Metadata& m, std::string& err) {
     return write(dev, m, err);
 }
 
+bool parseImage(const std::string& data, Metadata& m, std::string& err) {
+    std::string e1;
+    if (data.size() >= kGeometrySize && parseGeometry((const uint8_t*)data.data(), m, e1))
+        return parseMetadata(data.substr(kGeometrySize), m, err);
+    if (data.size() >= kReserved + kGeometrySize && parseGeometry((const uint8_t*)data.data() + kReserved, m, err)) {
+        uint64_t off = primaryOffset(m, 0);
+        if (data.size() < off + 128) { err = "metadata truncated"; return false; }
+        return parseMetadata(data.substr(off), m, err);
+    }
+    err = e1;
+    return false;
+}
+
+std::string serializeImage(const Metadata& m) { return serializeGeometry(m) + m.serialize(); }
+
 bool saveMetadataRegion(const std::string& dev, const std::string& file, std::string& err) {
     Metadata m;
     if (!read(dev, 0, m, err)) return false;
@@ -887,6 +902,56 @@ bool prepareSlot(const std::vector<SlotGroup>& groups, const std::string& suffix
             if (!map(nm, p.first + suffix, true, err)) { t.print("Mapping %s%s failed: %s", p.first.c_str(), suffix.c_str(), err.c_str()); return false; }
     t.print("Free in super afterwards: %s", util::humanSize(nm.freeBytes()).c_str());
     return true;
+}
+
+bool unmapAll(Task& t) {
+    Metadata m;
+    std::string err;
+    if (!read(superDevice(), currentSlotIndex(), m, err)) return true;  // nothing mapped from an unreadable super
+    bool ok = true;
+    for (auto& p : m.parts) {
+        if (mappedPath(p.name).empty()) continue;
+        unmountIfMapped(p.name, t);
+        if (!unmap(p.name, err)) { t.print("Cannot unmap %s: %s", p.name.c_str(), err.c_str()); ok = false; }
+    }
+    return ok;
+}
+
+void simSyncFromSuper() {
+    if (!device::isSim()) return;
+    Metadata m;
+    std::string err, dev = superDevice();
+    if (!read(dev, currentSlotIndex(), m, err)) return;
+    int in = ::open(dev.c_str(), O_RDONLY | O_CLOEXEC);
+    if (in < 0) return;
+    std::vector<char> buf(1 << 20);
+    for (auto& p : m.parts) {
+        std::string f = device::path("/dev/block/mapper/" + p.name);
+        unlink(f.c_str());
+        if (!p.bytes()) continue;
+        int out = ::open(f.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        if (out < 0) continue;
+        if (ftruncate(out, (off_t)p.bytes()) != 0) {}
+        uint64_t logical = 0;
+        for (auto& e : p.extents) {
+            uint64_t start = e.target * 512, end = start + e.sectors * 512;
+            for (off_t pos = (off_t)start; e.type == kTargetLinear && pos < (off_t)end;) {
+                off_t data = lseek(in, pos, SEEK_DATA);  // super is a sparse file: copy only real data
+                if (data < 0 || data >= (off_t)end) break;
+                off_t hole = lseek(in, data, SEEK_HOLE);
+                if (hole < 0 || hole > (off_t)end) hole = (off_t)end;
+                for (off_t o = data; o < hole;) {
+                    size_t k = (size_t)std::min<off_t>((off_t)buf.size(), hole - o);
+                    if (!preadAll(in, buf.data(), k, (uint64_t)o) || !pwriteAll(out, buf.data(), k, logical + (uint64_t)(o - (off_t)start))) break;
+                    o += (off_t)k;
+                }
+                pos = hole;
+            }
+            logical += e.sectors * 512;
+        }
+        ::close(out);
+    }
+    ::close(in);
 }
 
 bool freeOtherSlot(Task& t) {

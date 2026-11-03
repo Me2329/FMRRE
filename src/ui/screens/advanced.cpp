@@ -26,7 +26,8 @@ public:
         const auto& info = device::info();
         std::vector<std::pair<const char*, std::vector<Item>>> groups = {
             {"Partitions & boot",
-             {{Icon::Download, "Install TWRP v2 permanently", "Keep it after fastboot boot - stock is saved first", th.accent, 26},
+             {{Icon::Usb, "Fastboot mode (fastbootd)", "fastboot flash from a computer, super resized for you", th.info, 27},
+              {Icon::Download, "Install TWRP v2 permanently", "Keep it after fastboot boot - stock is saved first", th.accent, 26},
               {Icon::Key, "Root", "Magisk / KernelSU / APatch, stock backup, modules", th.ok, 25},
               {Icon::Storage, "Super partitions", "Resize / delete dynamic partitions (system, product...)", th.accent, 20},
               {Icon::Phone, "GSI wizard", "Flash a Generic System Image the right way", th.ok, 21},
@@ -77,6 +78,7 @@ public:
             case 24: app.push(makeManualFlashScreen()); break;
             case 25: app.push(makeRootScreen()); break;
             case 26: app.push(makeInstallRecoveryScreen()); break;
+            case 27: app.push(makeFastbootScreen(true)); break;
             case 2: app.push(makePartInfoScreen()); break;
             case 3: app.push(makeInputTestScreen()); break;
             case 4: app.push(makeFilesScreen()); break;

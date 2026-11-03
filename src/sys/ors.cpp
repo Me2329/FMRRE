@@ -13,6 +13,7 @@
 #include "sys/avb.h"
 #include "sys/backup.h"
 #include "sys/bootimg.h"
+#include "sys/fastboot.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
 #include "sys/partitions.h"
@@ -215,6 +216,8 @@ std::vector<std::string> fromAospArgs(const std::vector<std::string>& args) {
         } else if (a == "--sideload" || a == "--sideload_auto_reboot") {
             out.push_back("sideload");
             if (a == "--sideload_auto_reboot") out.push_back("reboot");
+        } else if (a == "--fastboot") {  // adb/fastboot reboot fastboot: start our fastbootd
+            out.push_back("fastboot");
         } else if (a == "--shutdown_after") {
             out.push_back("reboot poweroff");
         }
@@ -260,7 +263,8 @@ std::string help() {
            "  mkdir <path>\n"
            "  cmd <shell command>\n"
            "  sideload\n"
-           "  lp resize <name> <MB> | lp delete <name> | lp list\n"
+           "  lp resize <name> <MB> | lp delete <name> | lp list | lp export [--empty] <file>\n"
+           "  fastboot [--tcp PORT]     fastbootd: flash from a computer (USB; TCP for emulators)\n"
            "  payload info <ota.zip|payload.bin>\n"
            "  payload extract <ota.zip> [partition...] [--out DIR]   e.g. boot init_boot for Magisk\n"
            "  payload install <ota.zip> [--slot a|b] [--no-switch] [--no-verify] [--force]\n"
@@ -356,6 +360,18 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             if (a.size() >= 3 && a[0] == "resize") ok = lp::resizePartition(a[1], uint64_t(atof(a[2].c_str()) * (1 << 20)), t);
             else if (a.size() >= 2 && a[0] == "delete") ok = lp::deletePartition(a[1], t);
             else if (a.size() >= 1 && a[0] == "free-other-slot") ok = lp::freeOtherSlot(t);
+            else if (a.size() >= 2 && a[0] == "export") {  // the partition table as a super_empty.img
+                bool empty = a[1] == "--empty" && a.size() >= 3;
+                std::string file = pathcheck::resolve(a[empty ? 2 : 1]);
+                lp::Metadata m;
+                std::string e;
+                ok = lp::read(lp::superDevice(), lp::currentSlotIndex(), m, e);
+                if (ok && empty)
+                    for (auto& p : m.parts) p.extents.clear();  // like lpmake's super_empty.img: names and groups only
+                ok = ok && util::writeFile(file, lp::serializeImage(m));
+                if (ok) t.print("Partition table saved to %s (super_empty.img format%s)", file.c_str(), empty ? ", sizes 0" : "");
+                else t.print("export failed: %s", e.empty() ? "cannot write the file" : e.c_str());
+            }
             else {
                 lp::Metadata m;
                 std::string e;
@@ -364,6 +380,19 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 for (auto& p : m.parts) t.print("%-20s %10s  %zu extent(s)", p.name.c_str(), util::humanSize(p.bytes()).c_str(), p.extents.size());
                 if (ok) t.print("free: %s of %s", util::humanSize(m.freeBytes()).c_str(), util::humanSize(m.totalBytes()).c_str());
             }
+        } else if (cmd == "fastboot") {
+            fastboot::Options o;
+            for (size_t k = 0; k < a.size(); k++) {
+                if (a[k] == "--tcp" && k + 1 < a.size()) { o.tcpPort = atoi(a[++k].c_str()); o.usb = false; }
+                else if (a[k] == "--usb") o.usb = true;
+            }
+            if (device::isSim()) {
+                o.usb = false;
+                o.tcpBind = "127.0.0.1";
+                if (!o.tcpPort) o.tcpPort = 5554;
+            }
+            std::string target;
+            ok = fastboot::run(o, t, target);
         } else if (cmd == "payload") {
             ok = doPayload(a, t);
         } else if (cmd == "vbmeta") {
