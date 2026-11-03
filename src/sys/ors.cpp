@@ -17,6 +17,7 @@
 #include "sys/installer.h"
 #include "sys/partitions.h"
 #include "sys/pathcheck.h"
+#include "sys/payload.h"
 #include "sys/sideload.h"
 #include "sys/super.h"
 
@@ -117,6 +118,58 @@ bool doWipe(const std::string& what, Task& t) {
     return Partitions::get().wipe(*p, t);
 }
 
+std::string payloadOutDir(const std::string& zip) {
+    std::string b = util::basename(zip);
+    for (auto ext : {".zip", ".bin"})
+        if (util::endsWith(util::toLower(b), ext)) b = b.substr(0, b.size() - 4);
+    return Partitions::get().storagePath() + "/TWRP/payload/" + b;
+}
+
+bool doPayload(const std::vector<std::string>& a, Task& t) {
+    if (a.size() < 2) { t.print("usage: payload info|extract|install <ota.zip> ..."); return false; }
+    std::string path = pathcheck::resolve(a[1]), err;
+    payload::Payload p;
+    if (!payload::open(path, p, err)) { t.print("%s: %s", a[1].c_str(), err.c_str()); return false; }
+    if (a[0] == "info") {
+        t.print("%s", p.describe().c_str());
+        for (auto& kv : p.metadata)
+            if (kv.first == "pre-device" || kv.first == "post-build" || kv.first == "ota-type" || kv.first == "post-timestamp")
+                t.print("  %s: %s", kv.first.c_str(), kv.second.c_str());
+        t.print("  block size %u, minor version %u%s%s", p.blockSize, p.minorVersion, p.snapshotEnabled ? ", virtual A/B" : "",
+                p.vabc ? " (compressed)" : "");
+        for (auto& g : p.groups) t.print("  group %s: max %s, %zu partitions", g.name.c_str(), util::humanSize(g.size).c_str(), g.partitions.size());
+        for (auto& pu : p.parts)
+            t.print("  %-14s %10s  %4zu ops%s%s%s", pu.name.c_str(), util::humanSize(pu.newSize).c_str(), pu.ops.size(),
+                    p.isDynamic(pu.name) ? "  dynamic" : "", pu.hashTree.count ? "  +hashtree" : "", pu.fec.count ? "  +fec" : "");
+        if (!p.full()) t.print("  incremental: uses %s", p.unsupported()[0].c_str());
+        return true;
+    }
+    if (a[0] == "extract") {
+        std::vector<std::string> names;
+        std::string out = payloadOutDir(path);
+        bool verify = true;
+        for (size_t i = 2; i < a.size(); i++) {
+            if (a[i] == "--out" && i + 1 < a.size()) out = pathcheck::resolve(a[++i]);
+            else if (a[i] == "--no-verify") verify = false;
+            else names.push_back(a[i]);
+        }
+        return payload::extract(p, names, out, verify, t);
+    }
+    if (a[0] == "install") {
+        payload::InstallOptions o;
+        for (size_t i = 2; i < a.size(); i++) {
+            if (a[i] == "--slot" && i + 1 < a.size()) o.slot = "_" + util::toLower(a[++i]).substr(0, 1);
+            else if (a[i] == "--no-switch") o.switchSlot = false;
+            else if (a[i] == "--no-verify") o.verify = false;
+            else if (a[i] == "--force") o.force = true;
+            else if (a[i] == "--keep-source") o.freeSourceIfNeeded = false;
+        }
+        return payload::install(p, o, t);
+    }
+    t.print("usage: payload info|extract|install <ota.zip> ...");
+    return false;
+}
+
 bool doGsi(const std::string& path, Task& t) {
     img::Info info = img::inspect(path);
     if (!info.ok) { t.print("gsi: %s", info.error.c_str()); return false; }
@@ -208,6 +261,9 @@ std::string help() {
            "  cmd <shell command>\n"
            "  sideload\n"
            "  lp resize <name> <MB> | lp delete <name> | lp list\n"
+           "  payload info <ota.zip|payload.bin>\n"
+           "  payload extract <ota.zip> [partition...] [--out DIR]   e.g. boot init_boot for Magisk\n"
+           "  payload install <ota.zip> [--slot a|b] [--no-switch] [--no-verify] [--force]\n"
            "  vbmeta disable|enable|status\n"
            "  root status|backup|modules-off   modules-off fixes module bootloops\n"
            "  check <path>              why can't I see this file?\n"
@@ -308,6 +364,8 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 for (auto& p : m.parts) t.print("%-20s %10s  %zu extent(s)", p.name.c_str(), util::humanSize(p.bytes()).c_str(), p.extents.size());
                 if (ok) t.print("free: %s of %s", util::humanSize(m.freeBytes()).c_str(), util::humanSize(m.totalBytes()).c_str());
             }
+        } else if (cmd == "payload") {
+            ok = doPayload(a, t);
         } else if (cmd == "vbmeta") {
             if (rest == "disable") ok = avb::disableVerification(true, t);
             else if (rest == "enable") ok = avb::enableVerification(true, t);
@@ -396,7 +454,8 @@ int cliMain(const std::vector<std::string>& args) {
     std::string pid = util::readLine(uiPidFile());
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
     bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
-                    (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status"));
+                    (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
+                    (args[0] == "payload" && args.size() > 1 && args[1] == "info");
     if (uiAlive && !readOnly) {
         util::mkdirs(queueDir());
         std::string id = std::to_string(getpid()) + "_" + std::to_string(util::nowMs());

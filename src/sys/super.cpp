@@ -788,6 +788,107 @@ bool createPartition(const std::string& name, const std::string& group, uint64_t
     return true;
 }
 
+namespace {
+
+std::string otherSuffix(const std::string& s) { return s == "_a" ? "_b" : "_a"; }
+
+bool inGroups(const std::vector<SlotGroup>& groups, const std::string& name, const std::string& suffix) {
+    for (auto& g : groups)
+        for (auto& p : g.parts)
+            if (p.first + suffix == name) return true;
+    return false;
+}
+
+// The metadata after laying out the slot, or false (+ err) if it doesn't fit.
+bool layoutSlot(const Metadata& m, const std::vector<SlotGroup>& groups, const std::string& suffix, bool freeSource, Metadata& out,
+                std::string& err) {
+    out = m;
+    if (freeSource)
+        for (auto& p : out.parts)
+            if (util::endsWith(p.name, otherSuffix(suffix))) p.extents.clear();
+    std::vector<int> gi;
+    for (auto& g : groups) {
+        std::string gname = g.name + suffix;
+        int i = out.groupIndex(gname);
+        if (i < 0) {
+            out.groups.push_back({gname, 0, g.maxSize});
+            i = (int)out.groups.size() - 1;
+        } else {
+            out.groups[i].maxSize = g.maxSize;
+        }
+        gi.push_back(i);
+    }
+    out.parts.erase(std::remove_if(out.parts.begin(), out.parts.end(),
+                                   [&](const Part& p) {
+                                       return std::find(gi.begin(), gi.end(), (int)p.group) != gi.end() || inGroups(groups, p.name, suffix);
+                                   }),
+                    out.parts.end());
+    for (auto& g : groups)
+        for (auto& p : g.parts) {
+            if (!out.add(p.first + suffix, g.name + suffix, kAttrReadonly, err)) return false;
+            if (p.second && !out.resize(p.first + suffix, p.second, err)) return false;
+        }
+    return out.validate(err);
+}
+
+}  // namespace
+
+SlotFit fitSlot(const std::vector<SlotGroup>& groups, const std::string& suffix) {
+    SlotFit f;
+    Metadata m, out;
+    std::string err;
+    if (!read(superDevice(), currentSlotIndex(), m, err)) { f.error = "Cannot read super: " + err; return f; }
+    for (auto& g : groups)
+        for (auto& p : g.parts) f.needed += (p.second + m.blockSize - 1) / m.blockSize * m.blockSize;
+    f.available = m.freeBytes();
+    for (auto& p : m.parts)
+        if (util::endsWith(p.name, suffix)) {
+            int g = (int)p.group;
+            bool ours = inGroups(groups, p.name, suffix);
+            for (auto& sg : groups) ours |= m.groups[g].name == sg.name + suffix;
+            if (ours) f.available += p.bytes();
+        }
+    if (m.devs.size() != 1) { f.error = "super spans several block devices (retrofit layout)"; return f; }
+    if (layoutSlot(m, groups, suffix, false, out, err)) { f.fits = true; return f; }
+    std::string err2;
+    if (layoutSlot(m, groups, suffix, true, out, err2)) {
+        f.fits = true;
+        f.needsFreeSource = true;
+        return f;
+    }
+    f.error = err;
+    return f;
+}
+
+bool prepareSlot(const std::vector<SlotGroup>& groups, const std::string& suffix, bool freeSource, Task& t) {
+    Metadata m, nm;
+    if (!loadForEdit(m, t)) return false;
+    std::string err;
+    bool freed = false;
+    if (!layoutSlot(m, groups, suffix, false, nm, err)) {
+        if (!freeSource || !layoutSlot(m, groups, suffix, true, nm, err)) { t.print("The new partitions don't fit in super: %s", err.c_str()); return false; }
+        freed = true;
+        t.print("super only has room for one slot: emptying the %s partitions first.", otherSuffix(suffix).c_str());
+    }
+    // Everything that changes must be unmounted and unmapped first.
+    for (auto& p : m.parts) {
+        const Part* np = nm.find(p.name);
+        bool changed = !np || np->extents.size() != p.extents.size() || np->bytes() != p.bytes() ||
+                       util::endsWith(p.name, suffix) || (freed && util::endsWith(p.name, otherSuffix(suffix)));
+        if (!changed) continue;
+        unmountIfMapped(p.name, t);
+        if (!mappedPath(p.name).empty() && !unmap(p.name, err)) { t.print("Cannot unmap %s: %s", p.name.c_str(), err.c_str()); return false; }
+    }
+    for (auto& g : groups)
+        for (auto& p : g.parts) t.print("  %s%s: %s", p.first.c_str(), suffix.c_str(), util::humanSize(p.second).c_str());
+    if (!commit(nm, t)) return false;
+    for (auto& g : groups)
+        for (auto& p : g.parts)
+            if (!map(nm, p.first + suffix, true, err)) { t.print("Mapping %s%s failed: %s", p.first.c_str(), suffix.c_str(), err.c_str()); return false; }
+    t.print("Free in super afterwards: %s", util::humanSize(nm.freeBytes()).c_str());
+    return true;
+}
+
 bool freeOtherSlot(Task& t) {
     Metadata m;
     if (!loadForEdit(m, t)) return false;

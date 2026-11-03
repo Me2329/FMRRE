@@ -341,19 +341,27 @@ void reboot(const std::string& target) {
 bool switchSlot(std::string& msg) {
     const Info& i = info();
     if (!i.ab) { msg = "This device is not A/B"; return false; }
-    int target = i.slot == "_a" ? 1 : 0;
+    return setActiveSlot(i.slot == "_a" ? "_b" : "_a", msg);
+}
+
+bool setActiveSlot(const std::string& suffix, std::string& msg) {
+    const Info& i = info();
+    if (!i.ab) { msg = "This device is not A/B"; return false; }
+    if (suffix != "_a" && suffix != "_b") { msg = "Unknown slot " + suffix; return false; }
+    int target = suffix == "_b" ? 1 : 0;
+    std::string name = target ? "B" : "A";
     if (g_sim) {
-        g_info.slot = target ? "_b" : "_a";
-        msg = std::string("Active slot set to ") + (target ? "B" : "A");
+        g_info.slot = suffix;
+        msg = "Active slot set to " + name;
         return true;
     }
     std::string out;
     int rc = util::runCapture("bootctl set-active-boot-slot " + std::to_string(target), out);
     if (rc != 0) {
-        msg = "bootctl failed: " + util::trim(out);
+        msg = "bootctl failed (" + util::trim(out) + "). From a computer: fastboot set_active " + std::string(target ? "b" : "a");
         return false;
     }
-    msg = std::string("Next boot will use slot ") + (target ? "B" : "A");
+    msg = "Next boot will use slot " + name;
     return true;
 }
 

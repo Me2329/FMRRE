@@ -12,6 +12,7 @@
 #include "sys/installer.h"
 #include "sys/partitions.h"
 #include "sys/pathcheck.h"
+#include "sys/payload.h"
 #include "sys/sideload.h"
 #include "sys/super.h"
 
@@ -275,8 +276,12 @@ public:
                       g_queue.empty() ? BtnStyle::Filled : BtnStyle::Tonal)) {
             app.push(makeFilesScreen("", {".zip"},
                                      [](App& a, const std::string& p) {
-                                         if (g_queue.size() < 10) g_queue.push_back(p);
                                          a.pop();
+                                         if (payload::isOtaZip(p)) {  // A/B ROM / OTA: own screen (slot, super, verity)
+                                             a.push(makePayloadScreen(p));
+                                             return;
+                                         }
+                                         if (g_queue.size() < 10) g_queue.push_back(p);
                                          a.toast("Added " + util::basename(p), Icon::Zip);
                                      },
                                      "Select zip",
@@ -289,8 +294,12 @@ public:
                                                                                     Icon::Warning, b.ui.th.danger);
                                                                             return;
                                                                         }
-                                                                        g_queue.push_back(r.resolved);
                                                                         b.pop();
+                                                                        if (payload::isOtaZip(r.resolved)) {
+                                                                            b.push(makePayloadScreen(r.resolved));
+                                                                            return;
+                                                                        }
+                                                                        g_queue.push_back(r.resolved);
                                                                         b.toast("Added " + util::basename(r.resolved), Icon::Zip);
                                                                     }));
                                      }));

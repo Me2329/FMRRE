@@ -60,5 +60,7 @@ void vibrate(int ms);
 // target: "" (system), recovery, bootloader, fastboot, edl, download, poweroff
 void reboot(const std::string& target);
 bool switchSlot(std::string& msg);
+// Make slot "_a" / "_b" active for the next boot (boot control HAL via bootctl).
+bool setActiveSlot(const std::string& suffix, std::string& msg);
 
 }  // namespace tw::device

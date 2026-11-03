@@ -11,6 +11,8 @@ public:
     void reset();
     void update(const void* data, size_t len);
     std::string hexDigest();  // finalizes
+    std::string digest();     // finalizes; raw 32 bytes
+    static std::string toHex(const std::string& bin);
 
     static std::string hexOfFile(const std::string& path, void (*progress)(uint64_t, uint64_t, void*) = nullptr,
                                  void* ctx = nullptr);

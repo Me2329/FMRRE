@@ -25,6 +25,10 @@ jobs:
           out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
       - name: Installer tests (fake fastboot / adb / heimdall / magiskboot)
         run: tests/install_test.sh
+      - name: A/B OTA tests (payload.bin built with real bzip2 / xz, verity, refusals)
+        run: |
+          python3 tests/payload_test.py out/sim/twrpv2
+          out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/payload.txt --out shots
       - uses: actions/upload-artifact@v4
         with:
           name: screenshots

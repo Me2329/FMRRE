@@ -62,7 +62,7 @@ void Sha256::update(const void* data, size_t len) {
     if (len) { memcpy(buf_, p, len); bufLen_ = len; }
 }
 
-std::string Sha256::hexDigest() {
+std::string Sha256::digest() {
     uint64_t bits = total_ * 8;
     uint8_t pad = 0x80;
     update(&pad, 1);
@@ -71,15 +71,23 @@ std::string Sha256::hexDigest() {
     uint8_t lenb[8];
     for (int i = 0; i < 8; i++) lenb[i] = uint8_t(bits >> (56 - 8 * i));
     update(lenb, 8);
+    std::string out(32, '\0');
+    for (int i = 0; i < 8; i++)
+        for (int j = 0; j < 4; j++) out[i * 4 + j] = char(uint8_t(h_[i] >> (24 - j * 8)));
+    reset();
+    return out;
+}
+
+std::string Sha256::hexDigest() { return toHex(digest()); }
+
+std::string Sha256::toHex(const std::string& bin) {
     static const char* hx = "0123456789abcdef";
     std::string out;
-    for (int i = 0; i < 8; i++)
-        for (int j = 3; j >= 0; j--) {
-            uint8_t v = uint8_t(h_[i] >> (j * 8));
-            out += hx[v >> 4];
-            out += hx[v & 15];
-        }
-    reset();
+    out.reserve(bin.size() * 2);
+    for (unsigned char v : bin) {
+        out += hx[v >> 4];
+        out += hx[v & 15];
+    }
     return out;
 }
 

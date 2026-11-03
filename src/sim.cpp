@@ -168,8 +168,52 @@ static void ensureSuper(const std::string& root) {
     util::writeFile(dl + "pixel-gsi.img.crdownload", std::string(4096, '\0'));
 }
 
+// A LineageOS-style A/B ROM zip (payload.bin) built for this fake device.
+static void ensureOta(const std::string& root) {
+    std::string zip = root + "/data/media/0/Download/lineage-22.2-20261101-nightly-husky-signed.zip";
+    if (util::exists(zip)) return;
+    LOGI("sim: creating a demo A/B OTA (payload.bin)");
+    std::mt19937 rng(2026);
+    auto image = [&](size_t size, const char* magic, size_t magicAt, size_t randomBytes) {
+        std::string d(size, '\0');
+        for (size_t i = 4096; i < 4096 + randomBytes && i < size; i++) d[i] = char('A' + rng() % 23);
+        if (magic) memcpy(&d[magicAt], magic, strlen(magic));
+        return d;
+    };
+    struct Spec { const char* name; size_t size; const char* magic; size_t at; size_t rnd; bool verity; };
+    const Spec specs[] = {
+        {"boot", 1 << 20, "ANDROID!", 0, 256 << 10, false},
+        {"init_boot", 1 << 20, "ANDROID!", 0, 200 << 10, false},
+        {"vendor_boot", 2 << 20, "VNDRBOOT", 0, 384 << 10, false},
+        {"dtbo", 512 << 10, "\xd7\xb7\xab\x1e", 0, 64 << 10, false},
+        {"vbmeta", 4096, "AVB0", 0, 0, false},
+        {"system", 24 << 20, "\x53\xef", 1080, 1 << 20, true},
+        {"system_ext", 4 << 20, "\x53\xef", 1080, 128 << 10, false},
+        {"product", 8 << 20, "\x53\xef", 1080, 256 << 10, false},
+        {"vendor", 8 << 20, "\x53\xef", 1080, 512 << 10, true},
+        {"vendor_dlkm", 1 << 20, "\x53\xef", 1080, 64 << 10, false},
+        {"odm", 512 << 10, "\x53\xef", 1080, 16 << 10, false},
+    };
+    std::vector<OtaPart> parts;
+    std::vector<std::string> dynamic;
+    for (auto& sp : specs) {
+        OtaPart p;
+        std::string err;
+        if (!otaPartFromImage(sp.name, image(sp.size, sp.magic, sp.at, sp.rnd), sp.verity, root + "/tmp/ota_part.tmp", p, err)) {
+            LOGE("sim: OTA %s: %s", sp.name, err.c_str());
+            return;
+        }
+        parts.push_back(std::move(p));
+        if (sp.magic && sp.at == 1080) dynamic.push_back(sp.name);
+    }
+    std::string pl = encodePayload(parts, "google_dynamic_partitions", (8ull << 30) - (16ull << 20), dynamic, "2026-11-05");
+    std::string meta = "ota-type=AB\npost-build=google/lineage_husky/husky:15/BP1A.250505.005/eng.20261101:userdebug/release-keys\n"
+                       "post-sdk-level=35\npost-security-patch-level=2026-11-05\npost-timestamp=1793500000\npre-device=husky\n";
+    if (!writeOtaZip(zip, pl, meta)) LOGE("sim: cannot write %s", zip.c_str());
+}
+
 void ensureRoot(const std::string& root) {
-    if (util::exists(root + "/sim.prop")) { ensureSuper(root); return; }
+    if (util::exists(root + "/sim.prop")) { ensureSuper(root); ensureOta(root); return; }
     LOGI("sim: creating sandbox in %s", root.c_str());
     for (auto d : {"/data/media/0/Download", "/data/media/0/TWRP", "/data/media/0/Pictures", "/data/app", "/data/data/com.android.settings",
                    "/data/dalvik-cache/arm64", "/data/system", "/cache/recovery", "/system_root/system/app", "/vendor/etc",
@@ -233,6 +277,7 @@ void ensureRoot(const std::string& root) {
                     "TWRP v2 simulator\n\nThis sandbox mimics an Android device.\nEverything you do here stays inside this folder.\n");
     util::writeFile(root + "/external_sd/Music/song.mp3", std::string(500000, '\x11'));
     ensureSuper(root);
+    ensureOta(root);
 }
 
 }  // namespace tw::sim

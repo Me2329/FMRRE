@@ -6,6 +6,7 @@
 #include "platform/device.h"
 #include "sys/imagesrc.h"
 #include "sys/partitions.h"
+#include "sys/payload.h"
 #include "miniz.h"
 
 #include <cerrno>
@@ -156,6 +157,13 @@ bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
         return false;
     }
     t.print("Type: %s, %d entries, %s", zi.kind.c_str(), zi.entries, util::humanSize(zi.uncompressed).c_str());
+    if (zi.hasPayload && !zi.hasUpdateBinary) {
+        // A/B ROM or OTA: write payload.bin to the inactive slot (each block is checked against its SHA-256).
+        payload::Payload p;
+        std::string err;
+        if (!payload::open(path, p, err)) { t.print("payload.bin: %s", err.c_str()); return false; }
+        return payload::install(p, payload::InstallOptions(), t);
+    }
     const float rbase = t.rangeStart(), rlen = t.rangeLen();
     float myBase = rbase;
     if (o.verifyZip) {

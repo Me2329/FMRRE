@@ -3,7 +3,8 @@
 # oldest CPU its build supports:
 #   1. the self-tests              out/<arch>/twrpv2_selftest  (TW_SELFTEST=1 scripts/build.sh <arch>)
 #   2. the recovery UI             simulator mode, headless: boots, renders, screenshot compared with the host build
-#   3. the twrp command line       super metadata, file check, image flash and a full GSI flash (.img.xz)
+#   3. the twrp command line       super metadata, file check, image flash, a full GSI flash (.img.xz) and
+#                                  an A/B ROM install (payload.bin: dynamic partitions, verity, slot switch)
 #
 #   scripts/test_archs.sh [arch...]     default: every architecture that has out/<arch>/recovery
 # Needs qemu-user-static (apt install qemu-user-static) and python3 (+ Pillow for the screenshot comparison).
@@ -55,7 +56,7 @@ EOF
 }
 
 FAIL=0
-printf '%-8s %-12s %-10s %-22s %-16s %s\n' arch cpu selftest UI "CLI + GSI flash" size
+printf '%-8s %-12s %-10s %-22s %-16s %s\n' arch cpu selftest UI "CLI, GSI, OTA" size
 for a in "$@"; do
   bin="out/$a/recovery"
   [ -f "$bin" ] || { printf '%-8s no build (scripts/build.sh %s)\n' "$a" "$a"; FAIL=1; continue; }
@@ -87,12 +88,14 @@ for a in "$@"; do
     run "$bin" --sim --sim-root "$sim" twrp flash /sdcard/Download/kernel-boot.img boot > "$T/flash-$a.log" 2>&1 &&
     grep -q "Verified" "$T/flash-$a.log" &&
     run "$bin" --sim --sim-root "$sim" twrp gsi "$gsi" > "$T/gsi-$a.log" 2>&1 &&
-    grep -q "Verified" "$T/gsi-$a.log" && grep -q "$want" "$T/gsi-$a.log"
+    grep -q "Verified" "$T/gsi-$a.log" && grep -q "$want" "$T/gsi-$a.log" &&
+    run "$bin" --sim --sim-root "$sim" twrp payload install /sdcard/Download/lineage-22.2-20261101-nightly-husky-signed.zip > "$T/ota-$a.log" 2>&1 &&
+    grep -q "OTA installed to slot B" "$T/ota-$a.log" && grep -q "system_b .* verified" "$T/ota-$a.log"
   } > "$T/cli-$a.log" 2>&1 && cli=ok || FAIL=1
 
   printf '%-8s %-12s %-10s %-22s %-16s %s\n' "$a" "${QCPU[$a]}" "$st" "$ui" "$cli" "$(du -h "$bin" | cut -f1)"
   if [ "$st" = FAIL ]; then grep -E "FAIL" "$T/selftest-$a.log" | head -5 | sed 's/^/           /'; fi
-  if [ "$cli" = FAIL ]; then tail -5 "$T/gsi-$a.log" 2>/dev/null | sed 's/^/           /'; fi
+  if [ "$cli" = FAIL ]; then tail -5 "$T/gsi-$a.log" "$T/ota-$a.log" 2>/dev/null | sed 's/^/           /'; fi
 done
 mkdir -p out/arch-shots && cp "$T"/home-*.png out/arch-shots/ 2>/dev/null
 [ "$FAIL" = 0 ] && echo "All architectures passed (screenshots in out/arch-shots/)" || { echo "Some architectures FAILED"; exit 1; }

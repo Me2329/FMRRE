@@ -16,6 +16,8 @@ std::unique_ptr<Screen> makeFlashImageScreen(const std::string& image, const std
 // "Can't find your file?": type a path, see why it may be hidden, get a dd command.
 std::unique_ptr<Screen> makeManualFlashScreen(const std::string& path = "");
 std::unique_ptr<Screen> makeGsiScreen(const std::string& image = "");
+// A/B ROM / OTA zip (payload.bin): install to the inactive slot, or extract images.
+std::unique_ptr<Screen> makePayloadScreen(const std::string& path);
 std::unique_ptr<Screen> makeSuperScreen();
 std::unique_ptr<Screen> makeVbmetaScreen();
 std::unique_ptr<Screen> makeFsToolsScreen(const std::string& mountPoint);

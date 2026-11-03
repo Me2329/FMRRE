@@ -15,7 +15,8 @@ It does not need Android, a framework or a GPU.
 > **Status: experimental - NOT tested on a real phone yet.** Everything here builds (host and static binaries
 > for 7 CPU architectures, each one also run on an emulated CPU with qemu-user), runs in the desktop simulator
 > and passes the self-tests (real `update-binary` protocol, sparse
-> and compressed images, super metadata rewrite, backup → wipe → restore, OpenRecoveryScript). The features that
+> and compressed images, super metadata rewrite, backup → wipe → restore, OpenRecoveryScript, A/B OTA payloads
+> with bzip2/xz and on-device dm-verity/FEC, checked against independent implementations). The features that
 > touch `super`, `vbmeta`, `misc` and device-mapper follow the AOSP on-disk formats exactly and are covered by
 > tests, but they have **never run on hardware**. Always try it with `fastboot boot` first, keep a working
 > recovery, and keep the super/vbmeta/boot backups TWRP v2 makes automatically.
@@ -47,6 +48,7 @@ It does not need Android, a framework or a GPU.
 | Area | Features |
 |---|---|
 | **Install** | Zip **queue**, CRC **integrity check** before flashing, real `update-binary` protocol (`ui_print`, `progress`, `set_progress`, `wipe_cache`), zip type detection (Edify, script, Magisk/KSU module, A/B OTA), optional cache/ART wipe and auto-reboot afterwards |
+| **A/B ROMs & OTAs** | Flash **`payload.bin` zips** (LineageOS & co. on A/B phones, full factory OTAs) natively, no `update_engine` needed: REPLACE / bzip2 / xz / ZERO operations (bzip2 decoder built in), every block checked against its **SHA-256**, dynamic partitions **re-laid out in super** like update_engine (on Virtual A/B phones the current slot is freed only if super is too small), the **dm-verity hash tree and FEC computed on the phone** exactly like Android does (modern OTAs leave them out), a hash check of every finished partition, then a **slot switch**. Installs go to the **inactive slot**, so a failed install leaves your current system untouched. **Extract images** too, e.g. `boot.img` / `init_boot.img` for Magisk, with verity filled in so they match the factory images. Incremental OTAs and foreign-device packages are refused with an explanation |
 | **ADB sideload** | Receive a package over `adb sideload` without copying it to storage first. Spawns `minadbd` when the ramdisk has it, or falls back to switching the USB function to `sideload` and watching the drop paths; then flashes with the same verified installer pipeline |
 | **Images** | Flash **raw and Android sparse** images that are also **`.xz`, `.gz`, `.zst`, `.lz4` or inside a `.zip`** - streamed, no temp files (xz decoder built in). Target picked from the image *content* (boot / init_boot / vendor_boot / vbmeta / dtbo / super / system), fit check, optional archive pre-check, **SHA-256 read-back verify**, logical partitions remapped read-write (the reason plain `dd` fails on `system_a`) |
 | **GSI wizard** | Pick a GSI in any format → checks it fits → **grows `system_a` inside super** (optionally frees the other slot or deletes `product_a`) → streams it → **disables AVB in vbmeta** → optional factory reset. Refuses while a Virtual A/B update is merging |
@@ -77,13 +79,13 @@ src/
   gfx/        software canvas (SDF anti-aliasing), fonts (stb_truetype), vector icons, PNG
   platform/   DRM/KMS + fbdev + simulator displays, evdev input, device info/power/battery
   sys/        partitions & fstab, installer (zip/update-binary), image streaming (sparse/xz/gz/zip),
-              super (LP metadata + device-mapper), vbmeta, boot images & root, path diagnostics,
-              OpenRecoveryScript + twrp CLI, sideload, backup engine
+              super (LP metadata + device-mapper), A/B OTA payloads, dm-verity hash tree + FEC, vbmeta,
+              boot images & root, path diagnostics, OpenRecoveryScript + twrp CLI, sideload, backup engine
   ui/         immediate-mode widget toolkit, app shell (navigation, dialogs, console, lock)
   ui/screens/ home, install, GSI wizard, super, vbmeta, find & flash, root, fs tools, wipe,
               backup/restore, mount, files, terminal, advanced, settings, reboot, ORS
   sim.cpp     fake device sandbox for desktop development
-tests/        host self-tests, installer tests (fake fastboot/adb/heimdall)
+tests/        host self-tests, installer tests (fake fastboot/adb/heimdall), A/B OTA tests (payload_test.py)
 device/       example twrp.fstab and device-tree snippet
 scripts/      build (7 architectures), test them on emulated CPUs, make a recovery image, install it
               (fastboot / Samsung), try on a device
@@ -234,7 +236,7 @@ In the window, the mouse acts as touch, ↑/↓ are Vol+/Vol−, Enter is Power,
 out/sim/twrpv2 --sim --headless --script tools/scripts/tour.txt --out shots/
 ```
 Script commands: `tap X Y`, `longpress X Y`, `swipe X1 Y1 X2 Y2 MS`, `wait MS`, `waittask`,
-`key back|home|volup|voldown|power`, `text ...`, `shot file.png`.
+`key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|files|root|advanced [path]`.
 
 **Self-tests:**
 ```bash
@@ -256,6 +258,7 @@ adb shell /system/bin/recovery twrp check /sdcard/Download/system.img
 OpenRecoveryScript files): `install`, `flash <image> <partition>`, `gsi`, `wipe`, `format data`, `backup`,
 `restore`, `mount`, `unmount`, `mkdir`, `cmd`, `sideload`, `lp list|resize|delete|free-other-slot`,
 `vbmeta disable|enable|status`, `root status|backup|modules-off`, `recovery <image>`, `check <path>`, `dd <image> <partition>`,
+`payload info|extract|install <ota.zip>` (A/B ROMs: `payload extract rom.zip boot init_boot` writes them to `TWRP/payload/`),
 `print`, `sleep`, `reboot [target]`. `twrp help` lists them.
 
 In the simulator: `out/sim/twrpv2 --sim twrp lp list`.
@@ -265,7 +268,9 @@ In the simulator: `out/sim/twrpv2 --sim twrp lp list`.
 ## Known limitations (honest list)
 - **No decryption** of FBE/FDE `/data`. When data is encrypted, TWRP v2 detects it and keeps backups and
   settings off `/data`; **Format Data** still works.
-- **No MTP or `payload.bin` OTA flashing** yet. Use **ADB sideload** or flash zips from storage.
+- **No MTP** yet. Use **ADB sideload** or `adb push` to copy files.
+- **A/B OTAs: full packages only.** Incremental OTAs patch one exact old build (bsdiff / puffdiff) and are refused;
+  use the full OTA or ROM zip. Payload signatures aren't checked (the per-block SHA-256 hashes are).
 - **Super metadata editing has only been tested on images, not on a phone.** Retrofit dynamic partitions (super
   split across `system_a`/`system_b`) are read-only on purpose; use fastbootd there.
 - `.zst` and `.lz4` images need the `zstd` / `lz4` tools in the ramdisk (`.xz`, `.gz` and `.zip` are built in).

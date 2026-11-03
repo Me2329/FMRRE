@@ -26,6 +26,7 @@
 #include "platform/input.h"
 #include "sim.h"
 #include "sys/ors.h"
+#include "sys/pathcheck.h"
 #include "sys/partitions.h"
 #include "ui/app.h"
 #include "ui/screens/screens.h"
@@ -111,6 +112,23 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
                                        app.frameMsTotal / app.frameCount);
             app.frameCount = 0;
             app.frameMsTotal = 0;
+        } else if (cmd == "open") {
+            // open <screen> [path]: push a screen directly (screenshots and UI tests)
+            std::string name, arg;
+            ss >> name;
+            std::getline(ss, arg);
+            arg = pathcheck::resolve(util::trim(arg));
+            std::unique_ptr<Screen> sc;
+            if (name == "payload") sc = makePayloadScreen(arg);
+            else if (name == "gsi") sc = makeGsiScreen(arg);
+            else if (name == "super") sc = makeSuperScreen();
+            else if (name == "flash") sc = makeFlashImageScreen(arg);
+            else if (name == "files") sc = makeFilesScreen(arg);
+            else if (name == "root") sc = makeRootScreen();
+            else if (name == "advanced") sc = makeAdvancedScreen();
+            if (sc) app.push(std::move(sc));
+            else fprintf(stderr, "open: unknown screen %s\n", name.c_str());
+            frames(450);
         } else if (cmd == "waittask") {
             while (Task::get().running()) frames(100);
             frames(400);

@@ -110,5 +110,25 @@ bool freeOtherSlot(Task& t);
 // Where automatic metadata backups go.
 std::string backupDir();
 
+// ---- whole-slot layout (A/B OTA install) ----------------------------------
+struct SlotGroup {
+    std::string name;     // without the slot suffix, e.g. "qti_dynamic_partitions"
+    uint64_t maxSize = 0;
+    std::vector<std::pair<std::string, uint64_t>> parts;  // names without suffix, new sizes
+};
+struct SlotFit {
+    bool fits = false;
+    bool needsFreeSource = false;  // only fits after removing the other slot's partitions
+    uint64_t needed = 0, available = 0;
+    std::string error;
+};
+// Like update_engine before a full OTA: every partition of these groups in slot `suffix` is
+// removed and re-created with the new size (and the groups get the payload's maximum sizes).
+SlotFit fitSlot(const std::vector<SlotGroup>& groups, const std::string& suffix);
+// freeSource: Virtual A/B devices only have room for one slot in super; if needed, empty the
+// other slot's partitions first (Android's own recovery does the same for full OTAs).
+// Nothing is written when the layout doesn't fit. The new partitions are mapped read-write.
+bool prepareSlot(const std::vector<SlotGroup>& groups, const std::string& suffix, bool freeSource, Task& t);
+
 }  // namespace lp
 }  // namespace tw

@@ -11,6 +11,7 @@
 #include "platform/device.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
+#include "sys/payload.h"
 #include "sys/partitions.h"
 
 namespace tw {
@@ -157,7 +158,9 @@ public:
         d.message = util::humanSize(e.size) + "  \xE2\x80\xA2  " + fmtDate(e.mtime);
         struct A { Icon i; std::string label; int code; };
         std::vector<A> acts;
-        if (util::endsWith(n, ".zip")) acts.push_back({Icon::Install, "Install zip", 1});
+        bool ota = util::endsWith(n, ".zip") && payload::isOtaZip(path);
+        if (util::endsWith(n, ".zip")) acts.push_back({Icon::Install, ota ? "Install A/B ROM / OTA" : "Install zip", 1});
+        if (ota || n == "payload.bin") acts.push_back({Icon::Download, "Extract images from payload", 13});
         if (img::isImageName(n)) acts.push_back({Icon::Bolt, "Flash image", 2});
         if (util::endsWith(n, ".zip") && !img::inspect(path).zipImages.empty()) acts.push_back({Icon::Bolt, "Flash .img inside zip", 2});
         if (img::isImageName(n) || util::endsWith(n, ".zip")) acts.push_back({Icon::Phone, "Flash as GSI (system)", 11});
@@ -177,6 +180,7 @@ public:
             App& a = *app_;
             switch (acts[idx].code) {
                 case 1: {
+                    if (payload::isOtaZip(path)) { a.push(makePayloadScreen(path)); break; }
                     installer::InstallOptions o;
                     a.runTask("Flashing " + util::basename(path), Icon::Install,
                               [path, o](Task& t) { return installer::installZip(path, o, t); });
@@ -186,6 +190,7 @@ public:
                 case 3: a.push(makeTextViewerScreen(path)); break;
                 case 11: a.push(makeGsiScreen(path)); break;
                 case 12: a.push(makeManualFlashScreen(path)); break;
+                case 13: a.push(makePayloadScreen(path)); break;
                 case 4:
                     a.runTask("SHA-256 of " + util::basename(path), Icon::Hash, [path](Task& t) {
                         t.setStatus("Hashing " + util::basename(path));
