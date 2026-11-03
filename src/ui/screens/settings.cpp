@@ -256,6 +256,7 @@ public:
             {"Display", std::to_string(c.width()) + " x " + std::to_string(c.height())},
             {"fstab", Partitions::get().fstabPath()},
             {"Build", std::string(device::buildAbi()) + "  \xE2\x80\xA2  CPU " + device::machine()},
+            {"SHA-256", Sha256::backend()},
         };
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Device");
         y += ui.dp(30);

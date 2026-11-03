@@ -97,6 +97,21 @@ void App::runTask(const std::string& title, Icon icon, Task::Fn fn) {
         toast("Another operation is still running", Icon::Warning, ui.th.warn);
         return;
     }
+    // A flash cut short by a dead battery can leave the phone unbootable: ask first below 10%.
+    device::Battery b = device::battery();
+    if (!lowBatteryOk_ && b.percent >= 0 && b.percent < 10 && !b.charging) {
+        confirm("Battery is low",
+                "Battery at " + std::to_string(b.percent) + "% and not charging. If the phone dies while flashing, it may not boot any "
+                "more - plug in the charger first.",
+                "Swipe to continue anyway",
+                [this, title, icon, fn] {
+                    lowBatteryOk_ = true;
+                    runTask(title, icon, fn);
+                    lowBatteryOk_ = false;
+                },
+                true, Icon::Battery);
+        return;
+    }
     Task::get().start(title, std::move(fn));
     push(makeOperationScreen(icon));
 }

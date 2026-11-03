@@ -31,6 +31,7 @@ struct Report {
     std::string logSource;     // which file the previous boot's log came from ("" = none)
     std::string log;           // that log (may be long)
     std::vector<std::string> otherLogs;  // more pstore files (panic dumps, ...)
+    std::string logcat;        // the previous boot's Android log (pstore pmsg), decoded; may be empty
     std::string slotInfo;      // "slot A: active, successful; slot B: unbootable"
     bool magiskModules = false;
     std::vector<Finding> findings;
@@ -40,6 +41,10 @@ Report analyze();
 // The pattern matcher on its own (self-tests feed it sample logs).
 std::vector<Finding> scan(const std::string& log, const std::string& bootReason);
 const char* fixLabel(Fix f);
+// Android writes its log to /dev/pmsg0 too; the kernel keeps it across a reboot as pstore's
+// pmsg-ramoops-N. Returns "E/AndroidRuntime: FATAL EXCEPTION ..." lines (warnings and worse,
+// plus everything from the crash buffer).
+std::string decodePmsg(const std::string& raw);
 // Copy the logs to <storage>/TWRP/logs/<date>/; returns the folder ("" on failure).
 std::string saveLogs(const Report& r);
 

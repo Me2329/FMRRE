@@ -13,6 +13,9 @@ public:
     std::string hexDigest();  // finalizes
     std::string digest();     // finalizes; raw 32 bytes
     static std::string toHex(const std::string& bin);
+    // Which implementation runs: ARMv8 SHA2 / Intel SHA extensions when the CPU has them, else portable C.
+    static const char* backend();
+    static void forceSoftware(bool on);  // self-tests compare both
 
     static std::string hexOfFile(const std::string& path, void (*progress)(uint64_t, uint64_t, void*) = nullptr,
                                  void* ctx = nullptr);

@@ -213,8 +213,39 @@ static void ensureOta(const std::string& root) {
 }
 
 // What the kernel kept from a bootlooping previous boot (pstore), for Advanced > Bootloop rescue.
+static void pmsgRecord(std::string& out, uint8_t id, uint8_t prio, const std::string& tag, const std::string& msg) {
+    std::string body;
+    body.push_back(char(prio));
+    body += tag;
+    body.push_back('\0');
+    body += msg;
+    body.push_back('\0');
+    uint16_t len = uint16_t(7 + 11 + body.size());
+    std::string h(18, '\0');
+    h[0] = 'l';
+    h[1] = char(len & 0xff);
+    h[2] = char(len >> 8);
+    h[3] = char(1000 & 0xff), h[4] = char(1000 >> 8);  // uid system
+    h[5] = char(1412 & 0xff), h[6] = char(1412 >> 8);  // pid
+    h[7] = char(id);
+    out += h + body;
+}
+
 static void ensurePstore(const std::string& root) {
     std::string f = root + "/sys/fs/pstore/console-ramoops-0";
+    std::string pm = root + "/sys/fs/pstore/pmsg-ramoops-0";
+    if (!util::exists(pm)) {
+        util::mkdirs(root + "/sys/fs/pstore");
+        std::string d;
+        pmsgRecord(d, 0, 4, "ActivityManager", "Start proc 1412:system_server");
+        pmsgRecord(d, 3, 5, "PackageManager", "Failed to parse /system/priv-app/Settings: no certificates");
+        pmsgRecord(d, 4, 6, "AndroidRuntime", "*** FATAL EXCEPTION IN SYSTEM PROCESS: main");
+        pmsgRecord(d, 4, 6, "AndroidRuntime",
+                   "java.lang.RuntimeException: Failed to boot service com.android.server.wm.ActivityTaskManagerService\n"
+                   "\tat com.android.server.SystemServiceManager.startService(SystemServiceManager.java:214)");
+        pmsgRecord(d, 2, 4, "events", "\x01\x02\x03");  // binary events buffer: skipped
+        util::writeFile(pm, d);
+    }
     if (util::exists(f)) return;
     util::mkdirs(root + "/sys/fs/pstore");
     util::writeFile(f,

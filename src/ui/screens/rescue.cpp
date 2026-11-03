@@ -96,7 +96,8 @@ public:
         // ---- logs
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Logs");
         y += ui.dp(30);
-        Rect gc(x, y, w, ui.dp(70) * 3 + ui.dp(8));
+        bool haveLogcat = !r_.logcat.empty();
+        Rect gc(x, y, w, ui.dp(70) * (3 + haveLogcat) + ui.dp(8));
         ui.card(gc);
         float gy = y + ui.dp(4);
         if (ui.listItem(ui.id("rs_view"), Rect(x + ui.dp(4), gy, w - ui.dp(8), ui.dp(66)), Icon::Eye, "Previous boot's kernel log",
@@ -104,6 +105,15 @@ public:
             if (!r_.logSource.empty()) app.push(makeTextViewerScreen(r_.logSource));
         }
         gy += ui.dp(70);
+        if (haveLogcat) {
+            if (ui.listItem(ui.id("rs_logcat"), Rect(x + ui.dp(4), gy, w - ui.dp(8), ui.dp(66)), Icon::Terminal, "Previous boot's Android log",
+                            "Warnings, errors and crashes (from pstore)", "", th.warn) & Clicked) {
+                std::string f = device::path("/tmp/logcat-previous-boot.txt");
+                util::writeFile(f, r_.logcat);
+                app.push(makeTextViewerScreen(f));
+            }
+            gy += ui.dp(70);
+        }
         if (ui.listItem(ui.id("rs_save"), Rect(x + ui.dp(4), gy, w - ui.dp(8), ui.dp(66)), Icon::Download, "Save logs for a bug report",
                         "Kernel logs, recovery.log and this diagnosis to TWRP/logs", "", th.ok) & Clicked) {
             std::string d = rescue::saveLogs(r_);

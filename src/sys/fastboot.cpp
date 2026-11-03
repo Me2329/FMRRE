@@ -302,7 +302,8 @@ public:
         monitor_ = std::thread([this] { monitor(); });
         device::setProp("sys.usb.ffs.ready", "1");
         device::setProp("sys.usb.config", "fastboot");  // init binds the gadget (recovery init.rc)
-        if (!waitProp("sys.usb.state", "fastboot", 1500) || util::readLine(std::string(kGadget) + "/UDC").empty()) bindManually();
+        std::string udc = util::readLine(std::string(kGadget) + "/UDC");
+        if (!waitProp("sys.usb.state", "fastboot", 1500) || udc.empty() || udc == "none") bindManually();
         LOGI("fastboot: USB gadget ready (UDC %s)", util::readLine(std::string(kGadget) + "/UDC").c_str());
         return true;
     }

@@ -1,6 +1,7 @@
 #include "sys/rescue.h"
 
 #include <algorithm>
+#include <cstring>
 #include <sys/mount.h>
 
 #include "core/log.h"
@@ -74,6 +75,10 @@ const Rule kRules[] = {
      "Common with leftover data from another ROM (Format Data), a GSI that doesn't suit this vendor, or a broken "
      "Magisk / Xposed module (disable modules).",
      Fix::FormatData},
+    {{{"fatal exception in system process"}}, 2, "system_server crashed (Java exception)",
+     "The core Android process threw the exception below - usually a ROM/GSI that doesn't fit this vendor, a broken Xposed / "
+     "Magisk module, or leftover data from another ROM.",
+     Fix::DisableModules},
     {{{"initfatalreboot"}, {"init_fatal_reboot_target"}, {"init: init encountered errors"}}, 1, "init hit a fatal error",
      "Android's first process stopped the boot. The line below names the cause; often the system image or its vendor "
      "doesn't fit.",
@@ -98,6 +103,37 @@ std::string firstLine(const std::string& log, const std::vector<std::vector<cons
         pos = nl + 1;
     }
     return "";
+}
+
+// android_pmsg_log_header_t: 'l', u16 len (whole record), u16 uid, u16 pid; then
+// android_log_header_t: u8 log id, u16 tid, u32 sec, u32 nsec; then the entry:
+// u8 priority, tag, NUL, message, NUL (text buffers; the events buffer is binary and skipped).
+std::string decodePmsgImpl(const std::string& raw) {
+    static const char kPrio[] = "??VDIWEF";
+    std::string out;
+    const uint8_t* d = (const uint8_t*)raw.data();
+    size_t n = raw.size();
+    for (size_t i = 0; i + 7 + 11 + 3 <= n;) {
+        uint16_t len = uint16_t(d[i + 1] | d[i + 2] << 8);
+        if (d[i] != 'l' || len < 7 + 11 + 3 || i + len > n) { i++; continue; }  // resync on the next record
+        const uint8_t* e = d + i + 7;
+        uint8_t id = e[0];
+        size_t body = len - 7 - 11;
+        const char* p = (const char*)e + 11;
+        i += len;
+        if (id == 2 || id > 7) continue;  // events (binary) / unknown
+        uint8_t prio = (uint8_t)p[0];
+        if (prio < 2 || prio > 7) continue;
+        std::string tag(p + 1, strnlen(p + 1, body - 1));
+        size_t mo = 1 + tag.size() + 1;
+        if (mo >= body) continue;
+        std::string msg(p + mo, strnlen(p + mo, body - mo));
+        if (prio < 5 && id != 4) continue;  // only W/E/F, but the whole crash buffer
+        while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) msg.pop_back();
+        for (auto& line : util::split(msg, '\n', false)) out += std::string(1, kPrio[prio]) + "/" + tag + ": " + line + "\n";
+        if (out.size() > (2u << 20)) break;
+    }
+    return out;
 }
 
 std::vector<std::string> pstoreFiles() {
@@ -127,11 +163,21 @@ std::string slotInfo() {
 
 }  // namespace
 
+std::string decodePmsg(const std::string& raw) { return decodePmsgImpl(raw); }
+
 std::vector<Finding> scan(const std::string& log, const std::string& bootReason) {
     std::vector<Finding> out;
     for (auto& r : kRules) {
         std::string ev = firstLine(log, r.any);
         if (ev.empty()) continue;
+        if (ev.find("FATAL EXCEPTION IN SYSTEM PROCESS") != std::string::npos) {  // add the exception itself
+            size_t at = log.find(ev);
+            size_t nl = at == std::string::npos ? std::string::npos : log.find('\n', at);
+            if (nl != std::string::npos) {
+                size_t end = log.find('\n', nl + 1);
+                ev += "\n" + util::trim(log.substr(nl + 1, end == std::string::npos ? std::string::npos : end - nl - 1)).substr(0, 300);
+            }
+        }
         out.push_back({r.severity, r.title, r.explanation, ev, r.fix});
     }
     std::string br = util::toLower(bootReason);
@@ -162,13 +208,14 @@ Report analyze() {
         r.logSource = "/proc/last_kmsg";
         util::readFile(r.logSource, r.log, 4 << 20);
     }
-    std::string extra;  // panic dumps (dmesg-ramoops-N) count too
-    for (auto& f : r.otherLogs)
-        if (util::basename(f).find("dmesg-ramoops") == 0) {
-            std::string d;
-            util::readFile(f, d, 1 << 20);
-            extra += d + "\n";
-        }
+    std::string extra;  // panic dumps (dmesg-ramoops-N) and the Android log (pmsg-ramoops-N) count too
+    for (auto& f : r.otherLogs) {
+        std::string b = util::basename(f), d;
+        if (b.find("dmesg-ramoops") == 0 && util::readFile(f, d, 1 << 20)) extra += d + "\n";
+        if (b.find("pmsg-ramoops") == 0 && util::readFile(f, d, 8 << 20)) r.logcat += decodePmsg(d);
+    }
+    // The exception line that follows "FATAL EXCEPTION IN SYSTEM PROCESS" is the interesting part.
+    extra += r.logcat;
     r.findings = scan(r.log + "\n" + extra, r.bootReason);
     r.slotInfo = slotInfo();
     for (auto& m : bootimg::modules()) r.magiskModules |= !m.disabled;
@@ -194,6 +241,7 @@ std::string saveLogs(const Report& r) {
     if (!r.logSource.empty()) files.push_back(r.logSource);
     for (auto& f : files) util::copyFile(f, dir + "/" + util::basename(f));
     util::copyFile(log::filePath(), dir + "/recovery.log");
+    if (!r.logcat.empty()) util::writeFile(dir + "/logcat-previous-boot.txt", r.logcat);
     std::string summary = "boot reason: " + r.bootReason + "\n" + r.slotInfo + "\n\n";
     for (auto& f : r.findings) summary += f.title + "\n  " + f.evidence + "\n\n";
     util::writeFile(dir + "/diagnosis.txt", summary);

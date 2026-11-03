@@ -215,6 +215,10 @@ const Entry kRo[] = {
      "Toate modulele Magisk / KernelSU sunt dezactivate (nu șterse). Le poți reactiva din aplicația Magisk."},
     {"Disabled {} module(s)", "Dezactivate {} module"}, {"Saved to {*}", "Salvat în {*}"}, {"Could not save the logs", "Jurnalele nu au putut fi salvate"},
     {"Booted slot {}", "Pornit de pe slotul {}"}, {"Not an A/B phone", "Telefonul nu este A/B"},
+    {"system_server crashed (Java exception)", "system_server s-a blocat (excepție Java)"},
+    {"The core Android process threw the exception below - usually a ROM/GSI that doesn't fit this vendor, a broken Xposed / Magisk module, or leftover data from another ROM.",
+     "Procesul principal Android a aruncat excepția de mai jos - de obicei un ROM/GSI nepotrivit pentru acest vendor, un modul Xposed / Magisk stricat sau date rămase de la alt ROM."},
+    {"Previous boot's Android log", "Jurnalul Android al pornirii anterioare"}, {"Warnings, errors and crashes (from pstore)", "Avertismente, erori și blocări (din pstore)"},
     // settings
     {"Appearance", "Aspect"}, {"Accent colour", "Culoare de accent"}, {"Background style", "Stilul fundalului"}, {"Animations", "Animații"},
     {"Transitions, ripples and motion", "Tranziții, unde și mișcare"}, {"Display", "Ecran"}, {"Screen timeout", "Stingerea ecranului"},
@@ -229,6 +233,71 @@ const Entry kRo[] = {
     {"PIN must be 4-12 digits", "PIN-ul trebuie să aibă 4-12 cifre"}, {"Make it yours", "Personalizează-l"},
     {"Midnight", "Miezul nopții"}, {"Light", "Luminos"}, {"Ocean", "Ocean"}, {"Sunset", "Apus"}, {"Rose", "Trandafir"}, {"Violet", "Violet"},
     {"Lime", "Lime"}, {"Amber", "Chihlimbar"}, {"Ice", "Gheață"}, {"Teal", "Turcoaz"},
+
+    // root
+    {"Install / remove", "Instalare / eliminare"}, {"Root installer (zip / APK)", "Instalator root (zip / APK)"},
+    {"Install root from zip or APK", "Instalează root din zip sau APK"}, {"Flash a patched image", "Instalează o imagine modificată"},
+    {"Patched image", "Imagine modificată"}, {"Stock backup", "Backup original"}, {"No stock backup yet", "Încă nu există un backup original"},
+    {"Flash a saved stock image back", "Reinstalează o imagine originală salvată"}, {"Modules ({})", "Module ({})"},
+    {"No modules installed", "Niciun modul instalat"}, {"Bootloop? Disable all modules", "Bootloop? Dezactivează toate modulele"},
+    {"Re-enable", "Reactivează"}, {"Disable", "Dezactivează"}, {"Swipe to unroot", "Glisează pentru a elimina root-ul"},
+    {"No root manager data in /data/adb", "Nicio aplicație root în /data/adb"}, {"Can't read /data/adb (encrypted)", "/data/adb nu poate fi citit (criptat)"},
+    {"Data is encrypted - root files can't be checked", "Data este criptată - fișierele root nu pot fi verificate"},
+
+    // super partitions
+    {"Groups", "Grupuri"}, {"Logical partitions  (tap for actions)", "Partiții logice  (atinge pentru acțiuni)"},
+    {"Create logical partition", "Creează o partiție logică"}, {"Delete partition", "Șterge partiția"}, {"Back up metadata", "Salvează metadatele"},
+    {"Restore metadata backup", "Restaurează metadatele salvate"}, {"Free the other slot?", "Eliberezi celălalt slot?"},
+    {"Swipe to free", "Glisează pentru eliberare"}, {"Swipe to shrink", "Glisează pentru micșorare"}, {"Map read-write", "Mapează pentru scriere"},
+    {"Resize to fit an image...", "Redimensionează pentru o imagine..."}, {"Custom size (MB)...", "Mărime personalizată (MB)..."},
+    {"Shrink to 0 (keep entry)", "Micșorează la 0 (păstrează intrarea)"}, {"No dynamic partitions", "Nicio partiție dinamică"},
+    {"Super is busy (OTA pending)", "Super este ocupat (OTA în curs)"}, {"Metadata backup", "Backup metadate"},
+    {"Undo resizes/deletes from a saved copy", "Anulează redimensionări/ștergeri dintr-o copie salvată"},
+    {"Save geometry + all metadata slots", "Salvează geometria și toate sloturile de metadate"},
+
+    // verified boot
+    {"Verified boot", "Pornire verificată"}, {"Disable verified boot?", "Dezactivezi pornirea verificată?"},
+    {"Verification enabled (stock)", "Verificare activă (original)"}, {"Disable verity & verification", "Dezactivează verity și verificarea"},
+    {"Flash a vbmeta.img", "Instalează un vbmeta.img"}, {"Select vbmeta image", "Alege imaginea vbmeta"},
+    {"Same as fastboot --disable-verity --disable-verification", "Ca fastboot --disable-verity --disable-verification"},
+
+    // file system tools
+    {"Check & repair", "Verifică și repară"}, {"Grow file system to fill partition", "Extinde sistemul de fișiere la toată partiția"},
+    {"Change file system...", "Schimbă sistemul de fișiere..."}, {"File system info", "Informații despre sistemul de fișiere"},
+    {"Check, repair, resize or change the file system", "Verifică, repară, redimensionează sau schimbă sistemul de fișiere"},
+    {"Reformat as ext4, f2fs, exFAT or FAT32 (erases it)", "Reformatează ca ext4, f2fs, exFAT sau FAT32 (o șterge)"},
+
+    // terminal, manual flash
+    {"Run now", "Rulează acum"}, {"Open in terminal", "Deschide în terminal"}, {"Save script", "Salvează scriptul"},
+    {"File path", "Calea fișierului"}, {"Type the path of your image", "Scrie calea imaginii"}, {"File found", "Fișier găsit"},
+    {"Show the dd command instead", "Arată comanda dd în schimb"}, {"Type its path - get a checked dd command", "Scrie calea - primești o comandă dd verificată"},
+    {"Command ready below - check it, then press the run button.", "Comanda e mai jos - verific-o, apoi apasă butonul de rulare."},
+
+    // TWRP v2 install
+    {"Install TWRP v2", "Instalează TWRP v2"}, {"Install TWRP v2?", "Instalezi TWRP v2?"}, {"Choose TWRP v2 image", "Alege imaginea TWRP v2"},
+    {"Make the recovery permanent", "Fă recovery-ul permanent"}, {"Stock backups (TWRP/stock)", "Backup-uri originale (TWRP/stock)"},
+    {"Swipe to flash with TWRP v2", "Glisează pentru a instala cu TWRP v2"}, {"From a computer", "De pe un calculator"},
+    {"Samsung - Download mode", "Samsung - mod Download"}, {"Installing TWRP v2", "Se instalează TWRP v2"},
+
+    // monitor, input test, scripts
+    {"Thermal zones", "Zone termice"}, {"Core frequencies", "Frecvențele nucleelor"}, {"Voltage / current", "Tensiune / curent"},
+    {"Health", "Stare"}, {"Input test", "Test de intrare"}, {"Press keys, draw on the screen", "Apasă taste, desenează pe ecran"},
+    {"Press any hardware key...", "Apasă orice tastă fizică..."}, {"Running these commands automatically", "Aceste comenzi rulează automat"},
+    {"Script cancelled", "Script anulat"},
+
+    // files
+    {"Flash .img inside zip", "Instalează .img din zip"}, {"Cut - open a folder and paste", "Tăiat - deschide un folder și lipește"},
+    {"Copied - open a folder and paste", "Copiat - deschide un folder și lipește"}, {"Permissions set to 755", "Permisiuni setate la 755"},
+    {"Permissions set to 644", "Permisiuni setate la 644"}, {"Pick any file", "Alege orice fișier"}, {"No matching files here", "Niciun fișier potrivit aici"},
+    {"{} other file(s) hidden by the type filter - tap to show all", "{} alte fișiere ascunse de filtru - atinge pentru a le vedea pe toate"},
+    {"Sorted by {*}", "Sortat după {*}"}, {"{} item(s) here", "{} elemente aici"}, {"{} selected", "{} selectate"},
+    {"{} partition(s)", "{} partiții"}, {"Estimated {*}", "Estimat {*}"}, {"Browse all files", "Toate fișierele"},
+    {"Couldn't create folder", "Folderul nu a putut fi creat"}, {"New name", "Nume nou"},
+
+    // battery guard
+    {"Battery is low", "Bateria este descărcată"}, {"Swipe to continue anyway", "Glisează ca să continui oricum"},
+    {"Battery at {} and not charging. If the phone dies while flashing, it may not boot any more - plug in the charger first.",
+     "Baterie la {} și nu se încarcă. Dacă telefonul se oprește în timpul instalării, s-ar putea să nu mai pornească - pune-l întâi la încărcat."},
 
     // files, dialogs, misc
     {"This folder is empty", "Folderul este gol"}, {"New folder", "Folder nou"}, {"Folder name", "Numele folderului"},

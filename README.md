@@ -38,7 +38,8 @@ It does not need Android, a framework or a GPU.
   is. The fonts include Latin-1, Latin Extended-A and ș/ț (`tools/subset_fonts.py` rebuilds them).
 - **Crisp at any density:** TrueType fonts (Inter plus DejaVu Sans Mono) and a vector icon set rasterised
   from signed-distance shapes. There are no bitmap themes to port per resolution.
-- **Swipe-to-confirm** on every destructive action, plus a **typed "yes"** to format data.
+- **Swipe-to-confirm** on every destructive action, plus a **typed "yes"** to format data. Below 10% battery (not
+  charging) every operation asks first: a flash cut short by a dead battery can leave a phone unbootable.
 - **Kinetic scrolling** with overscroll bounce, long-press, multi-select, an on-screen keyboard with key
   previews, toasts, bottom sheets and dialogs.
 - **Live status bar:** clock, CPU temperature and battery level/charging.
@@ -70,10 +71,15 @@ It does not need Android, a framework or a GPU.
 | **File systems** | Check & repair (e2fsck, fsck.f2fs, fsck.fat, fsck.exfat, ntfsfix), grow to fill the partition (resize2fs, resize.f2fs), change file system, info - long-press a partition in Mount |
 | **Files** | Full file manager: sort, hidden files, quick locations, **multi-select**, copy/move/paste, rename, chmod, delete, SHA-256, text and **hex viewer**, install/flash straight from a file, "flash as GSI", "dd command for this file". Pickers show **how many files the type filter hides** and have an **All files** switch |
 | **Terminal** | Root shell with on-screen keyboard, history, quick-command chips, Ctrl-C |
-| **Bootloop rescue** | Reads what the previous boot left behind (pstore `console-ramoops`, panic dumps, `last_kmsg`, the boot reason, A/B slot state) and explains it: verified boot rejecting a GSI, a system image that doesn't mount (wrong CPU type / not A/B), SELinux policy mismatch, encryption keys after a ROM switch, a zygote crash loop, Rescue Party, kernel panic or watchdog freeze, enabled Magisk modules. Each cause comes with **the matching one-tap fix** (disable modules, disable vbmeta verification, other slot, Format Data, reflash system, restore stock boot) and the log line it is based on; logs can be saved for a bug report. `twrp rescue` prints the same |
+| **Bootloop rescue** | Reads what the previous boot left behind (pstore `console-ramoops`, panic dumps, `last_kmsg`, **the previous boot's Android log** decoded from pstore `pmsg` - so the actual `FATAL EXCEPTION IN SYSTEM PROCESS` is shown -, the boot reason, A/B slot state) and explains it: verified boot rejecting a GSI, a system image that doesn't mount (wrong CPU type / not A/B), SELinux policy mismatch, encryption keys after a ROM switch, a zygote crash loop, Rescue Party, kernel panic or watchdog freeze, enabled Magisk modules. Each cause comes with **the matching one-tap fix** (disable modules, disable vbmeta verification, other slot, Format Data, reflash system, restore stock boot) and the log line it is based on; logs can be saved for a bug report. `twrp rescue` prints the same |
 | **Advanced** | **System monitor** (CPU graph, per-core frequency, RAM, battery details, every thermal zone), partition info, **input and touch tester**, copy log, fix contexts, restart ADB, A/B **slot switching** |
 | **Reboot** | System, Recovery, Bootloader, **Fastbootd** (TWRP v2's own when it is the installed recovery), **Download** (Samsung), **EDL** (Qualcomm), Power off |
 | **Devices** | DRM/KMS and fbdev (32 bpp in any channel order, RGB565), multitouch protocol A/B and single touch, touch calibration (swap/flip), A/B slots, **dynamic/logical partitions** (`/dev/block/mapper`), reads **TWRP or AOSP fstabs**, **7 CPU architectures**: arm64-v8a, armeabi-v7a, armeabi (ARMv5), x86, x86_64, riscv64, mips. The right build is picked automatically from your stock image |
+
+**Speed:** SHA-256 (read-back verification, OTA and dm-verity hashing, backup digests) runs on the CPU's crypto
+instructions when it has them - ARMv8 Cryptography Extensions on phones, Intel SHA extensions on x86 - about 5x
+faster than the portable code (1.25 GB/s vs 230 MB/s on one x86 core), which is used otherwise. The hash tree and the
+Reed-Solomon FEC are computed on all cores. Settings → About shows which SHA-256 implementation is in use.
 
 ---
 

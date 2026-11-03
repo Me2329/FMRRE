@@ -135,6 +135,7 @@ private:
     bool volDownHeld_ = false, powerHeld_ = false;
     std::vector<InputEvent> pending_;
     bool wasTaskRunning_ = false;
+    bool lowBatteryOk_ = false;  // the user swiped past the low battery warning for this task
 };
 
 }  // namespace tw

@@ -117,8 +117,29 @@ static bool runTask(const std::string& name, Task::Fn fn) {
 }
 
 static void testSha() {
+    printf("SHA-256 backend: %s\n", Sha256::backend());
     CHECK(Sha256::hexOf("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     CHECK(Sha256::hexOf("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(Sha256::hexOf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    // The hardware path (ARMv8 / Intel SHA) must agree with the portable one for every length and split.
+    std::string data(70000, '\0');
+    uint32_t x = 12345;
+    for (auto& ch : data) { x = x * 1103515245 + 12345; ch = char(x >> 16); }
+    for (size_t len : {0, 1, 55, 56, 63, 64, 65, 127, 128, 1000, 4096, 65536, 70000})
+        for (size_t split : {0, 1, 63, 64, 100}) {
+            auto run = [&](bool soft) {
+                Sha256::forceSoftware(soft);
+                Sha256 h;
+                size_t a = std::min(split, len);
+                h.update(data.data(), a);
+                h.update(data.data() + a, len - a);
+                return h.hexDigest();
+            };
+            std::string hw = run(false), sw = run(true);
+            CHECK(hw == sw);
+        }
+    Sha256::forceSoftware(false);
 }
 
 static void testInstaller(const std::string& dir) {
@@ -626,6 +647,20 @@ static void testRescue() {
     CHECK(has(v, rescue::Fix::FormatData));
     CHECK(rescue::scan("", "watchdog").size() == 1);
     CHECK(rescue::scan("[ 1.0] all good\n", "reboot,shell").empty());
+    // pstore pmsg: logcat records, events and noise in between are skipped
+    auto rec = [](uint8_t id, uint8_t prio, const std::string& tag, const std::string& msg) {
+        std::string body = std::string(1, char(prio)) + tag + '\0' + msg + '\0';
+        uint16_t len = uint16_t(18 + body.size());
+        std::string h = {'l', char(len & 0xff), char(len >> 8), 0, 0, 0, 0, char(id), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        return h + body;
+    };
+    std::string pm = std::string("\x00\xffjunk", 6) + rec(0, 4, "Zygote", "info is dropped") + rec(4, 6, "AndroidRuntime", "*** FATAL EXCEPTION IN SYSTEM PROCESS: main") +
+                     rec(4, 6, "AndroidRuntime", "java.lang.IllegalStateException: boom\n\tat Foo.bar(Foo.java:1)") + rec(2, 4, "ev", "\x01");
+    std::string lc = rescue::decodePmsg(pm);
+    CHECK(lc.find("info is dropped") == std::string::npos && lc.find("E/AndroidRuntime: *** FATAL EXCEPTION IN SYSTEM PROCESS") != std::string::npos);
+    CHECK(lc.find("E/AndroidRuntime: \tat Foo.bar") != std::string::npos);
+    auto f2 = rescue::scan(lc, "");
+    CHECK(!f2.empty() && f2[0].evidence.find("IllegalStateException: boom") != std::string::npos);
 }
 
 static void testI18n() {

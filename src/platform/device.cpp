@@ -167,6 +167,12 @@ Battery battery() {
         b.voltageMv = 4123;
         b.currentMa = 980;
         b.health = "Good";
+        if (const char* e = getenv("TW_SIM_BATTERY")) {  // e.g. 5: a nearly empty battery, not charging
+            b.percent = atoi(e);
+            b.charging = false;
+            b.status = "Discharging";
+            b.currentMa = -350;
+        }
         return b;
     }
     static std::string dir = psDir();
