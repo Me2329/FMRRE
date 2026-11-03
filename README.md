@@ -33,6 +33,9 @@ It does not need Android, a framework or a GPU.
   recovery uses no CPU when idle.
 - **4 background styles and 8 accent colours:** Midnight, AMOLED (pure black), Aurora (animated glow)
   and Light.
+- **Languages: English and Română** (Settings → Language, switches instantly). Translation happens in the font
+  layer, so every screen gets it; text that isn't in the dictionary (file names, logs, terminal output) stays as it
+  is. The fonts include Latin-1, Latin Extended-A and ș/ț (`tools/subset_fonts.py` rebuilds them).
 - **Crisp at any density:** TrueType fonts (Inter plus DejaVu Sans Mono) and a vector icon set rasterised
   from signed-distance shapes. There are no bitmap themes to port per resolution.
 - **Swipe-to-confirm** on every destructive action, plus a **typed "yes"** to format data.

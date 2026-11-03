@@ -11,6 +11,7 @@
 
 #include "core/log.h"
 #include "core/util.h"
+#include "core/i18n.h"
 #include "platform/device.h"
 
 namespace tw {
@@ -123,6 +124,7 @@ public:
     }
 
     void draw(Ui& ui, App&, Rect area) override {
+        i18n::NoTranslate raw;  // shell output and commands
         Theme& th = ui.th;
         float pad = ui.dp(12);
         if (kb_) {

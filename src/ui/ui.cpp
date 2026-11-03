@@ -1,5 +1,7 @@
 #include "ui/ui.h"
 
+#include "core/i18n.h"
+
 #include <cmath>
 #include <cstring>
 
@@ -584,8 +586,8 @@ void Ui::ring(float cx, float cy, float rad, float width, float frac, Color col,
 }
 
 void Ui::sectionHeader(const Rect& r, const std::string& s) {
-    std::string up;
-    for (char ch : s) up += (char)toupper((unsigned char)ch);
+    // Translate first, then upper-case (Romanian too: "Opțiuni" -> "OPȚIUNI").
+    std::string up = i18n::upper(i18n::tr(s));
     font::drawIn(*c, Face::Bold, dp(12), Rect(r.x + dp(6), r.y, r.w, r.h), up, th.accent);
 }
 

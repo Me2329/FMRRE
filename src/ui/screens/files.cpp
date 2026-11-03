@@ -8,6 +8,7 @@
 #include "core/log.h"
 #include "core/sha256.h"
 #include "core/util.h"
+#include "core/i18n.h"
 #include "platform/device.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
@@ -469,6 +470,7 @@ public:
     }
 
     void draw(Ui& ui, App&, Rect area) override {
+        i18n::NoTranslate raw;  // file contents
         Theme& th = ui.th;
         Rect box = area.inset(ui.dp(12), ui.dp(4));
         ui.card(box, ui.dp(18), th.light ? rgb(0xFFFFFF) : mix(th.bgBottom, rgb(0x000000), 0.3f), false);
@@ -512,7 +514,10 @@ public:
         Rect kb = area.cutBottom(ui.keyboardHeight());
         Rect f(area.x + pad, area.y + ui.dp(8), area.w - pad * 2, ui.dp(58));
         std::string shown = password_ ? std::string(text_.size(), '*') : text_;
-        ui.textField(ui.id("ti_field"), f, shown, hint_, true);
+        {
+            i18n::NoTranslate raw;
+            ui.textField(ui.id("ti_field"), f, shown, hint_, true);
+        }
         float bw = (area.w - pad * 2 - ui.dp(10)) / 2;
         bool done = false;
         if (ui.button(ui.id("ti_cancel"), Rect(area.x + pad, f.b() + ui.dp(16), bw, ui.dp(50)), "Cancel", Icon::Close, BtnStyle::Tonal))

@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "core/log.h"
+#include "core/i18n.h"
 #include "core/settings.h"
 #include "core/sha256.h"
 #include "core/util.h"
@@ -34,6 +35,7 @@ App::App(Display* d, EvdevInput* in, InputQueue* q) : display_(d), input_(in), q
 void App::applySettings() {
     Settings& s = Settings::get();
     ui.th = makeTheme(s.integer("accent", 0), s.integer("style", 0));
+    i18n::setLanguage(s.str("lang", "en"));
     ui.animations = s.flag("animations", device::animationsByDefault());
     ui.animSpeed = s.integer("anim_speed", 100) / 100.0f;
     topInset = ui.dp((float)s.integer("inset_top", device::isSim() ? 0 : 24));
@@ -602,6 +604,7 @@ void App::drawConsole() {
     }
     ui.beginScroll(sid, body);
     float y = body.y;
+    i18n::NoTranslate raw;  // log lines
     for (auto& l : lines) {
         Color col = rgb(0xCBD5E1);
         if (l.level == LogLevel::Error) col = th.danger;
@@ -627,8 +630,7 @@ void App::drawLock() {
     time_t tt = time(nullptr);
     struct tm tm;
     localtime_r(&tt, &tm);
-    char date[64];
-    strftime(date, sizeof(date), "%A, %d %B", &tm);
+    std::string date = i18n::longDate(tm.tm_wday, tm.tm_mday, tm.tm_mon);
     float y = topInset + ui.dp(70);
     font::drawIn(canvas, Face::Bold, ui.dp(64), Rect(0, y, (float)W, ui.dp(80)), util::timeString(Settings::get().flag("clock24", true)),
                  th.text, AlignCenter);

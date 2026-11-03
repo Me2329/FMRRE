@@ -5,12 +5,14 @@
 //   - backup -> wipe -> restore round trip (tar + gzip + sha256) in the simulator sandbox
 //   - bzip2 / xz decoding, Reed-Solomon, dm-verity hash tree + FEC, A/B OTA payload extraction
 #include <cstdio>
+#include <map>
 #include <cstring>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "core/bunzip2.h"
+#include "core/i18n.h"
 #include "core/log.h"
 #include "core/sha256.h"
 #include "core/task.h"
@@ -626,6 +628,38 @@ static void testRescue() {
     CHECK(rescue::scan("[ 1.0] all good\n", "reboot,shell").empty());
 }
 
+static void testI18n() {
+    i18n::setLanguage("en");
+    CHECK(i18n::tr("Back") == "Back");
+    i18n::setLanguage("ro");
+    CHECK(i18n::language() == "ro");
+    CHECK(i18n::tr("Back") == "\xC3\x8Enapoi");                                                    // Înapoi
+    CHECK(i18n::tr("Swipe to install to slot B") == "Gliseaz\xC4\x83 pentru a instala \xC3\xAEn slotul B");
+    CHECK(i18n::tr("slot details need bootctl") == "slot details need bootctl");                  // {} is one word only
+    CHECK(i18n::tr("Flashing My ROM v2.zip") == "Se instaleaz\xC4\x83 My ROM v2.zip");             // {*} is any text
+    CHECK(i18n::tr("3 zip(s) queued") == "3 zip-uri \xC3\xAEn coad\xC4\x83");
+    CHECK(i18n::tr("boot_a") == "boot_a" && i18n::tr("") == "");
+    {
+        i18n::NoTranslate raw;
+        CHECK(i18n::tr("Back") == "Back");
+    }
+    CHECK(i18n::longDate(2, 3, 10) == "Mar\xC8\x9Bi, 03 noiembrie");
+    CHECK(i18n::upper("Op\xC8\x9Biuni \xC8\x99i \xC4\x83\xC3\xA2\xC3\xAE abc") == "OP\xC8\x9AIUNI \xC8\x98I \xC4\x82\xC3\x82\xC3\x8E ABC");
+    CHECK(i18n::upper("\xE2\x80\xA2 \xC5\x82") == "\xE2\x80\xA2 \xC5\x81");  // bullet kept, l-stroke
+    // Every entry: a translation, the same placeholder, no conflicting duplicates.
+    std::map<std::string, std::string> seen;
+    for (auto& e : i18n::entries("ro")) {
+        CHECK(!e.second.empty());
+        for (const char* ph : {"{}", "{*}"})
+            CHECK((e.first.find(ph) == std::string::npos) == (e.second.find(ph) == std::string::npos));
+        auto it = seen.find(e.first);
+        CHECK(it == seen.end() || it->second == e.second);
+        seen[e.first] = e.second;
+    }
+    i18n::setLanguage("en");
+    CHECK(i18n::longDate(2, 3, 10) == "Tuesday, 03 November");
+}
+
 int main() {
     char tmpl[] = "/tmp/twrpv2-selftest-XXXXXX";
     std::string dir = mkdtemp(tmpl);
@@ -641,6 +675,7 @@ int main() {
     testDecoders(dir);
     testPayload(dir);
     testRescue();
+    testI18n();
     util::removeTree(dir);
     if (g_fail) {
         fprintf(stderr, "%d check(s) FAILED\n", g_fail);

@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "core/i18n.h"
 #include "core/settings.h"
 #include "core/sha256.h"
 #include "core/util.h"
@@ -38,6 +39,26 @@ public:
             yy += ui.dp(68);
             return r;
         };
+
+        // ---- Language
+        ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Language");
+        y += ui.dp(30);
+        {
+            Rect lc(x, y, w, ui.dp(64));
+            ui.card(lc);
+            float lx = lc.x + ui.dp(14);
+            std::string cur = s.str("lang", "en");
+            int li = 0;
+            for (auto& L : i18n::languages()) {
+                float cw = ui.chipWidth(L.name) + ui.dp(10);
+                if (ui.chip(ui.id("lang", li++), Rect(lx, lc.y + ui.dp(13), cw, ui.dp(38)), L.name, cur == L.code)) {
+                    s.set("lang", L.code);
+                    changed = true;
+                }
+                lx += cw + ui.dp(8);
+            }
+            y += lc.h + ui.dp(18);
+        }
 
         // ---- Appearance
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Appearance");
