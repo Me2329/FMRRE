@@ -272,8 +272,10 @@ change the phone and runs none. Flashing and wiping are refused while a Virtual 
 
 Tested against fake `adb` / `fastboot` / `heimdall` that answer like phones in each mode (`tests/pc_rescue_test.sh`),
 including the window driven under Xvfb, the LZ4 unpacker on compressed data, and a check that every message has a
-Romanian translation. **Not yet tested with a real phone**, and not yet on Windows or macOS (it only uses `subprocess`
-and tkinter, but that is untested there).
+Romanian translation. `tests/pc_rescue_unit.py` runs the basics (finding the phone, lock state, a repair, a refusal,
+Romanian, a Samsung AP with LZ4 and its MD5, the window) with fakes on **Windows, macOS and Linux** in CI. **Not yet
+tested with a real phone.** A firmware file whose MD5 doesn't match, or whose LZ4 data is damaged, is refused before
+anything is flashed.
 
 ### fstab
 FMRRE looks for `/etc/twrp.fstab`, `/etc/recovery.fstab`, `/system/etc/recovery.fstab` and finally

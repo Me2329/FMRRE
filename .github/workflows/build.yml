@@ -38,6 +38,21 @@ jobs:
           name: screenshots
           path: shots/
 
+  pc-tool:
+    name: PC rescue tool on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fake adb / fastboot / heimdall, the window
+        run: python tests/pc_rescue_unit.py
+
   android:
     name: ${{ matrix.arch }}
     runs-on: ubuntu-24.04
@@ -85,6 +100,7 @@ jobs:
           mkdir -p kit/scripts kit/tools kit/device
           cp scripts/install.sh scripts/install.ps1 scripts/make_recovery_img.sh scripts/try_on_device.sh scripts/build.sh kit/scripts/
           cp tools/odin_pack.py tools/elf_abi.py kit/tools/
+          cp -r pc kit/
           cp -r device/example kit/device/
           cp README.md LICENSE kit/
           find kit -type f | sort

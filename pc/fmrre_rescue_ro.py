@@ -297,6 +297,11 @@ RO = {
         "Din ce vede bootloader-ul, nimic nu este clar stricat. Dă o imagine FMRRE (--recovery) ca să se uite în interior, "
         "sau alege o reparație: switch-slot, disable-vbmeta, cancel-update, flash, wipe-data.",
     "not a vbmeta image (no AVB0 header)": "nu este o imagine vbmeta (lipsește antetul AVB0)",
+    "{} in {} is damaged ({}) - download the firmware again.": "{} din {} este deteriorat ({}) - descarcă din nou firmware-ul.",
+    "{} is damaged: its MD5 doesn't match - download the firmware again.": "{} este deteriorat: MD5-ul nu se potrivește - descarcă din nou firmware-ul.",
+    "checking the MD5 of {} ({} MB)...": "se verifică MD5-ul pentru {} ({} MB)...",
+    "Unexpected error - nothing more was done. Please report it with the details below:":
+        "Eroare neașteptată - nu s-a mai făcut nimic. Te rog raporteaz-o, cu detaliile de mai jos:",
     "{} is not a firmware tar: {}": "{} nu este un tar de firmware: {}",
     "{} doesn't look like a {w} image (header {}) - not flashing it": "{} nu pare o imagine {} (antet {}) - nu se instalează",
     "unpacking {} ({} MB)": "se despachetează {} ({} MB)",

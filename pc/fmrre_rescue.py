@@ -780,6 +780,31 @@ def lz4_decode(fin, fout):
             fin.read(4)
 
 
+def check_tar_md5(path, log):
+    """A Samsung .tar.md5 ends with '<md5>  <name>.tar' after the tar: check it like Odin does (False = damaged)."""
+    import hashlib
+    size = os.path.getsize(path)
+    tail = size % 512  # a tar is whole 512-byte blocks; the md5 line comes after them
+    if tail == 0:
+        return True  # a plain .tar: nothing to check
+    with open(path, "rb") as f:
+        f.seek(size - tail)
+        line = f.read().decode("ascii", "replace").strip()
+        want = line.split()[0].lower() if line else ""
+        if len(want) != 32:
+            return True
+        log("   checking the MD5 of %s (%d MB)..." % (os.path.basename(path), size >> 20))
+        h, left = hashlib.md5(), size - tail
+        f.seek(0)
+        while left:
+            b = f.read(min(left, 4 << 20))
+            if not b:
+                break
+            h.update(b)
+            left -= len(b)
+    return h.hexdigest() == want
+
+
 def ap_images(ap, parts, workdir, log):
     """Unpack <part>.img(.lz4) for each wanted partition from a Samsung AP .tar / .tar.md5 into workdir."""
     out = []
@@ -798,11 +823,14 @@ def ap_images(ap, parts, workdir, log):
             dst = os.path.join(workdir, stem)
             log("   unpacking %s (%d MB)" % (base, mem.size >> 20))
             src = t.extractfile(mem)
-            with open(dst, "wb") as fo:
-                if base.endswith(".lz4"):
-                    lz4_decode(src, fo)
-                else:
-                    shutil.copyfileobj(src, fo, 1 << 20)
+            try:
+                with open(dst, "wb") as fo:
+                    if base.endswith(".lz4"):
+                        lz4_decode(src, fo)
+                    else:
+                        shutil.copyfileobj(src, fo, 1 << 20)
+            except (ValueError, IndexError, struct.error, tarfile.TarError) as e:
+                raise Refused("%s in %s is damaged (%s) - download the firmware again." % (base, os.path.basename(ap), e))
             out.append((stem[:-4], dst))
     order = {p: i for i, p in enumerate(parts)}
     return sorted(out, key=lambda x: order.get(x[0], 99))
@@ -1072,6 +1100,10 @@ class Rescue:
     def samsung_stock(self, ap):
         self.need_mode("download")
         self.need_unlocked("flashing")
+        if not os.path.isfile(ap):
+            raise Refused("No such file: " + ap)
+        if not check_tar_md5(ap, self.log):
+            raise Refused("%s is damaged: its MD5 doesn't match - download the firmware again." % os.path.basename(ap))
         imgs = ap_images(ap, self.o.parts, self.workdir(), self.log)
         if not imgs:
             raise Refused("%s has none of: %s" % (os.path.basename(ap), ", ".join(self.o.parts)))
@@ -1345,6 +1377,11 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("\n" + T("cancelled"))
         return 130
+    except Exception:  # a bug: say so plainly, keep the details for the report
+        import traceback
+        print(color("xx  ", "bad") + T("Unexpected error - nothing more was done. Please report it with the details below:"))
+        traceback.print_exc(file=sys.stdout)
+        return 4
     print(color(T("==> done" if ok else "==> not done"), "ok" if ok else "warn"))
     return 0 if ok else 1
 
