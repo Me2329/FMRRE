@@ -26,6 +26,7 @@
 #include "sys/rescue.h"
 #include "sys/sideload.h"
 #include "sys/super.h"
+#include "sys/tar.h"
 #include "sys/zipsig.h"
 
 namespace tw::ors {
@@ -320,6 +321,7 @@ std::string help() {
            "  root status|backup|modules-off   modules-off fixes module bootloops\n"
            "  verify-zip <zip>          whose signature is on it (the installed system's key, another ROM's...)\n"
            "  unpack <image> <file>     decompress an image (.xz .gz .lz4 .zst, or the .img inside a .zip) to a file\n"
+           "  tar c <dir> <file.tar> | tar x <file.tar> <dir> [--strip /data]   FMRRE's tar (SELinux labels kept)\n"
            "  check <path>              why can't I see this file?\n"
            "  dd <image> <partition>    print the equivalent dd command\n"
            "  print <text>, sleep <seconds>\n"
@@ -568,6 +570,48 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 else t.print("%s -> %s: %s (%s)%s", util::basename(in).c_str(), out.c_str(), util::humanSize(src->produced).c_str(),
                              img::compressionName(info.comp), info.sparse ? ", still an Android sparse image" : "");
             }
+        } else if (cmd == "tar") {  // tar c <dir> <out.tar> | tar x <in.tar> <dir> [--strip /data]: FMRRE's own tar
+            bool create = a.size() >= 3 && a[0] == "c", extract = a.size() >= 3 && a[0] == "x";
+            std::string from = create || extract ? pathcheck::resolve(a[1]) : "", to = create || extract ? pathcheck::resolve(a[2]) : "";
+            tar::Stats st;
+            std::string err;
+            if (create) {
+                int fd = ::open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+                ok = fd >= 0 && tar::create(from, {}, [fd](const void* d, size_t n) {
+                    for (size_t done = 0; done < n;) {
+                        ssize_t w = ::write(fd, (const char*)d + done, n - done);
+                        if (w <= 0) return false;
+                        done += size_t(w);
+                    }
+                    return true;
+                }, st, err, [&t]() { return t.cancelled(); });
+                if (fd >= 0) close(fd);
+                if (fd < 0) err = "can't write " + to;
+            } else if (extract) {
+                std::vector<std::string> strip;
+                for (size_t i = 3; i + 1 < a.size(); i++)
+                    if (a[i] == "--strip") strip.push_back(a[++i]);
+                tar::Extractor x(to, strip);
+                int fd = ::open(from.c_str(), O_RDONLY | O_CLOEXEC);
+                std::vector<char> buf(1 << 20);
+                ssize_t r = 0;
+                ok = fd >= 0;
+                while (ok && (r = ::read(fd, buf.data(), buf.size())) > 0) ok = x.feed(buf.data(), size_t(r));
+                ok = ok && r == 0 && x.finish();
+                if (fd >= 0) close(fd);
+                err = fd < 0 ? "can't read " + from : x.error();
+                st = x.stats();
+            } else {
+                t.print("usage: tar c <dir> <out.tar> | tar x <in.tar> <dir> [--strip /data]");
+                ok = false;
+            }
+            if (create || extract) {
+                t.print("tar: %llu files, %llu folders, %llu links, %llu other, %d SELinux labels, %d attributes failed, %d refused, %d skipped",
+                        (unsigned long long)st.files, (unsigned long long)st.dirs, (unsigned long long)st.links,
+                        (unsigned long long)st.other, st.labels, st.xattrFailed, st.refused, st.skipped);
+                for (auto& n : st.notes) t.print("  %s", n.c_str());
+                if (!ok) t.print("tar: %s", err.c_str());
+            }
         } else if (cmd == "verify-zip") {
             std::string p = pathcheck::resolve(rest);
             if (rest.empty() || !util::exists(p)) {
@@ -648,7 +692,7 @@ int cliMain(const std::vector<std::string>& args) {
     for (auto& a : args) line += (line.empty() ? "" : " ") + a;
     std::string pid = util::readLine(uiPidFile());
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
-    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "unpack" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
+    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "unpack" || args[0] == "tar" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
                     (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
                     (args[0] == "payload" && args.size() > 1 && (args[1] == "info" || args[1] == "verify")) || (args[0] == "rescue" && args.size() == 1) || args[0] == "history" ||
                     (args[0] == "autofix" && std::find(args.begin(), args.end(), "--dry-run") != args.end());

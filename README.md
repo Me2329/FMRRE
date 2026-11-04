@@ -74,8 +74,8 @@ It does not need Android, a framework or a GPU.
 | **Root** | Detects Magisk / KernelSU / APatch and whether the ramdisk is in `boot` or `init_boot`; installs from zip/APK or flashes a `magisk_patched` image to the right partition **after an automatic stock backup**; one-tap unroot; **module manager** (enable, disable, remove, "bootloop? disable all") |
 | **Automation** | **OpenRecoveryScript** (`/cache/recovery/openrecoveryscript`) with a cancellable countdown, AOSP `/cache/recovery/command` and the **bootloader message in `misc`** (read and cleared, no recovery boot loops), and a **`fmrre` command line tool** for `adb shell` (see below) |
 | **Wipe** | Factory reset (keeps internal storage), Advanced wipe checklist, **Format Data** (mkfs + metadata), ART/Dalvik wipe |
-| **Backup** | Streaming tar/raw backups with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), optional **password encryption** (AES-256-CTR + HMAC-SHA256, key from PBKDF2-HMAC-SHA256 with 200,000 iterations; the password is asked twice), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
-| **Restore** | Reads FMRRE and **classic TWRP** backups (from `FMRRE/BACKUPS` and TWRP's `TWRP/BACKUPS`), per-partition selection, **verify before restore** (refuses corrupt backups; works on encrypted backups without the password), a wrong password is caught **before anything is wiped**, tampering is caught by the HMAC, verify-only and delete |
+| **Backup** | Streaming tar/raw backups made by **FMRRE's own tar** - **SELinux labels** and the other extended attributes always go in (no tar needed in the ramdisk; without labels a restored /data or system often doesn't boot), readable by GNU tar too - with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), optional **password encryption** (AES-256-CTR + HMAC-SHA256, key from PBKDF2-HMAC-SHA256 with 200,000 iterations; the password is asked twice), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
+| **Restore** | Reads FMRRE and **classic TWRP** backups (from `FMRRE/BACKUPS` and TWRP's `TWRP/BACKUPS`; TWRP's absolute names like `/data/app/...` land in the partition) and puts the **labels back**; an archive can't write outside its partition (`..`, other partitions' names and paths through symlinks are refused), per-partition selection, **verify before restore** (refuses corrupt backups; works on encrypted backups without the password), a wrong password is caught **before anything is wiped**, tampering is caught by the HMAC, verify-only and delete |
 | **MTP** | Mount → **MTP**: the phone's internal storage (and microSD / USB OTG) appears in Windows Explorer, macOS (Android File Transfer, OpenMTP) and Linux file managers, to copy ROMs and backups both ways - browse, download, upload, new folders, rename, move, copy, delete. Added to the USB configuration next to adb, so `adb` keeps working. `fmrre mtp` serves it from the command line |
 | **Mount** | Toggle each partition with live usage bars, read-only system by default (dm-verity safe), unmount all, **USB OTG auto-detect** and rescan, **exFAT / NTFS** via kernel drivers (exfat, sdfat, ntfs3) or FUSE helpers |
 | **File systems** | Check & repair (e2fsck, fsck.f2fs, fsck.fat, fsck.exfat, ntfsfix), grow to fill the partition (resize2fs, resize.f2fs), change file system, info - long-press a partition in Mount |
@@ -346,7 +346,7 @@ recovery binary, so `adb shell fmrre ...` works as well. Commands (the same ones
 OpenRecoveryScript files): `install`, `flash <image> <partition>`, `gsi`, `wipe`, `format data`, `backup`,
 `restore`, `mount`, `unmount`, `mkdir`, `cmd`, `sideload`, `lp list|resize|delete|free-other-slot`,
 `vbmeta disable|enable|status`, `root status|backup|modules-off`, `recovery <image>`, `check <path>`, `dd <image> <partition>`,
-`verify-zip <zip>` (whose signature is on a ROM / OTA, like Android's recovery checks it), `unpack <image> <file>` (decompress an `.xz` / `.gz` / `.lz4` / `.zst` image, or the `.img` inside a zip, to a file),
+`verify-zip <zip>` (whose signature is on a ROM / OTA, like Android's recovery checks it), `unpack <image> <file>` (decompress an `.xz` / `.gz` / `.lz4` / `.zst` image, or the `.img` inside a zip, to a file), `tar c <dir> <file>` / `tar x <file> <dir> [--strip /data]` (FMRRE's tar, labels kept),
 `payload info|verify|extract|install <ota.zip>` (A/B ROMs: `payload extract rom.zip boot init_boot` writes them to `FMRRE/payload/`),
 `fastboot [--tcp PORT]` (fastbootd until the computer reboots the phone or sends `fastboot reboot recovery`),
 `lp export [--empty] <file>` (the partition table as a `super_empty.img`), `rescue [save]` (why the last boot failed), `history [N]`,
@@ -395,8 +395,6 @@ fastboot -s tcp:127.0.0.1:5554 getvar all
 - **ADB sideload over USB hasn't met a computer yet** (the protocol is tested with the real `adb` client over TCP). The
   package is stored before it is installed (as with TWRP), so it needs that much free space somewhere - internal
   storage, /cache or RAM.
-- SELinux labels are preserved only if the ramdisk's `tar` supports it (`--selinux` or `--xattrs`).
-  Otherwise use *Advanced → Fix storage contexts*.
 - Download and EDL reboot targets only work where the bootloader supports them.
 - **Auto repair and the PC rescue tool haven't met a broken phone yet.** Their logic is tested on the simulator and
   with fake adb / fastboot / heimdall. Every step is one the rest of FMRRE already does (wipe, flash, slot switch,

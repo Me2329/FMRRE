@@ -40,6 +40,7 @@
 #include "sys/rescue.h"
 #include "sys/payload.h"
 #include "sys/super.h"
+#include "sys/tar.h"
 #include "sys/verity.h"
 #include "sys/zipsig.h"
 #include "miniz.h"
@@ -47,6 +48,7 @@
 #include "zstd_fixtures.h"
 
 #include <fcntl.h>
+#include <sys/xattr.h>
 #include <vector>
 
 using namespace tw;
@@ -1533,6 +1535,78 @@ static void testZstd(const std::string& dir) {
     CHECK(!runTask("flash-zst-bad", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
 }
 
+// A ustar header written by hand (for archives FMRRE's own writer would never make).
+static std::string tarEntry(const std::string& name, char type, const std::string& data, const std::string& link = "") {
+    char h[512] = {0};
+    memcpy(h, name.data(), std::min<size_t>(name.size(), 100));
+    snprintf(h + 100, 8, "%07o", 0644);
+    snprintf(h + 108, 8, "%07o", 0);
+    snprintf(h + 116, 8, "%07o", 0);
+    snprintf(h + 124, 12, "%011o", unsigned(data.size()));
+    snprintf(h + 136, 12, "%011o", 1700000000u);
+    h[156] = type;
+    memcpy(h + 157, link.data(), std::min<size_t>(link.size(), 100));
+    memcpy(h + 257, "ustar", 6);
+    memcpy(h + 263, "00", 2);
+    memset(h + 148, ' ', 8);
+    unsigned sum = 0;
+    for (int i = 0; i < 512; i++) sum += (unsigned char)h[i];
+    snprintf(h + 148, 8, "%06o", sum);
+    std::string out(h, 512);
+    out += data + std::string((512 - data.size() % 512) % 512, '\0');
+    return out;
+}
+
+static void testTar(const std::string& dir) {
+    std::string src = dir + "/tarsrc", dst = dir + "/tardst";
+    util::mkdirs(src + "/a/b");
+    std::string payload = zNoise(2000, 3), longName = std::string(130, 'n');
+    CHECK(util::writeFile(src + "/a/b/file", payload) && util::writeFile(src + "/empty", "") && util::writeFile(src + "/a/" + longName, "long"));
+    CHECK(symlink("b/file", (src + "/a/lnk").c_str()) == 0 && link((src + "/a/b/file").c_str(), (src + "/hl").c_str()) == 0);
+    chmod((src + "/a/b").c_str(), 0750);
+    bool xattrs = lsetxattr((src + "/a/b/file").c_str(), "user.fmrre", "v1", 2, 0) == 0;
+    std::string arc, err;
+    tar::Stats st;
+    CHECK(tar::create(src, {}, [&](const void* d, size_t n) { arc.append((const char*)d, n); return true; }, st, err));
+    CHECK(arc.size() % 512 == 0 && st.files == 3 && st.links == 2 && st.dirs == 3);
+    util::mkdirs(dst);
+    tar::Extractor x(dst);
+    bool fed = true;
+    for (size_t i = 0; i < arc.size(); i += 777) fed = fed && x.feed(arc.data() + i, std::min<size_t>(777, arc.size() - i));  // odd pieces
+    CHECK(fed && x.finish());
+    std::string got, lnk(64, '\0');
+    CHECK(util::readFile(dst + "/a/b/file", got) && got == payload && util::readFile(dst + "/a/" + longName, got) && got == "long");
+    ssize_t ln = readlink((dst + "/a/lnk").c_str(), &lnk[0], lnk.size());
+    CHECK(ln == 6 && lnk.substr(0, 6) == "b/file");
+    struct stat s1, s2;
+    CHECK(stat((dst + "/hl").c_str(), &s1) == 0 && stat((dst + "/a/b/file").c_str(), &s2) == 0 && s1.st_ino == s2.st_ino);  // a hard link again
+    CHECK(stat((dst + "/a/b").c_str(), &s1) == 0 && (s1.st_mode & 07777) == 0750);
+    if (xattrs) {
+        char v[8] = {0};
+        CHECK(lgetxattr((dst + "/a/b/file").c_str(), "user.fmrre", v, sizeof v) == 2 && std::string(v, 2) == "v1");
+    }
+    // Nothing outside the folder: "..", absolute names, a path through a symlink; a TWRP-style name with its prefix.
+    std::string evil = tarEntry("../evil", '0', "x") + tarEntry("/etc/evil", '0', "x") + tarEntry("esc", '2', "", "/") +
+                       tarEntry("esc/evil", '0', "x") + tarEntry("/data/app/ok", '0', "twrp") + tarEntry("fine", '0', "fine") +
+                       std::string(1024, '\0');
+    std::string d2 = dir + "/tarevil";
+    util::mkdirs(d2);
+    tar::Extractor y(d2, {"/data"});
+    CHECK(y.feed(evil.data(), evil.size()) && y.finish() && y.stats().refused == 3);
+    CHECK(util::readFile(d2 + "/app/ok", got) && got == "twrp" && util::readFile(d2 + "/fine", got) && got == "fine");
+    CHECK(!util::exists(dir + "/evil") && !util::exists("/etc/evil"));
+    // Damage: a changed header byte, a cut-off archive.
+    std::string bad = arc;
+    bad[20] = char(bad[20] ^ 1);
+    tar::Extractor z(dir + "/tarbad");
+    CHECK(!z.feed(bad.data(), bad.size()) && z.error().find("checksum") != std::string::npos);
+    tar::Extractor c(dst);
+    CHECK(c.feed(arc.data(), 1500) && !c.finish());
+    util::removeTree(src);
+    util::removeTree(dst);
+    util::removeTree(d2);
+}
+
 int main() {
     char tmpl[] = "/tmp/fmrre-selftest-XXXXXX";
     std::string dir = mkdtemp(tmpl);
@@ -1551,6 +1625,7 @@ int main() {
     testDecoders(dir);
     testLz4(dir);
     testZstd(dir);
+    testTar(dir);
     testZipSig(dir);
     testPayload(dir);
     testRescue();

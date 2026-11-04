@@ -39,6 +39,8 @@ jobs:
         run: python3 tests/zstd_test.py out/sim/fmrre
       - name: adb sideload tests (the real adb client against FMRRE's own adb, over TCP)
         run: python3 tests/adb_sideload_test.py out/sim/fmrre
+      - name: tar tests (FMRRE's tar against GNU tar, both ways; archives that try to escape)
+        run: python3 tests/tar_test.py out/sim/fmrre
       - name: PC rescue tests (fake adb / fastboot / heimdall, the window under Xvfb)
         run: tests/pc_rescue_test.sh
       - uses: actions/upload-artifact@v4

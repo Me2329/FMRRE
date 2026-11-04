@@ -7,10 +7,12 @@
 #include "core/util.h"
 #include "platform/device.h"
 #include "sys/partitions.h"
+#include "sys/tar.h"
 #include "miniz.h"
 
 #include <algorithm>
 #include <cerrno>
+#include <functional>
 #include <csignal>
 #include <cstring>
 #include <memory>
@@ -133,48 +135,6 @@ private:
     std::vector<uint8_t> tmp_;
 };
 
-// Spawn a shell command with its stdout (read) or stdin (write) connected to us.
-static pid_t spawn(const std::string& cmd, int& fd, bool readFromChild) {
-    int p[2];
-    if (pipe2(p, O_CLOEXEC) != 0) return -1;
-    pid_t pid = fork();
-    if (pid == 0) {
-        if (readFromChild) {
-            dup2(p[1], 1);
-            int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) dup2(devnull, 2);
-        } else {
-            dup2(p[0], 0);
-        }
-        std::string sh = util::shellPath();
-        execl(sh.c_str(), "sh", "-c", cmd.c_str(), (char*)nullptr);
-        _exit(127);
-    }
-    if (readFromChild) { close(p[1]); fd = p[0]; }
-    else { close(p[0]); fd = p[1]; }
-    return pid;
-}
-
-// Preserve SELinux labels when the available tar can: toybox tar has --selinux,
-// GNU tar has --xattrs. Without labels a restored /data may not boot until
-// contexts are fixed (Advanced > Fix storage contexts / restorecon).
-static std::string tarLabelFlags() {
-    static std::string flags = [] {
-        std::string help;
-        util::runCapture("tar --help 2>&1", help);
-        if (help.find("--selinux") != std::string::npos) return std::string(" --selinux");
-        if (help.find("--xattrs") != std::string::npos) return std::string(" --xattrs --xattrs-include='*'");
-        return std::string();
-    }();
-    return flags;
-}
-
-static int waitChild(pid_t pid) {
-    int st = 0;
-    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
-    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-}
-
 static void speed(Task& t, uint64_t done, int64_t t0) {
     int64_t el = util::nowMs() - t0;
     if (el > 300) t.setDetail(util::humanSize(done * 1000 / el) + "/s");
@@ -225,33 +185,27 @@ static bool backupOne(Partition& p, const std::string& dir, const Options& o, Ta
     t.setStatus("Backing up " + p.displayName);
     t.print("Backing up %s (%s)...", p.displayName.c_str(), p.fsType.c_str());
     uint64_t est = estimateSize(p.mountPoint);
-    std::string excl = isDataLike(p) ? " --exclude=./media --exclude=./lost+found" : " --exclude=./lost+found";
-    std::string labels = tarLabelFlags();
-    if (labels.empty()) t.print("  note: this tar can't store SELinux labels");
-    std::string cmd = "cd " + util::shellQuote(p.contentPath()) + " && tar -cf -" + labels + excl + " .";
-    int fd = -1;
-    pid_t pid = spawn(cmd, fd, true);
-    if (pid < 0) return false;
-    if (!sink.open(dir + "/" + item.file, o.compress, o.password)) { close(fd); waitChild(pid); return false; }
+    std::vector<std::string> excl = isDataLike(p) ? std::vector<std::string>{"media", "lost+found"} : std::vector<std::string>{"lost+found"};
+    if (!sink.open(dir + "/" + item.file, o.compress, o.password)) return false;
+    // FMRRE's own tar: SELinux labels and the other extended attributes always go in.
     uint64_t done = 0;
-    bool ok = true;
-    while (!t.cancelled()) {
-        ssize_t n = read(fd, buf.data(), buf.size());
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) break;
-        if (!sink.write(buf.data(), n)) { ok = false; break; }
+    tar::Stats ts;
+    std::string terr;
+    bool ok = tar::create(p.contentPath(), excl, [&](const void* d, size_t n) {
+        if (!sink.write(d, n)) return false;
         done += n;
         if (est) t.setSubProgress(std::min(0.99f, float(done) / est));
         speed(t, done, t0);
-    }
-    close(fd);
-    if (t.cancelled()) kill(pid, SIGTERM);
-    int rc = waitChild(pid);
+        return true;
+    }, ts, terr, [&]() { return t.cancelled(); });
     ok = sink.close() && ok && !t.cancelled();
-    if (rc != 0) t.print("  tar exited with %d (some files may be missing)", rc);
+    if (!terr.empty() && !t.cancelled()) t.print("  %s", terr.c_str());
+    for (auto& n : ts.notes) t.print("  note: %s", n.c_str());
     item.size = sink.written();
     if (o.digest) item.sha256 = sink.digest();
-    t.print("  %s archived -> %s", util::humanSize(done).c_str(), util::humanSize(item.size).c_str());
+    t.print("  %llu files, %llu folders, %llu links, %d SELinux labels: %s -> %s", (unsigned long long)ts.files,
+            (unsigned long long)ts.dirs, (unsigned long long)ts.links, ts.labels, util::humanSize(done).c_str(),
+            util::humanSize(item.size).c_str());
     return ok;
 }
 
@@ -438,7 +392,10 @@ private:
 };
 
 // Read a backup file, decrypt and decompress if needed, and feed the raw bytes to `out`.
-static bool streamOut(const std::string& file, int out, Task& t, uint64_t& written, const std::string& password) {
+using PlainSink = std::function<bool(const unsigned char*, size_t)>;
+
+// The backup file's plaintext (decrypted, gunzipped) into `sink`.
+static bool streamOut(const std::string& file, const PlainSink& sink, Task& t, uint64_t& written, const std::string& password) {
     Reader in;
     std::string err;
     if (!in.open(file, password, err)) { t.print("  %s: %s", util::basename(file).c_str(), err.c_str()); return false; }
@@ -448,14 +405,8 @@ static bool streamOut(const std::string& file, int out, Task& t, uint64_t& writt
     bool ok = true;
     int64_t t0 = util::nowMs();
     auto writeAll = [&](const unsigned char* d, size_t n) {
-        while (n) {
-            ssize_t r = write(out, d, n);
-            if (r < 0 && errno == EINTR) continue;
-            if (r <= 0) return false;
-            d += r;
-            n -= r;
-            written += r;
-        }
+        if (!sink(d, n)) return false;
+        written += n;
         return true;
     };
     if (gz) {
@@ -500,6 +451,19 @@ static bool streamOut(const std::string& file, int out, Task& t, uint64_t& writt
     if (gz) mz_inflateEnd(&zs);
     if (ok && !t.cancelled() && !in.finish(err)) { t.print("  %s", err.c_str()); ok = false; }
     return ok && !t.cancelled();
+}
+
+static bool streamOut(const std::string& file, int out, Task& t, uint64_t& written, const std::string& password) {
+    return streamOut(file, [out](const unsigned char* d, size_t n) {
+        while (n) {
+            ssize_t r = write(out, d, n);
+            if (r < 0 && errno == EINTR) continue;
+            if (r <= 0) return false;
+            d += r;
+            n -= size_t(r);
+        }
+        return true;
+    }, t, written, password);
 }
 
 static bool verifyItem(const Set& s, const Item& i, Task& t) {
@@ -585,13 +549,15 @@ static bool restoreImpl(const Set& s, const std::vector<std::string>& parts, boo
         } else {
             if (!Partitions::get().wipe(*p, t)) t.print("  warning: wipe before restore was incomplete");
             if (!Partitions::get().mount(*p)) { t.print("  cannot mount %s", p->displayName.c_str()); return false; }
-            int fd = -1;
-            pid_t pid = spawn("cd " + util::shellQuote(p->contentPath()) + " && tar -xf -" + tarLabelFlags(), fd, false);
-            if (pid < 0) return false;
-            bool ok = streamOut(file, fd, t, written, password);
-            close(fd);
-            int rc = waitChild(pid);
-            if (!ok || rc != 0) { t.print("  FAILED (tar exit %d)", rc); return false; }
+            // FMRRE's own tar: labels go back; names of classic TWRP backups ("/data/app/...") land in the partition.
+            tar::Extractor x(p->contentPath(), {p->mountPoint, "/" + p->name});
+            bool ok = streamOut(file, [&x](const unsigned char* d, size_t n) { return x.feed(d, n); }, t, written, password);
+            ok = ok && x.finish();
+            const tar::Stats& xs = x.stats();
+            for (auto& n : xs.notes) t.print("  note: %s", n.c_str());
+            if (!ok) { t.print("  FAILED%s", x.error().empty() ? "" : (": " + x.error()).c_str()); return false; }
+            t.print("  %llu files, %llu folders, %d SELinux labels put back%s", (unsigned long long)xs.files, (unsigned long long)xs.dirs,
+                    xs.labels, xs.xattrFailed ? " - some attributes couldn't be set (Advanced > Fix storage contexts)" : "");
         }
         t.print("  %s restored", util::humanSize(written).c_str());
     }
