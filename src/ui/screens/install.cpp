@@ -147,19 +147,20 @@ public:
         Settings& s = Settings::get();
 
         if (mode_ == 3) {
-            Rect info(x, y, w, ui.dp(190));
+            const char* about = "Run adb sideload <file.zip> on your computer: the package comes over USB, is checked (CRC, signature) and "
+                                "flashed here, and adb shows the result. FMRRE speaks adb itself - no minadbd needed.";
+            float aboutH = font::wrap(Face::Regular, ui.dp(13.5f), about, w - ui.dp(94)).size() * font::lineHeight(Face::Regular, ui.dp(13.5f));
+            Rect info(x, y, w, std::max(ui.dp(190), ui.dp(48) + aboutH + ui.dp(64)));
             ui.card(info);
             icons::drawCentered(*ui.c, Icon::Usb, info.x + ui.dp(40), info.y + ui.dp(44), ui.dp(32), th.info);
             ui.label(Rect(info.x + ui.dp(74), info.y + ui.dp(20), info.w - ui.dp(90), ui.dp(26)), "ADB sideload", ui.dp(16), th.text,
                      Face::SemiBold);
             ui.textBlock(info.x + ui.dp(74), info.y + ui.dp(48), info.w - ui.dp(94),
-                         "Push a zip over USB without copying it to storage first. Run adb sideload <file.zip> on your computer "
-                         "and the package is received and flashed here.",
-                         ui.dp(13.5f), th.textDim);
+                         about, ui.dp(13.5f), th.textDim);
             Rect code(info.x + ui.dp(16), info.b() - ui.dp(44), info.w - ui.dp(32), ui.dp(32));
             ui.c->fillRoundRect(code, ui.dp(10), th.surface2);
             font::drawIn(*ui.c, Face::Mono, ui.dp(13), code.inset(ui.dp(12), ui.dp(8)), "adb sideload rom.zip", th.text);
-            y += ui.dp(206);
+            y += info.h + ui.dp(16);
             Rect optc(x, y, w, ui.dp(68) * 2 + ui.dp(8));
             ui.card(optc);
             bool verify = s.flag("zip_verify", true), reboot = s.flag("zip_reboot", false);
@@ -181,6 +182,7 @@ public:
                     if (pkg.empty()) return false;
                     t.setRange(0.7f, 0.3f);
                     bool ok = installer::installZip(pkg, o, t);
+                    sideload::finish(ok);
                     unlink(pkg.c_str());
                     if (ok && rb) {
                         t.print("Rebooting in 3 seconds...");

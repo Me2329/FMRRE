@@ -304,7 +304,7 @@ std::string help() {
            "  mount|unmount <mountpoint>\n"
            "  mkdir <path>\n"
            "  cmd <shell command>\n"
-           "  sideload\n"
+           "  sideload [--tcp PORT]     receive a zip with adb sideload, then install it (no minadbd needed)\n"
            "  lp resize <name> <MB> | lp delete <name> | lp list | lp export [--empty] <file>\n"
            "  fastboot [--tcp PORT]     fastbootd: flash from a computer (USB; TCP for emulators)\n"
            "  mtp [--tcp PORT]          the phone's storage on a computer (USB MTP; TCP in the simulator)\n"
@@ -436,10 +436,14 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             t.print("%s", rest.c_str());
         } else if (cmd == "sleep") {
             sleep((unsigned)std::max(0, atoi(rest.c_str())));
-        } else if (cmd == "sideload") {
-            std::string pkg = sideload::receive(t);
-            installer::InstallOptions o;
-            ok = !pkg.empty() && installer::installZip(pkg, o, t);
+        } else if (cmd == "sideload") {  // sideload [--tcp PORT]
+            int port = a.size() >= 2 && a[0] == "--tcp" ? atoi(a[1].c_str()) : 0;
+            std::string pkg = sideload::receive(t, port);
+            ok = !pkg.empty() && installer::installZip(pkg, installer::optionsFromSettings(), t);
+            if (!pkg.empty()) {
+                sideload::finish(ok);
+                unlink(pkg.c_str());
+            }
         } else if (cmd == "lp") {
             if (a.size() >= 3 && a[0] == "resize") ok = lp::resizePartition(a[1], uint64_t(atof(a[2].c_str()) * (1 << 20)), t);
             else if (a.size() >= 2 && a[0] == "delete") ok = lp::deletePartition(a[1], t);
