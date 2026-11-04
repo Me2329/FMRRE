@@ -16,7 +16,8 @@ class Task;
 // an earlier auto repair already made (and the phone still came back here) is skipped next time.
 namespace autofix {
 
-enum class Risk { Safe, Undoable, ErasesData };
+// Replaces: puts partitions back from a backup (what is there now is lost, /data is never touched).
+enum class Risk { Safe, Undoable, Replaces, ErasesData };
 const char* riskName(Risk r);
 
 struct Check {
@@ -34,6 +35,7 @@ struct Step {
     bool triedBefore = false;  // an earlier auto repair already did it and the phone still failed
     std::string file;          // backup to restore, when the step uses one
     std::string note;          // a warning to show with it ("This also removes FMRRE from boot.")
+    std::vector<std::string> parts;  // restore_backup: the partitions it puts back
 };
 
 struct Plan {
@@ -58,6 +60,7 @@ struct Options {
     std::set<std::string> only;  // ids to run; empty = every recommended step the permissions below allow
     bool allowSlotSwitch = false;
     bool allowFormatData = false;
+    bool allowRestore = false;   // restore_backup (replaces partitions)
     bool reboot = false;         // reboot to system afterwards (only when every step worked)
 };
 bool apply(const Plan& p, const Options& o, Task& t);

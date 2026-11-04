@@ -15,6 +15,7 @@
 #include "core/util.h"
 #include "platform/device.h"
 #include "sys/avb.h"
+#include "sys/backup.h"
 #include "sys/bootimg.h"
 #include "sys/history.h"
 #include "sys/imagesrc.h"
@@ -27,6 +28,7 @@ const char* riskName(Risk r) {
     switch (r) {
         case Risk::Safe: return "Safe";
         case Risk::Undoable: return "Can be undone";
+        case Risk::Replaces: return "Replaces partitions";
         default: return "Erases data";
     }
 }
@@ -276,6 +278,27 @@ Plan diagnose(bool userSaysBootFails) {
         add("repair_data_fs", "Check and repair the /data file system",
             "Android couldn't mount or unlock /data. A file system check fixes damage from a crash or a full disk without erasing anything.",
             Risk::Safe, true);
+    // A backup made with FMRRE (or TWRP): put the system partitions back as they were then. Data stays.
+    if (p.bootFailed) {
+        static const std::set<std::string> kSystem = {"boot", "init_boot", "vendor_boot", "dtbo", "vbmeta", "vbmeta_system", "system",
+                                                      "system_root", "vendor", "product", "odm", "system_ext", "vendor_dlkm", "super"};
+        for (auto& set : backup::list()) {
+            if (backup::encrypted(set)) continue;  // needs its password: the Restore screen asks for it
+            std::vector<std::string> sys;
+            for (auto& it : set.items)
+                if (kSystem.count(it.part)) sys.push_back(it.part);
+            if (sys.empty()) continue;
+            std::string names;
+            for (auto& n : sys) names += (names.empty() ? "" : ", ") + n;
+            add("restore_backup", "Restore the system from the backup " + set.name,
+                "Returns the system to how it was when the backup was made - for when the safe fixes didn't help. Apps and files "
+                "on /data are kept.",
+                Risk::Replaces, escalate, set.path);
+            p.steps.back().parts = sys;
+            p.steps.back().note = "Puts back: " + names;
+            break;  // the newest one
+        }
+    }
     if (data && (dataProblem || hasFinding(r, rescue::Fix::FormatData) || escalate))
         add("format_data", "Format Data (factory reset)",
             "Fixes encryption errors and leftovers from another ROM - the last resort. Erases apps, settings and internal storage: copy your "
@@ -318,6 +341,10 @@ bool apply(const Plan& p, const Options& o, Task& t) {
         if (!chosen) continue;
         if (s.id == "switch_slot" && o.only.empty() && !o.allowSlotSwitch) {
             t.print("Not switching slots (allow it with --allow-slot-switch): %s", s.title.c_str());
+            continue;
+        }
+        if (s.risk == Risk::Replaces && !o.allowRestore) {
+            t.print("Skipped - replaces partitions (allow it with --allow-restore): %s", s.title.c_str());
             continue;
         }
         if (s.risk == Risk::ErasesData && !o.allowFormatData) {
@@ -366,7 +393,15 @@ bool apply(const Plan& p, const Options& o, Task& t) {
         } else if (s.id == "restore_super") {
             ok = lp::restoreMetadataRegion(lp::superDevice(), s.file, err);
             if (!ok) t.print("  %s", err.c_str());
-        } else if (util::startsWith(s.id, "restore_")) {
+        } else if (s.id == "restore_backup") {
+            bool found = false;
+            for (auto& set : backup::list())
+                if (set.path == s.file) {
+                    found = true;
+                    ok = backup::restore(set, s.parts, true, t);
+                }
+            if (!found) t.print("  the backup isn't there any more");
+        } else if (util::startsWith(s.id, "restore_")) {  // restore_boot / restore_init_boot / restore_vendor_boot
             std::string dev = slotDev(s.id.substr(8), slot);
             if (!dev.empty() && Sha256::hexOfFile(dev) == Sha256::hexOfFile(s.file)) {
                 t.print("  already the original image");

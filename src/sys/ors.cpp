@@ -287,7 +287,7 @@ std::string help() {
            "  lp resize <name> <MB> | lp delete <name> | lp list | lp export [--empty] <file>\n"
            "  fastboot [--tcp PORT]     fastbootd: flash from a computer (USB; TCP for emulators)\n"
            "  rescue [save]             why did the last boot fail? (kernel log, boot reason, slots)\n"
-           "  autofix [--dry-run] [--bootloop] [--only=id,id] [--allow-slot-switch] [--allow-format-data] [--reboot]\n"
+           "  autofix [--dry-run] [--bootloop] [--only=id,id] [--allow-slot-switch] [--allow-restore] [--allow-format-data] [--reboot]\n"
            "                            find what stops the phone booting and fix it, safest fix first\n"
            "  history [N]               what was flashed / wiped / restored, newest first\n"
            "  payload info <ota.zip|payload.bin>\n"
@@ -301,7 +301,7 @@ std::string help() {
            "  reboot [recovery|bootloader|fastboot|edl|download|poweroff]\n";
 }
 
-// autofix [--dry-run|--prompt] [--bootloop] [--only=a,b] [--allow-slot-switch] [--allow-format-data] [--reboot]
+// autofix [--dry-run|--prompt] [--bootloop] [--only=a,b] [--allow-slot-switch] [--allow-restore] [--allow-format-data] [--reboot]
 static bool doAutofix(const std::vector<std::string>& a, Task& t) {
     bool dry = false, bootloop = false;
     autofix::Options o;
@@ -310,6 +310,7 @@ static bool doAutofix(const std::vector<std::string>& a, Task& t) {
         else if (v == "--bootloop") bootloop = true;
         else if (v == "--allow-slot-switch") o.allowSlotSwitch = true;
         else if (v == "--allow-format-data") o.allowFormatData = true;
+        else if (v == "--allow-restore") o.allowRestore = true;
         else if (v == "--reboot") o.reboot = true;
         else if (util::startsWith(v, "--only="))
             for (auto& id : util::split(v.substr(7), ',')) o.only.insert(id);

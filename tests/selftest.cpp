@@ -834,6 +834,15 @@ static void testAutofix(const std::string& dir) {
     rb = find(p, "restore_boot");
     CHECK(rb && rb->triedBefore && !rb->recommended);
     CHECK(p.earlierFixes >= 1);
+    // After the safe fixes: the system partitions from the newest unencrypted backup ("selftest": boot + data),
+    // only with permission, and never /data.
+    const autofix::Step* rbk = find(p, "restore_backup");
+    CHECK(rbk && rbk->recommended && rbk->risk == autofix::Risk::Replaces && rbk->parts == std::vector<std::string>{"boot"});
+    o.only = {"restore_backup"};
+    CHECK(!runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));  // not allowed
+    o.allowRestore = true;
+    CHECK(runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));
+    CHECK(history::recent(1)[0].detail.find("[restore_backup]") != std::string::npos);
     // Format Data only with explicit permission.
     o.only = {"format_data"};
     o.allowFormatData = false;

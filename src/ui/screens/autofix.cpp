@@ -37,7 +37,8 @@ public:
     void refresh() {
         plan_ = autofix::diagnose(userSays_);
         sel_.clear();
-        for (auto& s : plan_.steps) sel_.push_back(s.recommended && s.risk != autofix::Risk::ErasesData);
+        // Replacing partitions or erasing data is always the user's own choice.
+        for (auto& s : plan_.steps) sel_.push_back(s.recommended && s.risk != autofix::Risk::ErasesData && s.risk != autofix::Risk::Replaces);
     }
 
     void draw(Ui& ui, App& app, Rect area) override {
@@ -137,7 +138,10 @@ public:
                 sy += ui.dp(20);
             }
             sy += ui.dp(8);
-            Color rc = s.risk == autofix::Risk::Safe ? th.ok : s.risk == autofix::Risk::Undoable ? th.info : th.danger;
+            Color rc = s.risk == autofix::Risk::Safe       ? th.ok
+                       : s.risk == autofix::Risk::Undoable ? th.info
+                       : s.risk == autofix::Risk::Replaces ? th.warn
+                                                           : th.danger;
             float bx = x + ui.dp(54);
             ui.badge(bx, sy + ui.dp(10), autofix::riskName(s.risk), rc);
             bx += font::measure(Face::SemiBold, ui.dp(11.5f), autofix::riskName(s.risk)) + ui.dp(22);
@@ -225,6 +229,7 @@ private:
         if (o.only.empty()) return;
         o.allowSlotSwitch = true;  // chosen (or recommended for an unattended run) on this screen
         o.allowFormatData = !unattended && o.only.count("format_data");
+        o.allowRestore = !unattended && o.only.count("restore_backup");
         o.reboot = reboot_ || unattended;
         if (unattended) autofix::noteAutoRun();
         autofix::Plan p = plan_;
