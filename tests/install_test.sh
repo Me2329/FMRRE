@@ -15,8 +15,8 @@ expect_no_call() { grep -qE -- "$2" "$T/log" && fail "$1 (unexpected: $2)" || pa
 python3 - "$T" <<'EOF'
 import sys
 T = sys.argv[1]
-b = bytearray(1 << 20); b[0:8] = b"ANDROID!"; open(T + "/twrpv2-recovery.img", "wb").write(b)
-v = bytearray(b"VNDRBOOT") + bytearray(4096); open(T + "/twrpv2-vendor_boot.img", "wb").write(v)
+b = bytearray(1 << 20); b[0:8] = b"ANDROID!"; open(T + "/fmrre-recovery.img", "wb").write(b)
+v = bytearray(b"VNDRBOOT") + bytearray(4096); open(T + "/fmrre-vendor_boot.img", "wb").write(v)
 m = bytearray(4096); m[0:4] = b"AVB0"; open(T + "/vbmeta.img", "wb").write(m)
 open(T + "/junk.img", "wb").write(b"\0" * 4096)
 EOF
@@ -62,7 +62,7 @@ exit 0
 EOF
 chmod +x "$T/bin/"*
 export T PATH="$T/bin:$PATH"
-IMG="$T/twrpv2-recovery.img"
+IMG="$T/fmrre-recovery.img"
 scenario() { : > "$T/log"; rm -f "$T"/*_on; echo "--- $1"; }
 inst() { scripts/install.sh "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { cat "$T/rc"; }
@@ -85,10 +85,10 @@ expect_call "vbmeta with verification disabled" "fastboot --disable-verity --dis
 grep -q "no recovery partition" "$T/out" && pass "warns about boot" || fail "no warning about flashing boot"
 
 scenario "vendor_boot image: no test boot, permanent goes to vendor_boot"
-touch "$T/fastboot_on"; inst "$T/twrpv2-vendor_boot.img"
+touch "$T/fastboot_on"; inst "$T/fmrre-vendor_boot.img"
 [ "$(rc)" != 0 ] && pass "test boot refused" || fail "vendor_boot test boot was attempted"
-touch "$T/fastboot_on"; inst --permanent -y "$T/twrpv2-vendor_boot.img"
-expect_call "flashes vendor_boot" "fastboot flash vendor_boot $T/twrpv2-vendor_boot.img"
+touch "$T/fastboot_on"; inst --permanent -y "$T/fmrre-vendor_boot.img"
+expect_call "flashes vendor_boot" "fastboot flash vendor_boot $T/fmrre-vendor_boot.img"
 
 scenario "locked bootloader"
 touch "$T/fastboot_on"; FB_UNLOCKED=no inst --permanent -y "$IMG"
@@ -108,13 +108,13 @@ scenario "Samsung on adb -> Download mode -> Heimdall RECOVERY + VBMETA"
 touch "$T/adb_on"; ADB_MAN=samsung inst -y "$IMG"
 expect_call "reboots to download" "adb reboot download"
 expect_call "heimdall flash" "heimdall flash --RECOVERY $IMG --VBMETA out/samsung/vbmeta.img --no-reboot"
-python3 tools/odin_pack.py check out/samsung/twrpv2-recovery-odin.tar.md5 > "$T/chk" && pass "Odin package md5 valid" || fail "Odin package invalid"
+python3 tools/odin_pack.py check out/samsung/fmrre-recovery-odin.tar.md5 > "$T/chk" && pass "Odin package md5 valid" || fail "Odin package invalid"
 grep -q "recovery.img" "$T/chk" && grep -q "vbmeta.img" "$T/chk" && pass "package has recovery.img + vbmeta.img" || fail "package content"
 
 scenario "Samsung --odin-only without Heimdall"
 HEIMDALL=/nonexistent inst --odin-only --no-vbmeta "$IMG"
 [ "$(rc)" = 0 ] && pass "exit 0" || fail "exit $(rc)"
-python3 tools/odin_pack.py check out/samsung/twrpv2-recovery-odin.tar.md5 > "$T/chk" && ! grep -q vbmeta "$T/chk" && pass "recovery-only package" || fail "--no-vbmeta package"
+python3 tools/odin_pack.py check out/samsung/fmrre-recovery-odin.tar.md5 > "$T/chk" && ! grep -q vbmeta "$T/chk" && pass "recovery-only package" || fail "--no-vbmeta package"
 
 scenario "nothing connected"
 inst "$IMG"
@@ -129,7 +129,7 @@ case "$cmd" in
   unpack) cp -a "$FAKE_RAMDISK" rd; : > ramdisk.cpio ;;
   repack)
     { printf 'ANDROID!\n'
-      for f in system/bin/recovery system/bin/twrp; do
+      for f in system/bin/recovery system/bin/fmrre system/bin/twrp; do
         if [ -L "rd/$f" ]; then echo "$f -> $(readlink "rd/$f")"
         elif [ -f "rd/$f" ]; then echo "$f $(sha256sum < "rd/$f" | cut -c1-16)"; fi
       done; } > "$2" ;;
@@ -183,14 +183,15 @@ PYELF
 MK="$PWD/scripts/make_recovery_img.sh"
 mk() { (cd "$T" && FAKE_RAMDISK="$T/rd-$1" TW_OUT_DIR="$T/builds" "$MK" stock.img ${2:+"$2"}) > "$T/mk.log" 2>&1; }
 for arch in arm64 arm armv5 x86 x86_64 riscv64; do
-  rm -f "$T/twrpv2-stock.img"
+  rm -f "$T/fmrre-stock.img"
   mk "$arch"
   want="$(sha256sum < "$T/builds/$arch/recovery" | cut -c1-16)"
-  if grep -q "system/bin/recovery $want" "$T/twrpv2-stock.img" 2>/dev/null && grep -q "Architecture: $arch" "$T/mk.log"; then
+  if grep -q "system/bin/recovery $want" "$T/fmrre-stock.img" 2>/dev/null && grep -q "Architecture: $arch" "$T/mk.log"; then
     pass "stock $arch ramdisk -> out/$arch/recovery"
   else fail "stock $arch ramdisk"; sed 's/^/       /' "$T/mk.log"; fi
 done
-grep -q "system/bin/twrp -> /system/bin/recovery" "$T/twrpv2-stock.img" && pass "twrp CLI symlink added" || fail "twrp symlink"
+grep -q "system/bin/fmrre -> /system/bin/recovery" "$T/fmrre-stock.img" && pass "fmrre CLI symlink added" || fail "fmrre symlink"
+grep -q "system/bin/twrp -> /system/bin/recovery" "$T/fmrre-stock.img" && pass "twrp alias symlink added" || fail "twrp symlink"
 mk arm "$T/builds/arm64/recovery" && fail "arm64 binary accepted for an armeabi-v7a phone" || pass "wrong-CPU binary refused"
 grep -q "would never start" "$T/mk.log" && pass "explains the CPU mismatch" || fail "mismatch message"
 mk arm "$T/builds/armv5/recovery" && pass "armeabi binary allowed on an ARMv7 phone" || { fail "armeabi on ARMv7"; sed 's/^/       /' "$T/mk.log"; }

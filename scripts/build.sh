@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Build TWRP v2.
+# Build FMRRE.
 #   scripts/build.sh <arch> [<arch>...]   static recovery binary (Zig, no NDK needed) -> out/<arch>/recovery
 #   scripts/build.sh all                  every architecture in the table below
 #   scripts/build.sh list                 print the table
 #   scripts/build.sh ndk [abi]            with the Android NDK ($ANDROID_NDK)            -> out/ndk-<abi>/recovery
 #                                          abi: arm64-v8a (default), armeabi-v7a, x86, x86_64, riscv64
-#   scripts/build.sh sim                  desktop simulator (X11 window)                  -> out/sim/twrpv2
-#   TW_SELFTEST=1 scripts/build.sh <arch> also builds out/<arch>/twrpv2_selftest (run with qemu-user)
+#   scripts/build.sh sim                  desktop simulator (X11 window)                  -> out/sim/fmrre
+#   TW_SELFTEST=1 scripts/build.sh <arch> also builds out/<arch>/fmrre_selftest (run with qemu-user)
 #
 #   arch     Android ABI   zig target                CPU it needs (oldest supported)
 #   arm64    arm64-v8a     aarch64-linux-musl        ARMv8-A               - almost every phone since ~2015
@@ -60,8 +60,8 @@ zig_build() {  # $1 = canonical arch. Every step is checked: set -e doesn't appl
         > /dev/null || { echo "==> $a: configure FAILED" >&2; rm -rf "$dir"; return 1; }
   echo "$want" > "$dir/.zig-target"
   cmake --build "$dir" -j"$jobs" || { echo "==> $a: build FAILED" >&2; return 1; }
-  mkdir -p "out/$a" && cp "$dir/twrpv2" "out/$a/recovery" || return 1
-  if [ "${TW_SELFTEST:-0}" = 1 ]; then cp "$dir/twrpv2_selftest" "out/$a/twrpv2_selftest" || return 1; fi
+  mkdir -p "out/$a" && cp "$dir/fmrre" "out/$a/recovery" || return 1
+  if [ "${TW_SELFTEST:-0}" = 1 ]; then cp "$dir/fmrre_selftest" "out/$a/fmrre_selftest" || return 1; fi
   echo "${ABI[$a]}" > "out/$a/ABI"
   echo "==> out/$a/recovery"
   file "out/$a/recovery" 2>/dev/null || true
@@ -82,14 +82,14 @@ case "$1" in
           -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
           -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$api" -DTW_STATIC=ON -DTW_X11=OFF
     cmake --build "build-ndk-$abi" -j"$jobs"
-    mkdir -p "out/ndk-$abi" && cp "build-ndk-$abi/twrpv2" "out/ndk-$abi/recovery"
+    mkdir -p "out/ndk-$abi" && cp "build-ndk-$abi/fmrre" "out/ndk-$abi/recovery"
     echo "==> out/ndk-$abi/recovery"
     exit 0 ;;
   sim)
     cmake -S . -B build-host -DCMAKE_BUILD_TYPE=Release
     cmake --build build-host -j"$jobs"
-    mkdir -p out/sim && cp build-host/twrpv2 out/sim/twrpv2
-    echo "==> out/sim/twrpv2   (run: out/sim/twrpv2 --sim)"
+    mkdir -p out/sim && cp build-host/fmrre out/sim/fmrre
+    echo "==> out/sim/fmrre   (run: out/sim/fmrre --sim)"
     exit 0 ;;
 esac
 

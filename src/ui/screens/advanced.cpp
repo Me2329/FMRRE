@@ -27,7 +27,7 @@ public:
         std::vector<std::pair<const char*, std::vector<Item>>> groups = {
             {"Partitions & boot",
              {{Icon::Usb, "Fastboot mode (fastbootd)", "fastboot flash from a computer, super resized for you", th.info, 27},
-              {Icon::Download, "Install TWRP v2 permanently", "Keep it after fastboot boot - stock is saved first", th.accent, 26},
+              {Icon::Download, "Install FMRRE permanently", "Keep it after fastboot boot - stock is saved first", th.accent, 26},
               {Icon::Key, "Root", "Magisk / KernelSU / APatch, stock backup, modules", th.ok, 25},
               {Icon::Storage, "Super partitions", "Resize / delete dynamic partitions (system, product...)", th.accent, 20},
               {Icon::Phone, "GSI wizard", "Flash a Generic System Image the right way", th.ok, 21},

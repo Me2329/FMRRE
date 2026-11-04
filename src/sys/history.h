@@ -5,7 +5,7 @@
 
 namespace tw::history {
 
-// What was flashed, wiped or restored, and when: <storage>/TWRP/history.txt, one line per action.
+// What was flashed, wiped or restored, and when: <storage>/FMRRE/history.txt, one line per action.
 // Bootloop rescue shows the last entries ("it began after flashing X").
 struct Entry {
     int64_t time = 0;  // seconds since the epoch

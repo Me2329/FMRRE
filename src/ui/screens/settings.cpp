@@ -178,7 +178,7 @@ public:
                 app.push(makeTextInputScreen("New PIN", "4-12 digits", "", [](App& a, const std::string& pin) {
                     bool digits = pin.size() >= 4 && pin.size() <= 12 && pin.find_first_not_of("0123456789") == std::string::npos;
                     if (!digits) { a.toast("PIN must be 4-12 digits", Icon::Warning, a.ui.th.danger); return; }
-                    Settings::get().set("pin_hash", Sha256::hexOf(pin + ":twrpv2"));
+                    Settings::get().set("pin_hash", Sha256::hexOf(pin + kPinSalt));
                     Settings::get().save();
                     a.toast("PIN set", Icon::Lock, a.ui.th.ok);
                 }, true));
@@ -205,7 +205,7 @@ public:
 
         Rect ab(x, y, w, ui.dp(72));
         ui.card(ab);
-        if (ui.listItem(ui.id("about"), ab.inset(ui.dp(4)), Icon::Info, "About TWRP v2", "Version, device & credits", "", th.accent) & Clicked)
+        if (ui.listItem(ui.id("about"), ab.inset(ui.dp(4)), Icon::Info, "About FMRRE", "Version, device & credits", "", th.accent) & Clicked)
             app.push(makeAboutScreen());
         y += ab.h + ui.dp(12);
         if (ui.button(ui.id("reset"), Rect(x, y, w, ui.dp(50)), "Reset appearance", Icon::Refresh, BtnStyle::Outline)) {
@@ -251,10 +251,10 @@ public:
         c.radialGlowRR(hero.cx(), hero.y, hero.w * 0.7f, withAlpha(th.accent, 0.25f), hero, ui.dp(24));
         Rect logo(hero.cx() - ui.dp(30), hero.y + ui.dp(20), ui.dp(60), ui.dp(60));
         c.fillRoundRect(logo, ui.dp(18), th.accent);
-        font::drawIn(c, Face::Bold, ui.dp(22), logo, "TW", th.onAccent, AlignCenter);
-        font::drawIn(c, Face::Bold, ui.dp(20), Rect(hero.x, hero.y + ui.dp(88), hero.w, ui.dp(26)), "TWRP v2  2.0.0", th.text, AlignCenter);
+        font::drawIn(c, Face::Bold, ui.dp(22), logo, "FM", th.onAccent, AlignCenter);
+        font::drawIn(c, Face::Bold, ui.dp(20), Rect(hero.x, hero.y + ui.dp(88), hero.w, ui.dp(26)), "FMRRE  2.0.0", th.text, AlignCenter);
         font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(hero.x, hero.y + ui.dp(116), hero.w, ui.dp(20)),
-                     std::string("Built ") + TW_BUILD_DATE + "  \xE2\x80\xA2  native C++ / DRM / evdev", th.textDim, AlignCenter);
+                     std::string("FMR Recovery Environment  \xE2\x80\xA2  built ") + TW_BUILD_DATE, th.textDim, AlignCenter);
         y += hero.h + ui.dp(18);
         const auto& i = device::info();
         std::vector<std::pair<std::string, std::string>> kv = {

@@ -11,7 +11,7 @@ class Task;
 // fastbootd built into the recovery: the userspace fastboot that `fastboot reboot fastboot`
 // (or Reboot > Fastbootd) lands in. It flashes logical partitions in super (the reason GSIs
 // must be flashed from fastbootd and not the bootloader), resizes/creates/deletes them, sets
-// the active slot, erases, fetches, and adds `fastboot oem twrp <command>` to drive TWRP v2.
+// the active slot, erases, fetches, and adds `fastboot oem fmrre <command>` (or `oem twrp`) to drive FMRRE.
 // Transports: USB through FunctionFS (like AOSP's fastbootd), and TCP (fastboot -s tcp:HOST),
 // which the simulator and emulators use.
 namespace fastboot {

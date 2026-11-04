@@ -1,4 +1,4 @@
-// "Install TWRP v2 permanently" - for when it was started with `fastboot boot` (or on a phone
+// "Install FMRRE permanently" - for when it was started with `fastboot boot` (or on a phone
 // whose bootloader can't do that), plus restoring the stock recovery saved on the way.
 #include "ui/screens/screens.h"
 
@@ -15,7 +15,7 @@ namespace {
 
 class InstallRecoveryScreen : public Screen {
 public:
-    std::string title() const override { return "Install TWRP v2"; }
+    std::string title() const override { return "Install FMRRE"; }
     std::string subtitle() const override { return "Make the recovery permanent"; }
     void onShow(App&) override { reload(); }
     void reload() {
@@ -29,12 +29,12 @@ public:
             bootimg::RootTarget t = bootimg::recoveryTarget(p);
             if (t.dev.empty()) { a.toast(t.why, Icon::Warning, a.ui.th.danger); return; }
             std::string msg = util::basename(p) + " goes into " + t.name + device::info().slot + ". The current " + t.name +
-                              " is saved to TWRP/stock first, so this can be undone.";
+                              " is saved to FMRRE/stock first, so this can be undone.";
             if (t.name == "boot") msg += "\n\nThis phone has no recovery partition: only continue if the image was built from THIS phone's boot.img.";
-            a.confirm("Install TWRP v2?", msg, "Swipe to install", [&a, p]() {
-                a.runTask("Installing TWRP v2", Icon::Download, [p](Task& tk) { return bootimg::installRecovery(p, tk); });
+            a.confirm("Install FMRRE?", msg, "Swipe to install", [&a, p]() {
+                a.runTask("Installing FMRRE", Icon::Download, [p](Task& tk) { return bootimg::installRecovery(p, tk); });
             }, t.name == "boot", Icon::Download);
-        }, "TWRP v2 image", [](App& a) { a.pop(); a.push(makeManualFlashScreen()); }));
+        }, "FMRRE image", [](App& a) { a.pop(); a.push(makeManualFlashScreen()); }));
     }
 
     void draw(Ui& ui, App& app, Rect area) override {
@@ -58,10 +58,10 @@ public:
         ui.textBlock(x + ui.dp(20), y + ui.dp(84), w - ui.dp(40), target_.why, ui.dp(12.5f), target_.name == "boot" ? th.warn : th.textDim);
         y += hero.h + ui.dp(14);
 
-        if (ui.button(ui.id("ri_pick"), Rect(x, y, w, ui.dp(54)), "Choose TWRP v2 image", Icon::Folder)) pickAndInstall(app);
+        if (ui.button(ui.id("ri_pick"), Rect(x, y, w, ui.dp(54)), "Choose FMRRE image", Icon::Folder)) pickAndInstall(app);
         y += ui.dp(66);
         ui.textBlock(x + ui.dp(4), y, w - ui.dp(8),
-                     "Copy the image you started TWRP v2 with to the phone first, e.g.  adb push twrpv2-recovery.img /sdcard/Download/ "
+                     "Copy the image you started FMRRE with to the phone first, e.g.  adb push fmrre-recovery.img /sdcard/Download/ "
                      "(or /tmp/ if storage is encrypted).",
                      ui.dp(12.5f), th.textFaint);
         y += ui.dp(52);
@@ -85,7 +85,7 @@ public:
         }
         y += ui.dp(8);
 
-        ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Stock backups (TWRP/stock)");
+        ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Stock backups (FMRRE/stock)");
         y += ui.dp(30);
         if (stock_.empty()) {
             ui.label(Rect(x, y, w, ui.dp(22)), "None yet - one is made automatically before installing.", ui.dp(13), th.textDim);
@@ -101,7 +101,7 @@ public:
                     continue;
                 bootimg::RootTarget t = bootimg::recoveryTarget(f);
                 app.confirm("Restore " + util::basename(f) + "?", "Flashes it back to " + t.name + device::info().slot +
-                            " (removes TWRP v2 from there).", "Swipe to restore", [&app, f, t]() {
+                            " (removes FMRRE from there).", "Swipe to restore", [&app, f, t]() {
                     app.runTask("Restoring stock " + t.name, Icon::Restore, [f, t](Task& tk) {
                         img::FlashOptions o;
                         o.verify = true;

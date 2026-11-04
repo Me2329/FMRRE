@@ -136,7 +136,7 @@ std::string payloadOutDir(const std::string& zip) {
     std::string b = util::basename(zip);
     for (auto ext : {".zip", ".bin"})
         if (util::endsWith(util::toLower(b), ext)) b = b.substr(0, b.size() - 4);
-    return Partitions::get().storagePath() + "/TWRP/payload/" + b;
+    return Partitions::get().appDir() + "/payload/" + b;
 }
 
 bool doPayload(const std::vector<std::string>& a, Task& t) {
@@ -271,11 +271,11 @@ bool takePending(Script& out) {
 }
 
 std::string help() {
-    return "Commands (OpenRecoveryScript + TWRP v2):\n"
+    return "Commands (OpenRecoveryScript + FMRRE):\n"
            "  install <zip>             flash a zip\n"
            "  flash <image> <partition> flash any image (.img .xz .gz .zst .zip, sparse)\n"
            "  gsi <image>               resize system, flash GSI, disable AVB\n"
-           "  recovery <image>          install TWRP v2 permanently (stock recovery/boot saved first)\n"
+           "  recovery <image>          install FMRRE permanently (stock recovery/boot saved first)\n"
            "  wipe <data|cache|dalvik|system|...>\n"
            "  format data\n"
            "  backup <SDCRBIVEP>[O][M] [name] [--password=PW]   O=compress M=no digest, PW: AES-256\n"
@@ -481,7 +481,7 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 t.print(i.ok ? "vbmeta%s flags=%u" : "vbmeta%s: unavailable", slot().c_str(), i.flags);
             }
         } else if (cmd == "recovery") {
-            if (rest.empty()) { t.print("usage: recovery <twrpv2-recovery.img>"); ok = false; }
+            if (rest.empty()) { t.print("usage: recovery <fmrre-recovery.img>"); ok = false; }
             else ok = bootimg::installRecovery(pathcheck::resolve(rest), t);
         } else if (cmd == "root") {
             if (rest == "modules-off") {
@@ -523,7 +523,7 @@ bool run(const std::vector<std::string>& lines, Task& t) {
         } else if (cmd == "fixcontexts") {
             ok = util::run("restorecon -RF " + util::shellQuote(Partitions::get().storagePath())) == 0;
         } else if (cmd == "decrypt") {
-            t.print("decrypt: not supported yet (no FBE/FDE decryption in TWRP v2)");
+            t.print("decrypt: not supported yet (no FBE/FDE decryption in FMRRE)");
             ok = false;
         } else if (cmd == "help") {
             for (auto& l : util::split(help(), '\n')) t.print("%s", l.c_str());
@@ -548,12 +548,12 @@ bool run(const std::vector<std::string>& lines, Task& t) {
 
 // ---- CLI --------------------------------------------------------------------
 
-std::string queueDir() { return device::path("/tmp/twrpv2/cli"); }
-std::string uiPidFile() { return device::path("/tmp/twrpv2/ui.pid"); }
+std::string queueDir() { return device::path("/tmp/fmrre/cli"); }
+std::string uiPidFile() { return device::path("/tmp/fmrre/ui.pid"); }
 
 int cliMain(const std::vector<std::string>& args) {
     if (args.empty() || args[0] == "help" || args[0] == "--help") {
-        printf("usage: twrp <command> [args]\n%s", help().c_str());
+        printf("usage: fmrre <command> [args]   ('twrp' works too)\n%s", help().c_str());
         return args.empty() ? 1 : 0;
     }
     std::string line;
@@ -582,7 +582,7 @@ int cliMain(const std::vector<std::string>& args) {
         return rc;
     }
     Task& t = Task::get();
-    t.start("twrp " + redact(line), [line](Task& tt) { return run({line}, tt); });
+    t.start("fmrre " + redact(line), [line](Task& tt) { return run({line}, tt); });
     size_t cursor = 0;
     auto flush = [&]() {
         for (auto& l : t.linesSince(cursor)) printf("%s\n", l.c_str());

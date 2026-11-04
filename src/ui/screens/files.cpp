@@ -253,7 +253,7 @@ public:
                              {"tmp", device::path("/tmp"), Icon::Folder}};
         if (auto* sd = Partitions::get().find("/external_sd"))
             if (sd->present) qs.push_back({"MicroSD", sd->contentPath(), Icon::Sd});
-        qs.push_back({"Backups", Partitions::get().storagePath() + "/TWRP", Icon::Backup});
+        qs.push_back({"Backups", Partitions::get().appDir(), Icon::Backup});
         float qx = pad;
         if (!filter_.empty()) {
             float w = ui.chipWidth("All files", Icon::Eye);

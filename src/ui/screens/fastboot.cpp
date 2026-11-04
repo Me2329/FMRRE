@@ -1,5 +1,5 @@
-// Fastboot mode: TWRP v2's own fastbootd. Started from Advanced, by `fastboot reboot fastboot` /
-// `adb reboot fastboot` (the bootloader message says --fastboot), or `twrp fastboot`.
+// Fastboot mode: FMRRE's own fastbootd. Started from Advanced, by `fastboot reboot fastboot` /
+// `adb reboot fastboot` (the bootloader message says --fastboot), or `fmrre fastboot`.
 #include "ui/screens/screens.h"
 
 #include <cmath>
@@ -19,7 +19,7 @@ public:
     explicit FastbootScreen(bool autostart) : autostart_(autostart) {}
     std::string title() const override { return "Fastboot mode"; }
     std::string subtitle() const override {
-        if (!mine()) return "fastbootd built into TWRP v2";
+        if (!mine()) return "fastbootd built into FMRRE";
         auto& s = fastboot::state();
         std::lock_guard<std::mutex> l(s.mu);
         return s.transport.empty() ? "Starting..." : s.transport;
@@ -112,7 +112,7 @@ public:
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "On the computer");
         y += ui.dp(30);
         const char* cmds[] = {"fastboot devices", "fastboot flash system system.img", "fastboot flash boot boot.img",
-                              "fastboot getvar all", "fastboot oem twrp vbmeta disable", "fastboot reboot recovery   (back here)"};
+                              "fastboot getvar all", "fastboot oem fmrre vbmeta disable", "fastboot reboot recovery   (back here)"};
         Rect cc(x, y, w, ui.dp(26) * 6 + ui.dp(16));
         ui.card(cc, -1, th.surface2, false);
         float ty = y + ui.dp(8);
@@ -123,8 +123,8 @@ public:
         y += cc.h + ui.dp(12);
         float h = ui.textBlock(x + ui.dp(4), y, w - ui.dp(8),
                                "Logical partitions (system, vendor, product...) are resized in super automatically, like Android's "
-                               "fastbootd: this is where GSIs flash with plain fastboot. `fastboot oem twrp <command>` runs any TWRP v2 "
-                               "command (twrp help).",
+                               "fastbootd: this is where GSIs flash with plain fastboot. `fastboot oem fmrre <command>` runs any FMRRE "
+                               "command (fmrre help).",
                                ui.dp(12), th.textFaint);
         y += h + ui.dp(12);
         if (!device::isSim() && !running) {

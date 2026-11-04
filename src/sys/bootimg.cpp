@@ -177,9 +177,9 @@ int disableAllModules() {
     return n;
 }
 
-std::string backupDir() { return Partitions::get().storagePath() + "/TWRP/root"; }
+std::string backupDir() { return Partitions::get().appDir() + "/root"; }
 
-std::string stockDir() { return Partitions::get().storagePath() + "/TWRP/stock"; }
+std::string stockDir() { return Partitions::get().appDir() + "/stock"; }
 
 std::vector<std::string> imagesIn(const std::string& dir) {
     std::vector<std::string> v;
@@ -231,7 +231,7 @@ RootTarget recoveryTarget(const std::string& image) {
     } else {
         std::string rec = slotDev("recovery");
         if (!rec.empty()) {
-            t = {"recovery", rec, read(rec), "This phone has a recovery partition - the normal, safe place for TWRP v2."};
+            t = {"recovery", rec, read(rec), "This phone has a recovery partition - the normal, safe place for FMRRE."};
         } else {
             t.name = "boot";
             t.dev = slotDev("boot");
@@ -279,14 +279,14 @@ static bool installRecoveryImpl(const std::string& image, Task& task) {
         task.print("Flashing failed. Your original %s is saved as %s", t.name.c_str(), saved.c_str());
         return false;
     }
-    task.print("TWRP v2 installed to %s%s. Undo: flash %s back to %s.", t.name.c_str(), device::info().slot.c_str(),
+    task.print("FMRRE installed to %s%s. Undo: flash %s back to %s.", t.name.c_str(), device::info().slot.c_str(),
                util::basename(saved).c_str(), t.name.c_str());
     return true;
 }
 
 bool installRecovery(const std::string& image, Task& task) {
     bool ok = installRecoveryImpl(image, task);
-    history::record("Install TWRP v2", util::basename(image), ok);
+    history::record("Install FMRRE", util::basename(image), ok);
     return ok;
 }
 

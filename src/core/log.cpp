@@ -57,7 +57,7 @@ void raw(LogLevel lvl, const std::string& text) {
             }
             if (g_console && lvl != LogLevel::Debug) fprintf(stderr, "[%s] %s\n", tag(lvl), line.c_str());
             if (g_kmsg >= 0 && lvl != LogLevel::Debug) {
-                std::string k = "<6>twrpv2: " + line + "\n";
+                std::string k = "<6>fmrre: " + line + "\n";
                 ssize_t r = ::write(g_kmsg, k.data(), k.size());
                 (void)r;
             }

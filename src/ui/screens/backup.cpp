@@ -172,7 +172,7 @@ public:
         ui.label(Rect(info.x + ui.dp(66), info.y + ui.dp(18), info.w - ui.dp(80), ui.dp(24)), date, ui.dp(16), th.text, Face::SemiBold);
         ui.label(Rect(info.x + ui.dp(66), info.y + ui.dp(46), info.w - ui.dp(80), ui.dp(20)),
                  util::humanSize(set_.size) + "  \xE2\x80\xA2  " + std::to_string(set_.items.size()) + " partition(s)" +
-                     (set_.hasManifest ? "  \xE2\x80\xA2  TWRP v2" : "  \xE2\x80\xA2  classic TWRP"),
+                     (set_.hasManifest ? "  \xE2\x80\xA2  FMRRE" : "  \xE2\x80\xA2  classic TWRP"),
                  ui.dp(13), th.textDim);
         y += info.h + ui.dp(18);
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Restore these");

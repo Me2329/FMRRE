@@ -126,7 +126,7 @@ void App::lockNow() {
 std::string App::screenshot() {
     std::string dir = Partitions::get().storagePath() + "/Pictures/Screenshots";
     if (!util::mkdirs(dir)) dir = device::path("/tmp");
-    std::string p = dir + "/twrpv2_" + util::dateStamp() + ".png";
+    std::string p = dir + "/fmrre_" + util::dateStamp() + ".png";
     if (savePng(canvas, p)) {
         toast("Screenshot saved", Icon::Camera);
         LOGI("Screenshot: %s", p.c_str());
@@ -654,7 +654,7 @@ void App::drawLock() {
     y += ui.dp(56);
     icons::drawCentered(canvas, Icon::Lock, W / 2.f, y, ui.dp(26), th.accent);
     y += ui.dp(26);
-    font::drawIn(canvas, Face::SemiBold, ui.dp(15), Rect(0, y, (float)W, ui.dp(24)), "Enter PIN to unlock TWRP v2", th.text, AlignCenter);
+    font::drawIn(canvas, Face::SemiBold, ui.dp(15), Rect(0, y, (float)W, ui.dp(24)), "Enter PIN to unlock FMRRE", th.text, AlignCenter);
     y += ui.dp(40);
     // dots
     float shake = 0;
@@ -690,7 +690,7 @@ void App::drawLock() {
         if (res & Clicked) {
             if (i == 9) { if (!pinEntry_.empty()) pinEntry_.pop_back(); }
             else if (i == 11) {
-                if (Sha256::hexOf(pinEntry_ + ":twrpv2") == Settings::get().str("pin_hash")) {
+                if (Sha256::hexOf(pinEntry_ + kPinSalt) == Settings::get().str("pin_hash")) {
                     locked_ = false;
                     toast("Unlocked", Icon::Lock);
                 } else {
@@ -717,13 +717,13 @@ void App::drawSplash() {
     canvas.shadow(logo, s * 0.28f, ui.dp(30), withAlpha(th.accent, 0.5f), ui.dp(6));
     canvas.fillRoundRect(logo, s * 0.28f, th.accent);
     canvas.radialGlowRR(logo.r(), logo.b(), s, withAlpha(th.accent2, 0.9f), logo, s * 0.28f);
-    font::drawIn(canvas, Face::Bold, s * 0.36f, logo.offset(0, -s * 0.06f), "TW", th.onAccent, AlignCenter);
-    font::drawIn(canvas, Face::SemiBold, s * 0.16f, Rect(logo.x, logo.y + s * 0.62f, logo.w, s * 0.2f), "v2", th.onAccent, AlignCenter);
+    font::drawIn(canvas, Face::Bold, s * 0.36f, logo.offset(0, -s * 0.06f), "FM", th.onAccent, AlignCenter);
+    font::drawIn(canvas, Face::SemiBold, s * 0.16f, Rect(logo.x, logo.y + s * 0.62f, logo.w, s * 0.2f), "RE", th.onAccent, AlignCenter);
     float sweep = 6.283f * easeInOutCubic(std::min(1.f, t * 1.4f));
     canvas.strokeArc(logo.cx(), logo.cy(), s * 0.78f, ui.dp(3), 0, sweep, withAlpha(th.accent, 0.8f));
-    font::drawIn(canvas, Face::Bold, ui.dp(26), Rect(0, logo.b() + ui.dp(40), (float)W, ui.dp(34)), "TWRP v2", th.text, AlignCenter);
+    font::drawIn(canvas, Face::Bold, ui.dp(26), Rect(0, logo.b() + ui.dp(40), (float)W, ui.dp(34)), "FMRRE", th.text, AlignCenter);
     font::drawIn(canvas, Face::Regular, ui.dp(14), Rect(0, logo.b() + ui.dp(76), (float)W, ui.dp(22)),
-                 std::string("Custom Recovery \xE2\x80\xA2 ") + kVersion, th.textDim, AlignCenter);
+                 std::string("FMR Recovery Environment \xE2\x80\xA2 ") + kVersion, th.textDim, AlignCenter);
     canvas.setAlpha(1);
     ui.keepAnimating();
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a flashable/bootable TWRP v2 image from your device's stock (or any
+# Build a flashable/bootable FMRRE image from your device's stock (or any
 # working) recovery image by swapping the recovery binary in its ramdisk.
 #
 #   scripts/make_recovery_img.sh <recovery.img|boot.img|vendor_boot.img> [recovery-binary|auto] [twrp.fstab]
@@ -13,7 +13,7 @@
 # Needs magiskboot on the PC: extract lib/x86_64/libmagiskboot.so from the
 # Magisk APK, rename it to magiskboot, chmod +x, and put it in PATH (or set MAGISKBOOT).
 #
-# Then test WITHOUT flashing first:   scripts/install.sh twrpv2-<image>.img   (fastboot boot)
+# Then test WITHOUT flashing first:   scripts/install.sh fmrre-<image>.img   (fastboot boot)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMG="$(realpath "${1:?usage: $0 <image> [binary|auto] [fstab]}")"
@@ -26,7 +26,7 @@ PY="${PYTHON:-python3}"
 OUTDIR="${TW_OUT_DIR:-$ROOT/out}"   # where scripts/build.sh puts out/<arch>/recovery
 command -v "$MB" >/dev/null || { echo "magiskboot not found (set MAGISKBOOT=/path/to/magiskboot)" >&2; exit 1; }
 
-OUT="$PWD/twrpv2-$(basename "$IMG")"
+OUT="$PWD/fmrre-$(basename "$IMG")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
@@ -63,7 +63,7 @@ if [ "$BIN_ARG" = auto ]; then
   fi
   BIN="$OUTDIR/$STOCK_ARCH/recovery"
   if [ ! -f "$BIN" ]; then
-    echo "Building TWRP v2 for $STOCK_ARCH first"
+    echo "Building FMRRE for $STOCK_ARCH first"
     (cd "$ROOT" && scripts/build.sh "$STOCK_ARCH")
   fi
 else
@@ -96,8 +96,11 @@ else
   TARGET=system/bin/recovery
 fi
 "$MB" cpio "$CPIO" "add 0755 $TARGET $BIN"
-# `twrp` command line tool (adb shell twrp ...): the same binary, selected by its name.
-"$MB" cpio "$CPIO" "ln /$TARGET $(dirname "$TARGET")/twrp" 2>/dev/null || echo "  (could not add the twrp symlink - use: recovery twrp ...)"
+# `fmrre` command line tool (adb shell fmrre ...): the same binary, selected by its name. `twrp` too, for classic
+# TWRP scripts.
+for n in fmrre twrp; do
+  "$MB" cpio "$CPIO" "ln /$TARGET $(dirname "$TARGET")/$n" 2>/dev/null || echo "  (could not add the $n symlink - use: recovery fmrre ...)"
+done
 if [ -n "$FSTAB" ]; then
   "$MB" cpio "$CPIO" "mkdir 0755 system/etc" 2>/dev/null || true
   "$MB" cpio "$CPIO" "add 0644 system/etc/twrp.fstab $FSTAB"

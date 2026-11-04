@@ -1,10 +1,10 @@
 <#
-  Put TWRP v2 on a phone from Windows (PowerShell 5.1 or 7).
+  Put FMRRE on a phone from Windows (PowerShell 5.1 or 7).
 
-    powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Image twrpv2-recovery.img] [options]
+    powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Image fmrre-recovery.img] [options]
 
   Fastboot phones (Pixel, Xiaomi, OnePlus, Motorola, Nothing, Sony, ...):
-    default        fastboot boot  - runs TWRP v2 once, writes NOTHING
+    default        fastboot boot  - runs FMRRE once, writes NOTHING
     -Permanent     flash it (recovery, vendor_boot or boot - detected)
   Samsung:
     -Samsung       build an Odin package (AP slot) with recovery.img + a disabled vbmeta
@@ -61,7 +61,7 @@ function New-DisabledVbmeta([string]$path) {
     [Text.Encoding]::ASCII.GetBytes("AVB0").CopyTo($b, 0)
     $b[7] = 1          # required libavb major version = 1 (big-endian u32 at offset 4)
     $b[123] = 3        # flags (big-endian u32 at offset 120): hashtree + verification disabled
-    [Text.Encoding]::ASCII.GetBytes("avbtool 1.3.0 (twrpv2)").CopyTo($b, 128)
+    [Text.Encoding]::ASCII.GetBytes("avbtool 1.3.0 (fmrre)").CopyTo($b, 128)
     [IO.File]::WriteAllBytes($path, $b)
 }
 function Set-VbmetaDisabled([string]$src, [string]$dst) {
@@ -78,10 +78,10 @@ function Get-Magic([string]$path) {
 
 # ---- image ---------------------------------------------------------------------
 if (-not $Image) {
-    foreach ($c in "twrpv2-recovery.img", "twrpv2-boot.img", "twrpv2-vendor_boot.img") { if (Test-Path $c) { $Image = $c; break } }
+    foreach ($c in "fmrre-recovery.img", "fmrre-boot.img", "fmrre-vendor_boot.img") { if (Test-Path $c) { $Image = $c; break } }
 }
 if (-not $Image -or -not (Test-Path $Image)) {
-    Die "No TWRP v2 image. Build twrpv2-recovery.img from YOUR phone's stock recovery/boot image first (see README), then: scripts\install.ps1 -Image twrpv2-recovery.img"
+    Die "No FMRRE image. Build fmrre-recovery.img from YOUR phone's stock recovery/boot image first (see README), then: scripts\install.ps1 -Image fmrre-recovery.img"
 }
 $Image = (Resolve-Path $Image).Path
 $magic = Get-Magic $Image
@@ -93,7 +93,7 @@ if ($Samsung) {
     if ($kind -ne "boot") { Die "Samsung needs a recovery.img (from the AP file of your firmware)" }
     $dir = "out\samsung"
     New-Item -ItemType Directory -Force $dir | Out-Null
-    $out = Join-Path $dir "twrpv2-recovery-odin.tar.md5"
+    $out = Join-Path $dir "fmrre-recovery-odin.tar.md5"
     $py = Get-Command python -ErrorAction SilentlyContinue
     if ($py -and (Native $py.Source @("--version")) -notmatch "Python 3") { $py = $null }   # Microsoft Store stub
     if ($py) {
@@ -113,12 +113,12 @@ if ($Samsung) {
             else { New-DisabledVbmeta (Join-Path $stage "vbmeta.img") }
             $files += "vbmeta.img"
         }
-        $tar = Join-Path $dir "twrpv2-recovery-odin.tar"
+        $tar = Join-Path $dir "fmrre-recovery-odin.tar"
         Run "tar.exe" (@("--format=ustar", "-cf", $tar, "-C", $stage) + $files)
         if (-not $DryRun) {
             $md5 = (Get-FileHash $tar -Algorithm MD5).Hash.ToLower()
             Move-Item -Force $tar $out
-            [IO.File]::AppendAllText((Resolve-Path $out).Path, "$md5  twrpv2-recovery-odin.tar`n")
+            [IO.File]::AppendAllText((Resolve-Path $out).Path, "$md5  fmrre-recovery-odin.tar`n")
             Say "$out (md5 $md5)"
         }
         Remove-Item -Recurse -Force $stage
@@ -130,7 +130,7 @@ if ($Samsung) {
         The bootloader must be unlocked (OEM unlocking ON) and the KG state must not be 'Prenormal'.
      2. Odin: AP = $out   Options: UNTICK 'Auto Reboot', then Start.
      3. When it says PASS: hold Volume Down + Power until the screen goes black, then IMMEDIATELY
-        Volume Up + Power (+ Bixby on older models) until TWRP v2 appears.
+        Volume Up + Power (+ Bixby on older models) until FMRRE appears.
         If Android boots first, it puts the stock recovery back.
 "@
     exit 0
@@ -177,13 +177,13 @@ Say "Target partition: $Partition"
 
 if (-not $Permanent) {
     if ($kind -eq "vendor_boot") { Die "vendor_boot images can't be test-booted: use -Permanent (or build from recovery.img / boot.img)" }
-    Say "Test boot: TWRP v2 runs once from RAM, nothing on the phone is changed."
+    Say "Test boot: FMRRE runs once from RAM, nothing on the phone is changed."
     Run $fb @("boot", $Image)
     Write-Host "`n   If it works:  scripts\install.ps1 -Image $(Split-Path $Image -Leaf) -Permanent"
     exit 0
 }
 if ($Partition -ne "recovery") {
-    Warn "This phone has no recovery partition: TWRP v2 goes into '$Partition'."
+    Warn "This phone has no recovery partition: FMRRE goes into '$Partition'."
     Warn "Only safe if the image was built from THIS phone's own $Partition.img. Keep the stock one: fastboot flash $Partition $Partition.img restores it."
 }
 $where = $Partition
@@ -197,6 +197,6 @@ if ($Vbmeta) {
     New-DisabledVbmeta "out\vbmeta_disabled.img"
     Run $fb @("--disable-verity", "--disable-verification", "flash", "vbmeta", "out\vbmeta_disabled.img")
 }
-Say "Rebooting into TWRP v2"
+Say "Rebooting into FMRRE"
 $r = Native $fb @("reboot", "recovery")
 if ($r -match "FAILED|unknown") { Warn "This bootloader can't 'reboot recovery': hold Volume Up + Power while it restarts."; Run $fb @("reboot") }

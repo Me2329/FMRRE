@@ -766,7 +766,7 @@ Plan plan(const Payload& p, const InstallOptions& o) {
     }
     if (bootSide && partitionDevice("recovery", pl.targetSlot).empty())
         pl.notes.push_back("This phone keeps its recovery in boot/vendor_boot, which the update replaces: after it you get the ROM's "
-                           "recovery. Reinstall TWRP v2 (Advanced > Install TWRP v2 permanently) to keep it.");
+                           "recovery. Reinstall FMRRE (Advanced > Install FMRRE permanently) to keep it.");
     if (o.switchSlot) pl.notes.push_back("Slot " + std::string(pl.targetSlot == "_b" ? "B" : "A") + " becomes active: reboot to start the new system.");
     pl.notes.push_back("Data is not wiped. Coming from another ROM? Format Data afterwards.");
     pl.ok = true;

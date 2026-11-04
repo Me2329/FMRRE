@@ -65,7 +65,7 @@ public:
         ui.textBlock(x + ui.dp(16), ly + ui.dp(2), w - ui.dp(32), r_.slotInfo, ui.dp(12.5f), th.textDim);
         y += lc.h + ui.dp(16);
 
-        // ---- what was changed last (TWRP/history.txt)
+        // ---- what was changed last (FMRRE/history.txt)
         if (!r_.changes.empty()) {
             ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Recent changes");
             y += ui.dp(30);
@@ -140,7 +140,7 @@ public:
             gy += ui.dp(70);
         }
         if (ui.listItem(ui.id("rs_save"), Rect(x + ui.dp(4), gy, w - ui.dp(8), ui.dp(66)), Icon::Download, "Save logs for a bug report",
-                        "Kernel logs, recovery.log and this diagnosis to TWRP/logs", "", th.ok) & Clicked) {
+                        "Kernel logs, recovery.log and this diagnosis to FMRRE/logs", "", th.ok) & Clicked) {
             std::string d = rescue::saveLogs(r_);
             app.toast(d.empty() ? "Could not save the logs" : "Saved to " + pathcheck::pretty(d), d.empty() ? Icon::Warning : Icon::Check);
         }

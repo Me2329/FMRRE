@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for pc/twrpv2_rescue.py against fake adb / fastboot / heimdall that answer like a phone in
-# each mode (Android, TWRP v2, stock recovery, bootloader, Samsung Download mode) and log every call.
+# Tests for pc/fmrre_rescue.py against fake adb / fastboot / heimdall that answer like a phone in
+# each mode (Android, FMRRE, stock recovery, bootloader, Samsung Download mode) and log every call.
 # Nothing touches a real device.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -21,7 +21,7 @@ python3 - "$T" "$ROOT/pc" <<'EOF'
 import hashlib, io, os, random, struct, sys, tarfile
 T, PC = sys.argv[1], sys.argv[2]
 sys.path.insert(0, PC)
-import twrpv2_rescue as tr
+import fmrre_rescue as tr
 
 def compress_block(data, prefix=b""):
     """Greedy LZ4 block compressor (test only) - matches may reach into `prefix` and overlap themselves."""
@@ -80,7 +80,7 @@ def decode(b):
 
 rnd = random.Random(7)
 boot = bytearray(b"ANDROID!" + bytes(rnd.getrandbits(8) for _ in range(40000)))
-boot += b"abc" * 30000 + bytes(70000) + b"TWRP v2 rescue " * 5000 + bytes(rnd.getrandbits(8) for _ in range(30000))
+boot += b"abc" * 30000 + bytes(70000) + b"FMRRE rescue " * 5000 + bytes(rnd.getrandbits(8) for _ in range(30000))
 boot = bytes(boot)
 checks = {
     "independent blocks": frame(boot),
@@ -104,8 +104,8 @@ open(T + "/lz4_fails", "w").write(str(bad))
 
 # images
 img = bytearray(1 << 16); img[0:8] = b"ANDROID!"
-open(T + "/twrpv2-recovery.img", "wb").write(img)
-open(T + "/twrpv2-vendor_boot.img", "wb").write(b"VNDRBOOT" + bytes(4096))
+open(T + "/fmrre-recovery.img", "wb").write(img)
+open(T + "/fmrre-vendor_boot.img", "wb").write(b"VNDRBOOT" + bytes(4096))
 open(T + "/junk.img", "wb").write(b"\0" * 4096)
 vb = bytearray(4096); vb[0:4] = b"AVB0"
 open(T + "/vbmeta.img", "wb").write(vb)
@@ -159,7 +159,7 @@ mode="$(cat "$T/adb_mode" 2>/dev/null)"
 if [ ! -f "$T/adb_on" ]; then
   case "$1" in devices) printf 'List of devices attached\n\n'; exit 0 ;; *) echo "error: no devices/emulators found" >&2; exit 1 ;; esac
 fi
-case "$mode" in twrp|stock_recovery) state=recovery ;; unauthorized) state=unauthorized ;; *) state=device ;; esac
+case "$mode" in twrp|old|stock_recovery) state=recovery ;; unauthorized) state=unauthorized ;; *) state=device ;; esac
 case "$1" in
   devices) printf 'List of devices attached\nFAKE123                %s usb:1-1 product:husky model:Pixel_8_Pro device:husky transport_id:3\n\n' "$state" ;;
   get-state) echo "$state" ;;
@@ -167,11 +167,14 @@ case "$1" in
     shift
     case "$*" in
       getprop) cat "$T/props" ;;
-      "/system/bin/recovery twrp help") [ "$mode" = twrp ] && echo "Commands (OpenRecoveryScript + TWRP v2):" || { echo "sh: /system/bin/recovery: not found"; exit 127; } ;;
-      "/system/bin/recovery twrp autofix --dry-run")
+      "/system/bin/recovery fmrre help") [ "$mode" = twrp ] && echo "Commands (OpenRecoveryScript + FMRRE):" || { echo "sh: /system/bin/recovery: not found"; exit 127; } ;;
+      "/system/bin/recovery twrp help") [ "$mode" = old ] && echo "Commands (OpenRecoveryScript + TWRP v2):" || exit 127 ;;
+      "/system/bin/recovery twrp autofix --dry-run") [ "$mode" = old ] && printf 'The last boot failed: old build\n[x] wipe_caches        Clear the app caches  (Safe)\n' ;;
+      "/system/bin/recovery twrp autofix "*) [ "$mode" = old ] && printf 'Repairs done.\n' ;;
+      "/system/bin/recovery fmrre autofix --dry-run")
         printf '> autofix --dry-run\nThe last boot failed: Android gave up after repeated crashes (Rescue Party)\n[ok] Boot image (boot_a)          OK\n[! ] Magisk / KernelSU modules    3 enabled\n[x] disable_modules    Disable all Magisk / KernelSU modules  (Can be undone)\n[x] wipe_caches        Clear the app caches (ART / Dalvik and /cache)  (Safe)\n' ;;
-      "/system/bin/recovery twrp autofix "*) printf '[1/2] Disable all Magisk / KernelSU modules\n  done\nRepairs done. If the phone still does not start, come back here.\n' ;;
-      "/system/bin/recovery twrp rescue save") echo "Logs saved to /sdcard/TWRP/logs/2026-11-03--19-00-00" ;;
+      "/system/bin/recovery fmrre autofix "*) printf '[1/2] Disable all Magisk / KernelSU modules\n  done\nRepairs done. If the phone still does not start, come back here.\n' ;;
+      "/system/bin/recovery fmrre rescue save") echo "Logs saved to /sdcard/FMRRE/logs/2026-11-03--19-00-00" ;;
     esac ;;
   reboot)
     rm -f "$T/adb_on"
@@ -196,18 +199,18 @@ case "$1" in
     prev=""
     for a in "$@"; do [ -n "$prev" ] && [ -f "$a" ] && cp "$a" "$T/flashed_${prev#--}"; prev="$a"; done
     echo "Uploading RECOVERY"; echo "100%"
-    # The user then holds the key combination: TWRP v2 comes up on adb.
-    if [[ " $* " == *" --RECOVERY "* ]] && [ -f "$T/flashed_RECOVERY" ] && cmp -s "$T/flashed_RECOVERY" "$T/twrpv2-recovery.img"; then
+    # The user then holds the key combination: FMRRE comes up on adb.
+    if [[ " $* " == *" --RECOVERY "* ]] && [ -f "$T/flashed_RECOVERY" ] && cmp -s "$T/flashed_RECOVERY" "$T/fmrre-recovery.img"; then
       rm -f "$T/download_on"; touch "$T/adb_on"; echo twrp > "$T/adb_mode"
     fi ;;
 esac
 exit 0
 EOF
 chmod +x "$T/bin/"*
-export T HOME="$T/home" PATH="$T/bin:$PATH" TWRPV2_WAIT=3 NO_COLOR=1 TWRPV2_LANG=en
+export T HOME="$T/home" PATH="$T/bin:$PATH" FMRRE_WAIT=3 NO_COLOR=1 FMRRE_LANG=en
 unset ANDROID_SERIAL
-PC="python3 $ROOT/pc/twrpv2_rescue.py"
-IMG="$T/twrpv2-recovery.img"
+PC="python3 $ROOT/pc/fmrre_rescue.py"
+IMG="$T/fmrre-recovery.img"
 scenario() { : > "$T/log"; rm -f "$T"/*_on "$T/adb_mode" "$T/boot_ok" "$T/installed_twrp" "$T/oem_info" "$T"/flashed_*; echo "--- $1"; }
 run() { $PC "$@" > "$T/out" 2>&1 < "${STDIN:-/dev/null}"; echo $? > "$T/rc"; }
 props() {  # key=value ... -> getprop output
@@ -235,7 +238,7 @@ has_out "mode" "Android is running"
 run status --json
 python3 -c "import json,sys; d=json.load(open('$T/out')); sys.exit(0 if d['locked'] is False and d['model']=='Pixel 8 Pro' else 1)" \
   && pass "--json" || fail "--json"
-[ -f "$T/home/.twrpv2_rescue.json" ] && pass "remembers the model by serial" || fail "model cache"
+[ -f "$T/home/.fmrre_rescue.json" ] && pass "remembers the model by serial" || fail "model cache"
 
 scenario "Android, locked: says how to unlock, changes nothing"
 touch "$T/adb_on"; echo android > "$T/adb_mode"
@@ -281,38 +284,38 @@ printf '(bootloader) Verity mode: true\n(bootloader) Device unlocked: true\n(boo
 run status
 has_out "unlocked via oem device-info" "oem device-info: Device unlocked: true"
 
-scenario "bootloader + TWRP v2 image: start it from RAM, Auto repair from the inside"
+scenario "bootloader + FMRRE image: start it from RAM, Auto repair from the inside"
 touch "$T/fastboot_on" "$T/boot_ok"
 getvar_all product:husky unlocked:yes current-slot:a slot-successful:a:yes slot-successful:b:yes
 run fix --yes --recovery "$IMG"
 rc_is "exit 0" 0
 called "fastboot boot" "fastboot -s FAKE123 boot $IMG"
-called "asks TWRP v2 what is wrong" "adb -s FAKE123 shell /system/bin/recovery twrp autofix --dry-run"
-called "repairs" "adb -s FAKE123 shell /system/bin/recovery twrp autofix --allow-slot-switch --reboot"
-has_out "shows TWRP v2's diagnosis" "Rescue Party"
+called "asks FMRRE what is wrong" "adb -s FAKE123 shell /system/bin/recovery fmrre autofix --dry-run"
+called "repairs" "adb -s FAKE123 shell /system/bin/recovery fmrre autofix --allow-slot-switch --reboot"
+has_out "shows FMRRE's diagnosis" "Rescue Party"
 not_called "nothing flashed" "fastboot .*flash"
 
 scenario "vendor_boot image can't be test-booted"
 touch "$T/fastboot_on"
 getvar_all product:husky unlocked:yes current-slot:a
-run boot-twrp "$T/twrpv2-vendor_boot.img" --yes
+run boot-fmrre "$T/fmrre-vendor_boot.img" --yes
 rc_is "refused" 2
 has_out "explains" "vendor_boot image"
 
-scenario "bootloader, no image, TWRP v2 installed: its recovery is started"
+scenario "bootloader, no image, FMRRE installed: its recovery is started"
 touch "$T/fastboot_on" "$T/installed_twrp"
 getvar_all product:husky unlocked:yes current-slot:a slot-successful:a:yes
 run fix --yes
 rc_is "exit 0" 0
 called "reboot recovery" "fastboot -s FAKE123 reboot recovery"
-called "auto repair" "twrp autofix --allow-slot-switch --reboot"
+called "auto repair" "fmrre autofix --allow-slot-switch --reboot"
 
-scenario "bootloader, no image, no TWRP v2: says what it needs"
+scenario "bootloader, no image, no FMRRE: says what it needs"
 touch "$T/fastboot_on"
 getvar_all product:husky unlocked:yes current-slot:a slot-successful:a:yes
 run fix --yes
 rc_is "refused" 2
-has_out "asks for an image" "--recovery twrpv2-recovery.img"
+has_out "asks for an image" "--recovery fmrre-recovery.img"
 
 scenario "Android -> recovery -> Auto repair"
 touch "$T/adb_on" "$T/installed_twrp"; echo android > "$T/adb_mode"
@@ -320,27 +323,35 @@ pixel_props ro.boot.flash.locked=0 ro.boot.verifiedbootstate=orange
 run fix --yes --no-reboot
 rc_is "exit 0" 0
 called "reboots to recovery" "adb -s FAKE123 reboot recovery"
-called "no reboot at the end" "twrp autofix --allow-slot-switch"
+called "no reboot at the end" "fmrre autofix --allow-slot-switch"
 not_called "--no-reboot honoured" "autofix --allow-slot-switch --reboot"
 
-scenario "TWRP v2 running: diagnose + logs"
+scenario "FMRRE running: diagnose + logs"
 touch "$T/adb_on"; echo twrp > "$T/adb_mode"
 pixel_props ro.boot.flash.locked=0 ro.boot.verifiedbootstate=orange
 run diagnose
-has_out "recovery is TWRP v2" "TWRP v2"
+has_out "recovery is FMRRE" "FMRRE"
 has_out "headline" "The last boot failed: Android gave up after repeated crashes"
 has_out "planned fixes" "Planned fixes: disable_modules"
 run logs "$T/logs"
 rc_is "logs saved" 0
-called "rescue save" "twrp rescue save"
-called "pulls the folder" "adb -s FAKE123 pull /data/media/0/TWRP/logs/2026-11-03--19-00-00"
+called "rescue save" "fmrre rescue save"
+called "pulls the folder" "adb -s FAKE123 pull /data/media/0/FMRRE/logs/2026-11-03--19-00-00"
 [ -f "$T/logs/phone.json" ] && pass "phone.json" || fail "phone.json"
+
+scenario "a build from before the rename: still driven with 'twrp'"
+touch "$T/adb_on"; echo old > "$T/adb_mode"
+pixel_props ro.boot.flash.locked=0 ro.boot.verifiedbootstate=orange
+run autofix --yes
+rc_is "exit 0" 0
+called "old name used for it" "adb -s FAKE123 shell /system/bin/recovery twrp autofix --allow-slot-switch --reboot"
+not_called "never 'fmrre' on an old build (it would start its UI)" "recovery fmrre autofix"
 
 scenario "stock recovery: points to sideload"
 touch "$T/adb_on"; echo stock_recovery > "$T/adb_mode"
 pixel_props ro.boot.flash.locked=0
 run diagnose
-has_out "not TWRP v2" "A recovery other than TWRP v2"
+has_out "not FMRRE" "A recovery other than FMRRE"
 has_out "sideload advice" "adb sideload"
 
 scenario "USB debugging not allowed"
@@ -390,14 +401,14 @@ run fix --yes --recovery "$IMG"
 rc_is "needs --unlocked" 2
 not_called "nothing flashed" "heimdall flash"
 
-scenario "Samsung: install TWRP v2, then Auto repair"
+scenario "Samsung: install FMRRE, then Auto repair"
 touch "$T/download_on"
 run fix --yes --unlocked --recovery "$IMG" --workdir "$T/w2"
 rc_is "exit 0" 0
 called "recovery + vbmeta" "heimdall flash --RECOVERY $IMG --VBMETA $T/w2/vbmeta.img --no-reboot"
 python3 -c "import struct; d=open('$T/flashed_VBMETA','rb').read(); exit(0 if struct.unpack_from('>I',d,120)[0]==3 else 1)" \
   && pass "vbmeta flashed with flags 3" || fail "vbmeta flags"
-called "auto repair after TWRP v2 came up" "twrp autofix --allow-slot-switch --reboot"
+called "auto repair after FMRRE came up" "fmrre autofix --allow-slot-switch --reboot"
 
 scenario "Samsung: stock images from an AP .tar.md5 (lz4)"
 touch "$T/download_on"
@@ -420,7 +431,7 @@ run diagnose --lang ro
 has_out "status" "Bootloader  DEBLOCAT"
 has_out "slot health" "A: nu pornește, nu a pornit niciodată complet, 0 încercări rămase"
 has_out "finding" "Slotul A este marcat că nu pornește; slotul B a pornit bine înainte"
-TWRPV2_LANG=ro run fix --yes
+FMRRE_LANG=ro run fix --yes
 has_out "chosen from the environment" "Activezi slotul B (celălalt sistem, se poate schimba înapoi)? da (--yes)"
 has_out "done" "==> gata"
 touch "$T/fastboot_on"
@@ -432,9 +443,9 @@ python3 - "$ROOT/pc" > "$T/out" 2>&1 <<'PYEOF'
 # Every message in the tool has a Romanian translation: walk the source for the texts it shows.
 import ast, re, sys
 sys.path.insert(0, sys.argv[1])
-import twrpv2_rescue as tr
+import fmrre_rescue as tr
 tr.set_language("ro")
-src = open(sys.argv[1] + "/twrpv2_rescue.py", encoding="utf-8").read()
+src = open(sys.argv[1] + "/fmrre_rescue.py", encoding="utf-8").read()
 def tmpl(n):
     if isinstance(n, ast.Constant) and isinstance(n.value, str):
         return n.value
@@ -484,7 +495,7 @@ if [ -n "$TKPY" ] && command -v xvfb-run > /dev/null; then
 import os, sys, tkinter as tk
 from tkinter import messagebox
 sys.path.insert(0, sys.argv[1])
-import twrpv2_rescue as tr
+import fmrre_rescue as tr
 asked, out = [], {}
 messagebox.askyesno = lambda title, q, parent=None: (asked.append(q), True)[1]
 real_mainloop = tk.Tk.mainloop

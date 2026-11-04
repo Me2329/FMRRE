@@ -1,4 +1,4 @@
-// Host self-tests for the parts of TWRP v2 that touch data:
+// Host self-tests for the parts of FMRRE that touch data:
 //   - SHA-256
 //   - real update-binary protocol (ui_print / progress / set_progress) - non-simulated path
 //   - Android sparse image flashing
@@ -16,6 +16,7 @@
 #include "core/crypt.h"
 #include "core/i18n.h"
 #include "core/log.h"
+#include "core/settings.h"
 #include "core/sha256.h"
 #include "core/task.h"
 #include "core/util.h"
@@ -492,6 +493,22 @@ static void testAvb(const std::string& dir) {
     CHECK(!avb::read(dir + "/a.img").ok);
 }
 
+// Renamed from TWRP v2: FMRRE/ is home, and backups in TWRP/BACKUPS (classic TWRP, or TWRP v2) still restore.
+static void testLegacyFolders() {
+    Partitions& p = Partitions::get();
+    CHECK(p.appDir() == p.storagePath() + "/FMRRE" && p.legacyDir() == p.storagePath() + "/TWRP");
+    std::string old = p.legacyDir() + "/BACKUPS/" + device::info().serial + "/2024-05-01--10-00-00";
+    CHECK(util::mkdirs(old));
+    CHECK(util::writeFile(old + "/boot.emmc.win", std::string(4096, 'b')));
+    bool found = false, ours = false;
+    for (auto& s : backup::list()) {
+        found |= util::basename(s.path) == "2024-05-01--10-00-00" && !s.hasManifest && s.items.size() == 1 && s.items[0].part == "boot";
+        ours |= s.name == "selftest" && util::startsWith(s.path, p.appDir() + "/BACKUPS/");
+    }
+    CHECK(found && ours);
+    util::removeTree(p.legacyDir());
+}
+
 static void testPathcheck(const std::string& dir) {
     std::string root = dir + "/sim";
     device::init(true, root);
@@ -543,7 +560,7 @@ static void testPathcheck(const std::string& dir) {
     CHECK(!runTask("ors-fail", [](Task& t) { return ors::run({"print a", "bogus", "mkdir /tmp/never"}, t); }));
     CHECK(!util::exists(root + "/tmp/never"));
 
-    // Installing TWRP v2 permanently: A/B phone without a recovery partition -> boot, stock saved first
+    // Installing FMRRE permanently: A/B phone without a recovery partition -> boot, stock saved first
     auto bootImg = [](const std::string& f, uint32_t hv, uint32_t kernel, char fill) {
         std::string b(2 << 20, fill);
         memcpy(&b[0], "ANDROID!", 8);
@@ -554,7 +571,7 @@ static void testPathcheck(const std::string& dir) {
     std::string bootA = root + "/dev/block/by-name/boot_a", stockBoot;
     bootImg(bootA, 4, 1 << 20, 'S');
     util::readFile(bootA, stockBoot);
-    std::string twrp = root + "/data/media/0/Download/twrpv2-test.img", junk = root + "/data/media/0/Download/junk.img";
+    std::string twrp = root + "/data/media/0/Download/fmrre-test.img", junk = root + "/data/media/0/Download/junk.img";
     bootImg(twrp, 4, 1 << 20, 'T');
     CHECK(bootimg::recoveryTarget(twrp).name == "boot");
     CHECK(runTask("install-recovery", [&](Task& t) { return bootimg::installRecovery(twrp, t); }));
@@ -583,6 +600,7 @@ static void testPathcheck(const std::string& dir) {
 }
 
 // The expanded fixture: "TWRP v2 payload " x 512, bytes 0..255 x 16, zeros and a run of 'R', 16 KiB.
+// (The project's old name stays here: the bzip2 / xz fixtures above were compressed from exactly this text.)
 static std::string fixturePlain() {
     std::string d;
     for (int i = 0; i < 512; i++) d += "TWRP v2 payload ";
@@ -591,6 +609,21 @@ static std::string fixturePlain() {
     d += std::string(3000, '\0') + std::string(1000, 'R');
     d.resize(16384, '\0');
     return d;
+}
+
+// Stored formats that must never change (backups and settings made before the rename are still used):
+// expected values computed independently with Python's hashlib / hmac.
+static void testFrozenFormats() {
+    uint8_t h[crypt::kHeaderSize] = {'T', 'W', 'V', '2', 'E', 'N', 'C', '1'};
+    for (int i = 0; i < 16; i++) h[8 + i] = uint8_t(i);  // salt
+    h[24] = 0xe8, h[25] = 0x03;                         // 1000 iterations
+    const char* check = "03f4073da437dd14e7bbcacc8b76cfd8";  // HMAC(pbkdf2("pw")[32:], "TWRP v2 backup password check")[:16]
+    for (int i = 0; i < 16; i++) h[28 + i] = uint8_t(std::stoi(std::string(check + 2 * i, 2), nullptr, 16));
+    std::string err;
+    crypt::Stream a, b;
+    CHECK(a.beginDecrypt("pw", h, err));
+    CHECK(!b.beginDecrypt("px", h, err) && err == "wrong password");
+    CHECK(Sha256::hexOf(std::string("1234") + kPinSalt) == "3c8d4d5d0b4aee3a4e6ffa93abc3300e91839309772c1869ad44f4e7946e7a25");
 }
 
 static void testCrypt() {
@@ -866,7 +899,7 @@ static void testI18n() {
 }
 
 int main() {
-    char tmpl[] = "/tmp/twrpv2-selftest-XXXXXX";
+    char tmpl[] = "/tmp/fmrre-selftest-XXXXXX";
     std::string dir = mkdtemp(tmpl);
     log::init(dir + "/test.log");
     testSha();
@@ -876,8 +909,10 @@ int main() {
     testImages(dir);
     testAvb(dir);
     testBackupRestore(dir);
+    testLegacyFolders();
     testPathcheck(dir);
     testCrypt();
+    testFrozenFormats();
     testDecoders(dir);
     testPayload(dir);
     testRescue();

@@ -171,7 +171,9 @@ void Stream::deriveKeys(const std::string& password, const uint8_t* salt, uint32
     memcpy(macKey_, keys + 32, 32);
     memset(keys, 0, sizeof(keys));
     HmacSha256 c(macKey_, 32);
-    c.update("TWRP v2 backup password check", 29);
+    // Part of the file format (backups made before the rename must still open): never change this text.
+    static const char kCheckLabel[] = "TWRP v2 backup password check";
+    c.update(kCheckLabel, sizeof(kCheckLabel) - 1);
     std::string d = c.final();
     memcpy(check, d.data(), 16);
     delete aes_;
@@ -195,7 +197,7 @@ bool Stream::beginEncrypt(const std::string& password, std::string& header, uint
 }
 
 bool Stream::beginDecrypt(const std::string& password, const uint8_t* h, std::string& err) {
-    if (memcmp(h, kMagic, 8) != 0) { err = "not an encrypted TWRP v2 backup"; return false; }
+    if (memcmp(h, kMagic, 8) != 0) { err = "not an encrypted FMRRE backup"; return false; }
     uint32_t iterations = uint32_t(h[24]) | uint32_t(h[25]) << 8 | uint32_t(h[26]) << 16 | uint32_t(h[27]) << 24;
     if (iterations < 1000 || iterations > 50000000) { err = "corrupt encryption header"; return false; }
     uint8_t check[16];

@@ -596,6 +596,10 @@ std::string Partitions::storagePath() {
     return p->contentPath();
 }
 
+std::string Partitions::appDir() { return storagePath() + "/FMRRE"; }
+
+std::string Partitions::legacyDir() { return storagePath() + "/TWRP"; }
+
 bool Partitions::dataEncrypted() {
     Partition* d = find("/data");
     if (!d || !isMounted(*d)) return false;

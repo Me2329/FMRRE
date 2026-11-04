@@ -39,7 +39,7 @@ public:
         struct T { Icon icon; const char* title; const char* sub; const char* target; Color tint; };
         T targets[] = {
             {Icon::Phone, "System", "Boot Android", "", th.ok},
-            {Icon::Refresh, "Recovery", "Restart TWRP v2", "recovery", th.accent},
+            {Icon::Refresh, "Recovery", "Restart FMRRE", "recovery", th.accent},
             {Icon::Bolt, "Bootloader", "Fastboot mode", "bootloader", th.warn},
             {Icon::Usb, "Fastbootd", "Userspace fastboot", "fastboot", th.info},
             {Icon::Download, "Download", "Samsung Odin mode", "download", th.accent2},

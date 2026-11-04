@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Run every cross-built TWRP v2 on an emulated CPU (qemu-user) - each one on the
+# Run every cross-built FMRRE on an emulated CPU (qemu-user) - each one on the
 # oldest CPU its build supports:
-#   1. the self-tests              out/<arch>/twrpv2_selftest  (TW_SELFTEST=1 scripts/build.sh <arch>)
+#   1. the self-tests              out/<arch>/fmrre_selftest  (TW_SELFTEST=1 scripts/build.sh <arch>)
 #   2. the recovery UI             simulator mode, headless: boots, renders, screenshot compared with the host build
-#   3. the twrp command line       super metadata, file check, image flash, a full GSI flash (.img.xz) and
-#                                  an A/B ROM install (payload.bin: dynamic partitions, verity, slot switch)
+#   3. the fmrre command line      super metadata (through the old `twrp` alias), file check, image flash, a full GSI
+#                                  flash (.img.xz), an A/B ROM install (payload.bin: dynamic partitions, verity, slot switch)
+#                                  and Auto repair's diagnosis
 #   4. fastbootd                   the computer's real `fastboot` client flashes it over TCP (if installed)
 #
 #   scripts/test_archs.sh [arch...]     default: every architecture that has out/<arch>/recovery
@@ -34,7 +35,7 @@ trap 'rm -rf "$T"' EXIT
 # Reference screenshot from the host build (if there is one).
 REF=""
 HOSTBIN=""
-for h in build-host/twrpv2 out/sim/twrpv2; do [ -x "$h" ] && { HOSTBIN="$h"; break; }; done
+for h in build-host/fmrre out/sim/fmrre; do [ -x "$h" ] && { HOSTBIN="$h"; break; }; done
 if [ -n "$HOSTBIN" ]; then
   "$HOSTBIN" --sim --headless --sim-root "$T/sim-host" --script tools/scripts/smoke.txt --out "$T/shots-host" > /dev/null 2>&1 && REF="$T/shots-host/01_home.png"
 fi
@@ -67,8 +68,8 @@ for a in "$@"; do
   sim="$T/sim-$a"
 
   st="-"
-  if [ -f "out/$a/twrpv2_selftest" ]; then
-    if (cd "$T" && run "$ROOT/out/$a/twrpv2_selftest") > "$T/selftest-$a.log" 2>&1 && grep -q "All self-tests passed" "$T/selftest-$a.log"; then st=pass
+  if [ -f "out/$a/fmrre_selftest" ]; then
+    if (cd "$T" && run "$ROOT/out/$a/fmrre_selftest") > "$T/selftest-$a.log" 2>&1 && grep -q "All self-tests passed" "$T/selftest-$a.log"; then st=pass
     else st=FAIL; FAIL=1; fi
   fi
 
@@ -85,22 +86,22 @@ for a in "$@"; do
   [ -f "$sim/data/media/0/Download/system-td-arm64-ab-vanilla.img.xz" ] || { gsi=/sdcard/Download/lineage-22.1-arm64_bvN-vndklite.img.gz; want="Verified"; }
   {
     run "$bin" --sim --sim-root "$sim" twrp lp list > "$T/lp-$a.log" 2>&1 && grep -q "system_a" "$T/lp-$a.log" &&
-    run "$bin" --sim --sim-root "$sim" twrp check "/sdcard/Download/GSI_A15_download(1)" > "$T/check-$a.log" 2>&1 &&
+    run "$bin" --sim --sim-root "$sim" fmrre check "/sdcard/Download/GSI_A15_download(1)" > "$T/check-$a.log" 2>&1 &&
     grep -q "doesn't end in" "$T/check-$a.log" &&
-    run "$bin" --sim --sim-root "$sim" twrp flash /sdcard/Download/kernel-boot.img boot > "$T/flash-$a.log" 2>&1 &&
+    run "$bin" --sim --sim-root "$sim" fmrre flash /sdcard/Download/kernel-boot.img boot > "$T/flash-$a.log" 2>&1 &&
     grep -q "Verified" "$T/flash-$a.log" &&
-    run "$bin" --sim --sim-root "$sim" twrp gsi "$gsi" > "$T/gsi-$a.log" 2>&1 &&
+    run "$bin" --sim --sim-root "$sim" fmrre gsi "$gsi" > "$T/gsi-$a.log" 2>&1 &&
     grep -q "Verified" "$T/gsi-$a.log" && grep -q "$want" "$T/gsi-$a.log" &&
-    run "$bin" --sim --sim-root "$sim" twrp payload install /sdcard/Download/lineage-22.2-20261101-nightly-husky-signed.zip > "$T/ota-$a.log" 2>&1 &&
+    run "$bin" --sim --sim-root "$sim" fmrre payload install /sdcard/Download/lineage-22.2-20261101-nightly-husky-signed.zip > "$T/ota-$a.log" 2>&1 &&
     grep -q "OTA installed to slot B" "$T/ota-$a.log" && grep -q "system_b .* verified" "$T/ota-$a.log" &&
-    run "$bin" --sim --sim-root "$sim" twrp autofix --dry-run > "$T/autofix-$a.log" 2>&1 &&
+    run "$bin" --sim --sim-root "$sim" fmrre autofix --dry-run > "$T/autofix-$a.log" 2>&1 &&
     grep -q "Rescue Party" "$T/autofix-$a.log" && grep -q "\[x\] disable_modules" "$T/autofix-$a.log"
   } > "$T/cli-$a.log" 2>&1 && cli=ok || FAIL=1
 
   # fastbootd on this CPU, driven by the computer's real fastboot client (if installed)
   if [ "$cli" = ok ] && command -v fastboot > /dev/null; then
     port=$((30000 + RANDOM % 20000))
-    run "$bin" --sim --sim-root "$sim" twrp fastboot --tcp "$port" > "$T/fbs-$a.log" 2>&1 &
+    run "$bin" --sim --sim-root "$sim" fmrre fastboot --tcp "$port" > "$T/fbs-$a.log" 2>&1 &
     fbpid=$!
     fb() { fastboot -s "tcp:127.0.0.1:$port" "$@" > "$T/fb-$a.log" 2>&1; }
     up=0

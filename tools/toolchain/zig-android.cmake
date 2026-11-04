@@ -1,4 +1,4 @@
-# CMake toolchain: cross-compile TWRP v2 for Android with Zig (no NDK needed).
+# CMake toolchain: cross-compile FMRRE for Android with Zig (no NDK needed).
 # Produces a fully static musl binary that runs inside any recovery ramdisk.
 #   -DZIG_TARGET=<zig triple> -DZIG_CPU=<zig cpu>   (scripts/build.sh sets both, see its table)
 set(CMAKE_SYSTEM_NAME Linux)

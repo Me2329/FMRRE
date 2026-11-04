@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Which TWRP v2 build (out/<arch>/recovery) fits a phone?
+"""Which FMRRE build (out/<arch>/recovery) fits a phone?
 
   elf_abi.py FILE          FILE is an Android ELF binary (e.g. system/bin/recovery from the stock ramdisk)
   elf_abi.py --abi NAME    NAME is an Android ABI (adb shell getprop ro.product.cpu.abi)
@@ -86,7 +86,7 @@ def elf_arch(path):
         return ("riscv64", "RISC-V 64") if cls == 2 else (None, "RISC-V 32 (not an Android ABI)")
     if machine == EM_MIPS:
         if cls == 2:
-            return None, "MIPS64 (no TWRP v2 build)"
+            return None, "MIPS64 (no FMRRE build)"
         if data_enc != 1:
             return None, "big-endian MIPS (not an Android ABI)"
         return "mips", "MIPS32 little-endian"
@@ -126,7 +126,7 @@ def main():
         abi = args[1].strip() if len(args) > 1 else ""
         arch = ABI_TO_ARCH.get(abi)
         if verbose:
-            print(f"{abi} -> {arch or 'no TWRP v2 build'}", file=sys.stderr)
+            print(f"{abi} -> {arch or 'no FMRRE build'}", file=sys.stderr)
     else:
         try:
             arch, what = elf_arch(args[0])

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # The built-in fastbootd against the real `fastboot` client (apt install fastboot), over fastboot's
 # TCP transport, on the simulator: getvar, raw + sparse + split-sparse flashing (with automatic
-# logical partition resizing), logical partition commands, fetch, erase, set_active, oem twrp,
+# logical partition resizing), logical partition commands, fetch, erase, set_active, oem fmrre / oem twrp,
 # wipe-super / update (super_empty.img), error replies and reboot recovery.
-#   tests/fastboot_test.sh [path/to/twrpv2]
+#   tests/fastboot_test.sh [path/to/fmrre]
 set -uo pipefail
 cd "$(dirname "$0")/.."
-BIN="$(realpath "${1:-build-host/twrpv2}")"
+BIN="$(realpath "${1:-build-host/fmrre}")"
 command -v fastboot > /dev/null || { echo "SKIP: no fastboot client (apt install fastboot)"; exit 0; }
 T="$(mktemp -d)"
 R="$T/sim"
@@ -27,10 +27,10 @@ check() {
 same() { cmp -s <(head -c "$(stat -c %s "$2")" "$1") "$2"; }
 part() { echo "$R/dev/block/$1"; }
 
-"$BIN" --sim --sim-root "$R" twrp help > /dev/null
-"$BIN" --sim --sim-root "$R" twrp lp export --empty /sdcard/super_empty.img > /dev/null
+"$BIN" --sim --sim-root "$R" fmrre help > /dev/null
+"$BIN" --sim --sim-root "$R" fmrre lp export --empty /sdcard/super_empty.img > /dev/null
 start() {
-    "$BIN" --sim --sim-root "$R" twrp fastboot --tcp "$PORT" > "$T/server.log" 2>&1 &
+    "$BIN" --sim --sim-root "$R" fmrre fastboot --tcp "$PORT" > "$T/server.log" 2>&1 &
     SRV=$!
     for _ in $(seq 50); do FB getvar version && return 0; sleep 0.1; done
     return 1
@@ -78,7 +78,8 @@ check "delete-logical-partition" eval 'FB delete-logical-partition scratch_test 
 check "fetch boot_a" eval 'FB fetch boot_a "$T/fetched.img" && same "$T/fetched.img" "$T/boot.img"'
 check "erase cache" eval 'FB erase cache && has "OKAY"'
 check "set_active b (booted slot stays a)" eval 'FB set_active b && FB getvar current-slot && has "current-slot: a"'
-check "oem twrp runs TWRP v2 commands" eval 'FB oem twrp lp list && has "(bootloader) system_a"'
+check "oem fmrre runs FMRRE commands" eval 'FB oem fmrre lp list && has "(bootloader) system_a"'
+check "oem twrp still works (alias)" eval 'FB oem twrp lp list && has "(bootloader) system_a"'
 check "oem log" eval 'FB oem log 5 && has "(bootloader)"'
 
 echo "super_empty.img"
@@ -114,7 +115,7 @@ check "update-super keeps the other slot's partitions" \
     eval 'FB create-logical-partition keep_b 1048576 && raw_update_super && has "^OKAY" && FB getvar partition-size:keep_b && has "0x100000" && FB getvar partition-size:system_a && has "0x0$"'
 
 echo "exit"
-check "reboot recovery leaves fastboot mode" eval 'FB reboot recovery && wait "$SRV" && grep -q "back to TWRP v2" "$T/server.log"'
+check "reboot recovery leaves fastboot mode" eval 'FB reboot recovery && wait "$SRV" && grep -q "back to FMRRE" "$T/server.log"'
 SRV=""
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -208,7 +208,7 @@ static bool installZipImpl(const std::string& path, const InstallOptions& o, Tas
         dup2(outPipe[1], 2);
         std::string fd = std::to_string(cmdPipe[1]);
         setenv("PATH", "/system/bin:/sbin:/bin:/system/xbin:/vendor/bin", 1);
-        setenv("RECOVERY_NAME", "TWRP v2", 1);
+        setenv("RECOVERY_NAME", "FMRRE", 1);
         // Shell-script update-binaries need an interpreter when the shebang path is missing.
         std::string head;
         util::readFile(bin, head, 64);

@@ -1,4 +1,4 @@
-// OpenRecoveryScript countdown screen and the `twrp` CLI queue.
+// OpenRecoveryScript countdown screen and the `fmrre` CLI queue.
 #include "ui/screens/screens.h"
 
 #include <cmath>
@@ -90,7 +90,7 @@ void orsIdle(App& app) {
         rename((base + ".cmd").c_str(), (base + ".run").c_str());
         cmd = util::trim(cmd);
         g_active = base;
-        app.runTask("twrp " + cmd, Icon::Terminal, [cmd](Task& tt) { return ors::run({cmd}, tt); });
+        app.runTask("fmrre " + cmd, Icon::Terminal, [cmd](Task& tt) { return ors::run({cmd}, tt); });
         if (!t.running()) {  // refused (another task) - report and move on
             util::writeFile(base + ".done", "1\nAnother operation is running\n");
             g_active.clear();

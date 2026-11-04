@@ -21,9 +21,9 @@ std::string clean(std::string s) {
 }  // namespace
 
 std::string path() {
-    std::string dir = Partitions::get().storagePath() + "/TWRP";
+    std::string dir = Partitions::get().appDir();
     if (util::mkdirs(dir)) return dir + "/history.txt";
-    return device::path("/tmp/twrpv2-history.txt");
+    return device::path("/tmp/fmrre-history.txt");
 }
 
 const char kByAutoRepair[] = "auto repair";

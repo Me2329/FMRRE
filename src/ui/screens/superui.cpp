@@ -105,7 +105,7 @@ public:
                     break;
                 case 9:
                     app.confirm("Delete " + name + "?", "The logical partition and its data are removed from super. "
-                                "The metadata is backed up first (TWRP/super).", "Swipe to delete", [&app, name]() {
+                                "The metadata is backed up first (FMRRE/super).", "Swipe to delete", [&app, name]() {
                         app.runTask("Deleting " + name, Icon::Trash, [name](Task& t) { return lp::deletePartition(name, t); });
                     });
                     break;
@@ -325,7 +325,7 @@ public:
             app.push(makeFilesScreen("", img::imageExtensions(), [](App& a, const std::string& p) { a.pop(); a.push(makeFlashImageScreen(p)); },
                                      "Select vbmeta image"));
         y += ui.dp(66);
-        ui.textBlock(x, y, w, "The original header is saved to TWRP/vbmeta before every change. Re-enabling restores flags 0 "
+        ui.textBlock(x, y, w, "The original header is saved to FMRRE/vbmeta before every change. Re-enabling restores flags 0 "
                               "(the bootloader may then refuse a modified system).", ui.dp(12), th.textFaint);
         ui.endScroll(y + ui.dp(60));
     }

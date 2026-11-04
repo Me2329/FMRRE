@@ -63,6 +63,8 @@ public:
     // Storage handling: where backups and screenshots go.
     std::vector<Partition*> storages();
     std::string storagePath();  // e.g. /data/media/0
+    std::string appDir();       // <storage>/FMRRE: backups, history, settings, saved stock images
+    std::string legacyDir();    // <storage>/TWRP: classic TWRP backups (and what TWRP v2 saved before the rename)
     void setStorage(const std::string& mountPoint);
     std::string currentStorage() const { return storage_; }
     // /data is mounted but internal storage is not readable (FBE, not decrypted).

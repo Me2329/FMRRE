@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Samsung packaging for TWRP v2 (and a disabled vbmeta for any device).
+"""Samsung packaging for FMRRE (and a disabled vbmeta for any device).
 
-  odin_pack.py tar   --recovery twrpv2-recovery.img [--vbmeta FILE | --vbmeta-disabled] -o twrpv2.tar.md5
+  odin_pack.py tar   --recovery fmrre-recovery.img [--vbmeta FILE | --vbmeta-disabled] -o fmrre.tar.md5
   odin_pack.py vbmeta-disabled -o vbmeta_disabled.img
   odin_pack.py vbmeta-patch    stock_vbmeta.img -o vbmeta_patched.img
-  odin_pack.py check  twrpv2.tar.md5
+  odin_pack.py check  fmrre.tar.md5
 
 The .tar.md5 goes into Odin's AP slot (Windows). On Linux/macOS use Heimdall
 (scripts/install.sh does both). A Samsung with Android 9+ needs vbmeta with
@@ -29,7 +29,7 @@ def vbmeta_disabled(size=4096):
     struct.pack_into(">II", h, 4, 1, 0)          # required libavb 1.0
     # auth/aux block sizes, algorithm NONE and every offset/size stay 0
     struct.pack_into(">I", h, 120, 3)             # HASHTREE_DISABLED | VERIFICATION_DISABLED
-    rel = b"avbtool 1.3.0 (twrpv2)"
+    rel = b"avbtool 1.3.0 (fmrre)"
     h[128:128 + len(rel)] = rel
     return bytes(h) + bytes(size - len(h))
 
@@ -100,7 +100,7 @@ def main():
     g.add_argument("--vbmeta", help="stock vbmeta.img: verification is disabled in the copy that goes in the tar")
     g.add_argument("--vbmeta-disabled", action="store_true", help="add a generated disabled vbmeta (default)")
     g.add_argument("--no-vbmeta", action="store_true", help="recovery only")
-    t.add_argument("-o", "--out", default="twrpv2-recovery.tar.md5")
+    t.add_argument("-o", "--out", default="fmrre-recovery.tar.md5")
     v = sub.add_parser("vbmeta-disabled")
     v.add_argument("-o", "--out", default="vbmeta_disabled.img")
     p = sub.add_parser("vbmeta-patch")

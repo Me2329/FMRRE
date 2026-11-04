@@ -215,7 +215,7 @@ std::vector<Finding> scan(const std::string& log, const std::string& bootReason,
 }
 
 namespace {
-std::string reasonFile() { return device::path("/tmp/twrpv2/android_reason"); }
+std::string reasonFile() { return device::path("/tmp/fmrre/android_reason"); }
 }  // namespace
 
 void setAndroidReason(const std::string& reason) {
@@ -274,7 +274,7 @@ Report analyze() {
 }
 
 std::string saveLogs(const Report& r) {
-    std::string dir = Partitions::get().storagePath() + "/TWRP/logs/" + util::dateStamp();
+    std::string dir = Partitions::get().appDir() + "/logs/" + util::dateStamp();
     if (!util::mkdirs(dir)) return "";
     std::vector<std::string> files = r.otherLogs;
     if (!r.logSource.empty()) files.push_back(r.logSource);

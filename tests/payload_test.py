@@ -4,14 +4,14 @@
 Builds OTA zips the way update_engine's generator does (REPLACE / REPLACE_BZ / REPLACE_XZ / ZERO /
 DISCARD operations, hash tree + FEC left for the device), with an independent Python implementation
 of the protobuf encoding, avbtool's hash tree and libfec's Reed-Solomon FEC. Then checks that
-`twrp payload extract` and `twrp payload install` produce byte-identical partitions, and that
+`fmrre payload extract` and `fmrre payload install` produce byte-identical partitions, and that
 corrupt, incremental, compressed and foreign packages are refused.
 
-    tests/payload_test.py [path/to/twrpv2]      (default: build-host/twrpv2)
+    tests/payload_test.py [path/to/fmrre]      (default: build-host/fmrre)
 """
 import bz2, hashlib, lzma, os, random, shutil, struct, subprocess, sys, tempfile, zipfile
 
-BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else 'build-host/twrpv2')
+BIN = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else 'build-host/fmrre')
 BS = 4096
 REPLACE, REPLACE_BZ, SOURCE_COPY, ZERO, DISCARD, REPLACE_XZ = 0, 1, 4, 6, 7, 8
 fails = []
@@ -174,8 +174,8 @@ def write_zip(path, payload, device='husky', stored=True):
         z.writestr(zipfile.ZipInfo('payload.bin'), payload, compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED)
 
 
-def twrp(root, *args):
-    r = subprocess.run([BIN, '--sim', '--sim-root', root, 'twrp', *args], capture_output=True, text=True)
+def cli(root, *args):
+    r = subprocess.run([BIN, '--sim', '--sim-root', root, 'fmrre', *args], capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -190,10 +190,10 @@ def main():
                 out += bytes(BS)
         return bytes(out)
 
-    work = tempfile.mkdtemp(prefix='twrp-payload-')
+    work = tempfile.mkdtemp(prefix='fmrre-payload-')
     root = os.path.join(work, 'sim')
     try:
-        twrp(root, 'help')  # creates the sandbox
+        cli(root, 'help')  # creates the sandbox
         dl = os.path.join(root, 'data/media/0/Download')
         boot = b'ANDROID!' + blocks(64)[8:]
         parts = [
@@ -208,47 +208,47 @@ def main():
         write_zip(zip_ok, build_payload(parts))
 
         print('payload info / extract')
-        rc, out = twrp(root, 'payload', 'info', '/sdcard/Download/rom-ok.zip')
+        rc, out = cli(root, 'payload', 'info', '/sdcard/Download/rom-ok.zip')
         check(rc == 0 and 'full OTA' in out and '+hashtree' in out and 'dynamic' in out, 'info lists partitions, verity and dynamic flags')
-        ext = os.path.join(root, 'data/media/0/TWRP/payload-test')  # simulator paths live in the sandbox
-        rc, out = twrp(root, 'payload', 'extract', '/sdcard/Download/rom-ok.zip', '--out', '/sdcard/TWRP/payload-test')
+        ext = os.path.join(root, 'data/media/0/FMRRE/payload-test')  # simulator paths live in the sandbox
+        rc, out = cli(root, 'payload', 'extract', '/sdcard/Download/rom-ok.zip', '--out', '/sdcard/FMRRE/payload-test')
         check(rc == 0, 'extract all partitions' + ('' if rc == 0 else ': ' + out[-300:]))
         for p in parts:
             f = os.path.join(ext, p.name + '.img')
             check(os.path.exists(f) and open(f, 'rb').read() == p.image, f'{p.name}.img is byte-identical (bz2/xz/zero/verity)')
 
         print('payload install')
-        rc, out = twrp(root, 'payload', 'install', '/sdcard/Download/rom-ok.zip')
+        rc, out = cli(root, 'payload', 'install', '/sdcard/Download/rom-ok.zip')
         check(rc == 0 and 'OTA installed to slot B' in out, 'install to the inactive slot' + ('' if rc == 0 else ': ' + out[-400:]))
         for p in parts:
             dev = os.path.join(root, 'dev/block/mapper' if p.dynamic else 'dev/block/by-name', p.name + '_b')
             got = open(dev, 'rb').read()[:len(p.image)] if os.path.exists(dev) else b''
             check(got == p.image, f'{p.name}_b matches the image')
-        rc, out = twrp(root, 'lp', 'list')
+        rc, out = cli(root, 'lp', 'list')
         check(rc == 0 and 'system_b' in out and 'product_b' in out, 'super lists the new system_b and product_b')
 
         print('refusals')
         bad = bytearray(build_payload(parts))
         bad[-5000] ^= 0x40  # inside the last blobs
         write_zip(os.path.join(dl, 'rom-corrupt.zip'), bytes(bad))
-        rc, out = twrp(root, 'payload', 'install', '/sdcard/Download/rom-corrupt.zip')
+        rc, out = cli(root, 'payload', 'install', '/sdcard/Download/rom-corrupt.zip')
         check(rc != 0 and 'corrupt' in out, 'corrupt data is detected (per-operation SHA-256)')
         check('was not made active' in out, 'a failed install does not switch slots')
         delta = [Part('boot', boot, [(SOURCE_COPY, 0, 64, None)])]
         write_zip(os.path.join(dl, 'ota-delta.zip'), build_payload(delta, delta=True))
-        rc, out = twrp(root, 'payload', 'install', '/sdcard/Download/ota-delta.zip')
+        rc, out = cli(root, 'payload', 'install', '/sdcard/Download/ota-delta.zip')
         check(rc != 0 and 'Incremental' in out, 'incremental OTAs are refused')
         write_zip(os.path.join(dl, 'rom-other.zip'), build_payload(parts[:1]), device='shiba')
-        rc, out = twrp(root, 'payload', 'install', '/sdcard/Download/rom-other.zip')
+        rc, out = cli(root, 'payload', 'install', '/sdcard/Download/rom-other.zip')
         check(rc != 0 and "'shiba'" in out, 'an OTA for another device is refused')
         write_zip(os.path.join(dl, 'rom-deflated.zip'), build_payload(parts[:1]), stored=False)
-        rc, out = twrp(root, 'payload', 'info', '/sdcard/Download/rom-deflated.zip')
+        rc, out = cli(root, 'payload', 'info', '/sdcard/Download/rom-deflated.zip')
         check(rc != 0 and 'compressed inside this zip' in out, 'a deflated payload.bin is explained')
         trunc = os.path.join(dl, 'rom-truncated.zip')
         shutil.copy(zip_ok, trunc)
         with open(trunc, 'r+b') as f:
             f.truncate(os.path.getsize(trunc) // 2)
-        rc, out = twrp(root, 'payload', 'info', '/sdcard/Download/rom-truncated.zip')
+        rc, out = cli(root, 'payload', 'info', '/sdcard/Download/rom-truncated.zip')
         check(rc != 0, 'a truncated download is refused')
     finally:
         shutil.rmtree(work, ignore_errors=True)

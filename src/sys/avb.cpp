@@ -43,7 +43,7 @@ bool patch(bool bothSlots, bool disable, Task& t) {
         if (fd >= 0) {
             head.resize(256);
             if (pread(fd, &head[0], 256, 0) == 256) {
-                std::string f = Partitions::get().storagePath() + "/TWRP/vbmeta/" + util::basename(dev) + "_header_" + util::dateStamp() + ".bin";
+                std::string f = Partitions::get().appDir() + "/vbmeta/" + util::basename(dev) + "_header_" + util::dateStamp() + ".bin";
                 util::mkdirs(util::dirname(f));
                 util::writeFile(f, head);
                 t.print("  saved original header to %s", f.c_str());

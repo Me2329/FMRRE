@@ -716,7 +716,7 @@ bool ensureWritable(const std::string& blockDev, std::string& err) {
 
 // ---- high level ---------------------------------------------------------------
 
-std::string backupDir() { return Partitions::get().storagePath() + "/TWRP/super"; }
+std::string backupDir() { return Partitions::get().appDir() + "/super"; }
 
 namespace {
 

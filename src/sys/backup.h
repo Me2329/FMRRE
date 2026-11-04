@@ -35,7 +35,7 @@ struct Options {
     std::string password;  // non-empty: encrypt every file (AES-256-CTR + HMAC-SHA256, PBKDF2 key)
 };
 
-std::string backupRoot();  // <storage>/TWRP/BACKUPS/<serial>
+std::string backupRoot();  // <storage>/FMRRE/BACKUPS/<serial> (restore also lists <storage>/TWRP/BACKUPS/<serial>)
 std::vector<Set> list();
 uint64_t estimateSize(const std::string& mountPoint);
 bool create(const Options& o, Task& t);

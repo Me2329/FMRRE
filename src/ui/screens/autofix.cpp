@@ -56,7 +56,7 @@ public:
         std::string sub = prompt_ ? "Android couldn't start and asked for a factory reset. Try the fixes below first - nothing is erased unless you "
                                     "choose Format Data."
                           : failed ? "Here is what was found, and what will be done about it."
-                                   : "If the phone still doesn't start, tell TWRP v2 below - many phones keep no log of a failed boot.";
+                                   : "If the phone still doesn't start, tell FMRRE below - many phones keep no log of a failed boot.";
         float tw = w - ui.dp(84);
         // Built from parts so each one is translated ("{*}" patterns don't translate what they capture).
         std::string head = failed ? i18n::tr("The last boot failed") + (plan_.cause.empty() ? std::string() : ": " + i18n::tr(plan_.cause))

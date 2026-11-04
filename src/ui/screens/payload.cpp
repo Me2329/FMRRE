@@ -26,7 +26,7 @@ std::string outDirFor(const std::string& zip) {
     std::string b = util::basename(zip);
     for (auto ext : {".zip", ".bin"})
         if (util::endsWith(util::toLower(b), ext)) b = b.substr(0, b.size() - 4);
-    return Partitions::get().storagePath() + "/TWRP/payload/" + b;
+    return Partitions::get().appDir() + "/payload/" + b;
 }
 
 class PayloadExtractScreen : public Screen {

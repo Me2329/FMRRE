@@ -51,7 +51,7 @@ std::string decodePmsg(const std::string& raw);
 // /data that won't decrypt or mount). The reason is kept in /tmp until the next reboot.
 void setAndroidReason(const std::string& reason);
 std::string androidReason();
-// Copy the logs to <storage>/TWRP/logs/<date>/; returns the folder ("" on failure).
+// Copy the logs to <storage>/FMRRE/logs/<date>/; returns the folder ("" on failure).
 std::string saveLogs(const Report& r);
 
 }  // namespace tw::rescue

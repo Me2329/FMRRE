@@ -1,12 +1,12 @@
-// TWRP v2 - a modern Android custom recovery.
+// FMRRE - a modern Android custom recovery.
 //
 // On a device this binary is started by init from the recovery ramdisk
 // (service recovery /system/bin/recovery). It draws directly to DRM/fbdev,
 // reads /dev/input, and performs flashing, backups and wipes itself.
 //
 // Desktop development:
-//   twrpv2 --sim                 X11 window (if built with X11) on a sandboxed fake device
-//   twrpv2 --sim --headless --script demo.txt --out shots/
+//   fmrre --sim                 X11 window (if built with X11) on a sandboxed fake device
+//   fmrre --sim --headless --script demo.txt --out shots/
 
 #include <csignal>
 #include <cstdio>
@@ -35,14 +35,14 @@
 using namespace tw;
 
 static void usage() {
-    printf("TWRP v2 recovery\n"
+    printf("FMRRE recovery\n"
            "  --sim               run against a sandboxed fake device (desktop)\n"
            "  --sim-root DIR      sandbox directory (default ./sim_root)\n"
            "  --size WxH          simulator resolution (default 540x1170)\n"
            "  --headless          no window; use with --script\n"
            "  --script FILE       automation: tap X Y | swipe X1 Y1 X2 Y2 MS | wait MS | key NAME | text STR | shot FILE\n"
            "  --out DIR           where 'shot' files are written\n"
-           "  twrp <command>      command line mode (also when run as 'twrp'): twrp help\n");
+           "  fmrre <command>     command line mode (also when run as 'fmrre'; 'twrp' works too): fmrre help\n");
 }
 
 static Key keyByName(const std::string& n) {
@@ -118,9 +118,15 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             std::string name, arg;
             ss >> name;
             std::getline(ss, arg);
-            arg = pathcheck::resolve(util::trim(arg));
+            std::string raw = util::trim(arg);
+            arg = pathcheck::resolve(raw);
             std::unique_ptr<Screen> sc;
-            if (name == "payload") sc = makePayloadScreen(arg);
+            if (name == "install") {
+                if (!raw.empty()) queueZip(arg);
+                sc = makeInstallScreen();
+            } else if (name == "monitor") sc = makeMonitorScreen();
+            else if (name == "terminal") sc = makeTerminalScreen(raw);  // a command, not a path
+            else if (name == "payload") sc = makePayloadScreen(arg);
             else if (name == "gsi") sc = makeGsiScreen(arg);
             else if (name == "super") sc = makeSuperScreen();
             else if (name == "flash") sc = makeFlashImageScreen(arg);
@@ -130,6 +136,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "fastboot") sc = makeFastbootScreen(arg != "--no-start");
             else if (name == "rescue") sc = makeRescueScreen();
             else if (name == "autofix") sc = makeAutoRepairScreen(arg == "--auto", arg == "--prompt");
+            else if (name == "manual") sc = makeManualFlashScreen(arg);
             else if (name == "settings") sc = makeSettingsScreen();
             else if (name == "backup") sc = makeBackupScreen();
             else if (name == "restore") sc = makeRestoreScreen();
@@ -154,14 +161,18 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
 }
 
 int main(int argc, char** argv) {
-    bool sim = false, headless = false, cli = util::basename(argv[0]) == "twrp";
+    // Run as `fmrre` / `twrp` (the links next to /system/bin/recovery): the command line. The desktop build is called
+    // fmrre too, so there a leading option (--sim ...) means the recovery itself.
+    std::string self = util::basename(argv[0]);
+    bool sim = false, headless = false;
+    bool cli = self == "twrp" || (self == "fmrre" && !(argc > 1 && util::startsWith(argv[1], "--")));
     std::string simRoot = "sim_root", script, outDir = "shots";
     std::vector<std::string> cliArgs;
     int sw = 540, sh = 1170;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (cli) { cliArgs.push_back(a); continue; }
-        if (a == "twrp") { cli = true; continue; }
+        if (a == "fmrre" || a == "twrp") { cli = true; continue; }
         auto next = [&]() { return i + 1 < argc ? std::string(argv[++i]) : std::string(); };
         if (a == "--sim") sim = true;
         else if (a == "--sim-root") simRoot = next();
@@ -180,15 +191,15 @@ int main(int argc, char** argv) {
         util::mkdirs(simRoot);
         if (realpath(simRoot.c_str(), real)) simRoot = real;
         sim::ensureRoot(simRoot);
-        log::init(simRoot + (cli ? "/tmp/twrp-cli.log" : "/tmp/recovery.log"));
+        log::init(simRoot + (cli ? "/tmp/fmrre-cli.log" : "/tmp/recovery.log"));
     } else if (cli) {
-        log::init("/tmp/twrp-cli.log");
+        log::init("/tmp/fmrre-cli.log");
     } else {
         util::mkdirs("/tmp");
         log::init("/tmp/recovery.log");
         setenv("PATH", "/system/bin:/sbin:/bin:/vendor/bin:/system/xbin", 1);
     }
-    LOGI("TWRP v2 starting (%s, %s build, cpu %s)", sim ? "simulator" : "device", device::buildAbi(), device::machine().c_str());
+    LOGI("FMRRE starting (%s, %s build, cpu %s)", sim ? "simulator" : "device", device::buildAbi(), device::machine().c_str());
     if (!device::abiAdvice().empty()) LOGW("%s", device::abiAdvice().c_str());
     device::init(sim, simRoot);
     Partitions::get().load();
@@ -196,9 +207,13 @@ int main(int argc, char** argv) {
     Partitions::get().refresh();
 
     // Settings live next to backups (like TWRP's .twrps) so they survive reboots.
-    std::string cfgDir = Partitions::get().storagePath() + "/TWRP";
+    std::string cfgDir = Partitions::get().appDir();
     if (!util::mkdirs(cfgDir)) cfgDir = device::path("/tmp");
-    Settings::get().load(cfgDir + "/.twrpv2.conf");
+    // Renamed from TWRP v2: take over its settings and flash history once.
+    std::string legacy = Partitions::get().legacyDir();
+    if (!util::exists(cfgDir + "/.fmrre.conf") && util::exists(legacy + "/.twrpv2.conf")) util::copyFile(legacy + "/.twrpv2.conf", cfgDir + "/.fmrre.conf");
+    if (!util::exists(cfgDir + "/history.txt") && util::exists(legacy + "/history.txt")) util::copyFile(legacy + "/history.txt", cfgDir + "/history.txt");
+    Settings::get().load(cfgDir + "/.fmrre.conf");
     if (cli) {
         int rc = ors::cliMain(cliArgs);
         Task::get().join();

@@ -21,16 +21,16 @@ jobs:
       - name: Simulator build + self-tests + UI tour
         run: |
           scripts/build.sh sim
-          build-host/twrpv2_selftest
-          out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
+          build-host/fmrre_selftest
+          out/sim/fmrre --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
       - name: Installer tests (fake fastboot / adb / heimdall / magiskboot)
         run: tests/install_test.sh
       - name: A/B OTA tests (payload.bin built with real bzip2 / xz, verity, refusals)
         run: |
-          python3 tests/payload_test.py out/sim/twrpv2
-          out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/payload.txt --out shots
+          python3 tests/payload_test.py out/sim/fmrre
+          out/sim/fmrre --sim --sim-root /tmp/sim --headless --script tools/scripts/payload.txt --out shots
       - name: fastbootd tests (the real fastboot client over TCP)
-        run: tests/fastboot_test.sh out/sim/twrpv2
+        run: tests/fastboot_test.sh out/sim/fmrre
       - name: PC rescue tests (fake adb / fastboot / heimdall, the window under Xvfb)
         run: tests/pc_rescue_test.sh
       - uses: actions/upload-artifact@v4
@@ -58,12 +58,12 @@ jobs:
       - name: Build (static, with self-tests)
         run: TW_SELFTEST=1 scripts/build.sh ${{ matrix.arch }}
       - name: Host build for the reference screenshot
-        run: cmake -S . -B build-host -DTW_X11=OFF -DCMAKE_BUILD_TYPE=Release && cmake --build build-host -j"$(nproc)" --target twrpv2
+        run: cmake -S . -B build-host -DTW_X11=OFF -DCMAKE_BUILD_TYPE=Release && cmake --build build-host -j"$(nproc)" --target fmrre
       - name: Run on an emulated CPU (self-tests, UI, CLI + GSI flash)
         run: scripts/test_archs.sh ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
-          name: twrpv2-${{ matrix.arch }}
+          name: fmrre-${{ matrix.arch }}
           path: |
             out/${{ matrix.arch }}/recovery
             out/${{ matrix.arch }}/ABI
@@ -76,12 +76,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: twrpv2-*
+          pattern: fmrre-*
           path: artifacts
       - name: Assemble
         run: |
           mkdir -p kit/out
-          for d in artifacts/twrpv2-*; do a="${d#artifacts/twrpv2-}"; mkdir -p "kit/out/$a"; cp "$d"/* "kit/out/$a/"; done
+          for d in artifacts/fmrre-*; do a="${d#artifacts/fmrre-}"; mkdir -p "kit/out/$a"; cp "$d"/* "kit/out/$a/"; done
           mkdir -p kit/scripts kit/tools kit/device
           cp scripts/install.sh scripts/install.ps1 scripts/make_recovery_img.sh scripts/try_on_device.sh scripts/build.sh kit/scripts/
           cp tools/odin_pack.py tools/elf_abi.py kit/tools/
@@ -90,5 +90,5 @@ jobs:
           find kit -type f | sort
       - uses: actions/upload-artifact@v4
         with:
-          name: twrpv2-installer-kit
+          name: fmrre-installer-kit
           path: kit/

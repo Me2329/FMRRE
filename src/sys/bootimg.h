@@ -47,8 +47,8 @@ bool setModuleDisabled(const Module& m, bool disabled);
 bool setModuleRemove(const Module& m, bool remove);
 int disableAllModules();  // the classic "bootloop after installing a module" fix
 
-std::string backupDir();  // <storage>/TWRP/root
-std::string stockDir();   // <storage>/TWRP/stock  (recovery / boot saved before installing TWRP v2)
+std::string backupDir();  // <storage>/FMRRE/root
+std::string stockDir();   // <storage>/FMRRE/stock  (recovery / boot saved before installing FMRRE)
 
 // Where a recovery image belongs: recovery(_slot) if the phone has that partition, vendor_boot for
 // vendor_boot images, otherwise boot (A/B phones that keep the recovery ramdisk in boot).
@@ -59,7 +59,7 @@ std::vector<std::string> stockBackups();
 // Same, into any folder (skipped if an identical copy is already there).
 bool backupPartition(const RootTarget& t, const std::string& dir, Task& task, std::string* outFile = nullptr);
 std::vector<std::string> imagesIn(const std::string& dir);
-// Back up the target, flash `image`, verify. Used by the UI and `twrp recovery <image>`.
+// Back up the target, flash `image`, verify. Used by the UI and `fmrre recovery <image>`.
 bool installRecovery(const std::string& image, Task& task);
 
 }  // namespace bootimg

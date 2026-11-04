@@ -59,7 +59,7 @@ public:
         std::vector<A> acts = {
             {Icon::Install, "Install root from zip or APK", "Magisk APK, KernelSU / APatch zip - stock " + target_.name + " is backed up first", 1, th.accent},
             {Icon::Bolt, "Flash a patched image", "magisk_patched-*.img / kernelsu / apatch -> " + target_.name + device::info().slot, 2, th.warn},
-            {Icon::Backup, "Back up stock " + target_.name, backups_.empty() ? "No stock backup yet" : std::to_string(backups_.size()) + " backup(s) in TWRP/root", 3, th.info},
+            {Icon::Backup, "Back up stock " + target_.name, backups_.empty() ? "No stock backup yet" : std::to_string(backups_.size()) + " backup(s) in FMRRE/root", 3, th.info},
             {Icon::Restore, "Unroot: restore stock " + target_.name, "Flash a saved stock image back", 4, th.danger},
         };
         Rect ac(x, y, w, ui.dp(72) * acts.size() + ui.dp(8));
@@ -108,7 +108,7 @@ public:
             }
             y += mc.h + ui.dp(12);
         }
-        ui.textBlock(x, y, w, "TWRP v2 doesn't ship its own su: it installs and manages the proven root solutions above. "
+        ui.textBlock(x, y, w, "FMRRE doesn't ship its own su: it installs and manages the proven root solutions above. "
                               "A stock copy of " + target_.name + " is always kept so you can unroot or recover from a bad patch.",
                      ui.dp(12), th.textFaint);
         y += ui.dp(60);

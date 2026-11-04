@@ -11,8 +11,8 @@ class Task;
 //    updaters write for TWRP: install, wipe, backup, restore, mount, cmd, reboot ...
 //  - AOSP recovery arguments (/cache/recovery/command and the bootloader message in
 //    /misc): --update_package=, --wipe_data, --wipe_cache, --sideload
-//  - the `twrp` command line tool (adb shell twrp install /sdcard/rom.zip).
-// TWRP v2 extensions: flash <image> <partition>, gsi <image>, lp resize|delete,
+//  - the `fmrre` command line tool (adb shell fmrre install /sdcard/rom.zip; `twrp` is an alias).
+// FMRRE extensions: flash <image> <partition>, gsi <image>, lp resize|delete,
 // vbmeta disable|enable, sleep <s>.
 namespace ors {
 
@@ -30,7 +30,7 @@ std::vector<std::string> fromAospArgs(const std::vector<std::string>& args);
 bool run(const std::vector<std::string>& lines, Task& t);
 std::string help();
 
-// ---- twrp command line -------------------------------------------------
+// ---- fmrre command line -------------------------------------------------
 // The running recovery UI picks up queued commands (and shows their progress);
 // without a UI the commands run in the calling process.
 int cliMain(const std::vector<std::string>& args);

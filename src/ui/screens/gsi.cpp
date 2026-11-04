@@ -194,7 +194,7 @@ public:
         y += oc.h + ui.dp(12);
         ui.textBlock(x + ui.dp(4), y, w - ui.dp(8),
                      "Bootloader must be unlocked. If the GSI bootloops on an encrypted phone, use Wipe > Format Data. "
-                     "Super metadata is backed up to TWRP/super before any change.",
+                     "Super metadata is backed up to FMRRE/super before any change.",
                      ui.dp(12), th.textFaint);
         y += ui.dp(56);
         ui.endScroll(y);

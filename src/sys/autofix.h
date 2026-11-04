@@ -33,7 +33,7 @@ struct Step {
     bool recommended = false;  // planned for this run
     bool triedBefore = false;  // an earlier auto repair already did it and the phone still failed
     std::string file;          // backup to restore, when the step uses one
-    std::string note;          // a warning to show with it ("This also removes TWRP v2 from boot.")
+    std::string note;          // a warning to show with it ("This also removes FMRRE from boot.")
 };
 
 struct Plan {
@@ -51,7 +51,7 @@ struct Plan {
 // userSaysBootFails: the phone doesn't start but left no log (many phones keep none) - plan the
 // usual bootloop fixes anyway.
 Plan diagnose(bool userSaysBootFails = false);
-// The previous boot clearly failed? Computed once per run of TWRP v2; cheap afterwards.
+// The previous boot clearly failed? Computed once per run of FMRRE; cheap afterwards.
 bool lastBootFailed();
 
 struct Options {

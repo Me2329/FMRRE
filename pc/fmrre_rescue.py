@@ -1,42 +1,41 @@
 #!/usr/bin/env python3
-"""TWRP v2 PC rescue - fix a phone that doesn't start, from a computer.
+"""FMRRE PC rescue - fix a phone that doesn't start, from a computer.
 
 For a phone that bootloops, stops at a "verification failed" / vbmeta error, or can't get into
 recovery any more. Plug it in, in whatever mode it is in - Android, recovery, sideload, the
 bootloader (fastboot), fastbootd or Samsung Download mode. The tool tells you which phone it is
 and whether its bootloader is unlocked, works out what is wrong and fixes it:
 
-  - starts TWRP v2 from the computer (fastboot boot: nothing is written) and runs its Auto repair,
+  - starts FMRRE from the computer (fastboot boot: nothing is written) and runs its Auto repair,
     which checks the logs, boot images, vbmeta, both slots and /data from the inside
   - goes back to the other A/B slot when this one can't boot (rollback after a bad update)
   - flashes vbmeta with verification disabled (after a GSI or a custom image)
   - cancels a stuck Virtual A/B update
   - flashes the stock images you give it (fastboot, or Heimdall for Samsung - images packed as .lz4
-    in a Samsung AP .tar.md5 are unpacked for you) and installs TWRP v2 in Download mode
+    in a Samsung AP .tar.md5 are unpacked for you) and installs FMRRE in Download mode
   - wipes data, only after you type ERASE
 
 Anything that writes to the phone needs an UNLOCKED bootloader ("OEM unlocked"). On a locked phone
 it explains how to unlock it, and which official tool restores the firmware instead.
 
-  twrpv2_rescue.py                    a window (or the status, on a computer without tkinter)
-  twrpv2_rescue.py status [--json]    which phone, which mode, bootloader locked or not
-  twrpv2_rescue.py diagnose           the status and what is wrong
-  twrpv2_rescue.py fix [--recovery twrpv2-recovery.img] [--ap AP.tar.md5] [--yes]
+  fmrre_rescue.py                    a window (or the status, on a computer without tkinter)
+  fmrre_rescue.py status [--json]    which phone, which mode, bootloader locked or not
+  fmrre_rescue.py diagnose           the status and what is wrong
+  fmrre_rescue.py fix [--recovery fmrre-recovery.img] [--ap AP.tar.md5] [--yes]
                                       "fix it for me" (asks before every change)
-  twrpv2_rescue.py boot-twrp IMG      start TWRP v2 from RAM (fastboot boot)
-  twrpv2_rescue.py autofix            run TWRP v2's Auto repair over adb
-  twrpv2_rescue.py switch-slot | cancel-update | disable-vbmeta [--vbmeta STOCK.img] [--both-slots]
-  twrpv2_rescue.py flash PARTITION IMAGE
-  twrpv2_rescue.py samsung-twrp IMG   Download mode: TWRP v2 to RECOVERY + vbmeta disabled
-  twrpv2_rescue.py samsung-stock AP.tar.md5 [--parts boot,vbmeta,...]
-  twrpv2_rescue.py wipe-data          factory reset (type ERASE to confirm)
-  twrpv2_rescue.py reboot [system|recovery|bootloader|fastboot|download]
-  twrpv2_rescue.py logs [DIR]         save the phone's logs for a bug report
+  fmrre_rescue.py boot-fmrre IMG     start FMRRE from RAM (fastboot boot)
+  fmrre_rescue.py autofix            run FMRRE's Auto repair over adb
+  fmrre_rescue.py switch-slot | cancel-update | disable-vbmeta [--vbmeta STOCK.img] [--both-slots]
+  fmrre_rescue.py flash PARTITION IMAGE
+  fmrre_rescue.py samsung-fmrre IMG  Download mode: FMRRE to RECOVERY + vbmeta disabled
+  fmrre_rescue.py samsung-stock AP.tar.md5 [--parts boot,vbmeta,...]
+  fmrre_rescue.py wipe-data          factory reset (type ERASE to confirm)
+  fmrre_rescue.py reboot [system|recovery|bootloader|fastboot|download]
+  fmrre_rescue.py logs [DIR]         save the phone's logs for a bug report
 
-Common options: --lang en|ro (default: the computer's language), --serial SERIAL, --dry-run (show the commands,
-change nothing), --yes,
---unlocked (you checked on the phone that the bootloader is unlocked - needed when the phone
-doesn't say, e.g. Samsung Download mode), --workdir DIR.
+Common options: --lang en|ro (default: the computer's language), --serial SERIAL, --dry-run (show the
+commands, change nothing), --yes, --unlocked (you checked on the phone that the bootloader is unlocked -
+needed when the phone doesn't say, e.g. Samsung Download mode), --workdir DIR.
 
 Needs Android platform-tools (adb, fastboot) and, for Samsung, Heimdall: in PATH, next to this
 script (or in a platform-tools folder beside it), or named by ADB= FASTBOOT= HEIMDALL=. Python 3.7+,
@@ -58,7 +57,7 @@ import threading
 import time
 
 VERSION = "2.0.0"
-TWRP_CLI = ["/system/bin/recovery", "twrp"]  # TWRP v2's command line tool, over adb shell
+FMRRE_CLI = ["/system/bin/recovery", "fmrre"]  # FMRRE's command line tool, over adb shell
 
 PLATFORM_TOOLS = "https://developer.android.com/tools/releases/platform-tools"
 INSTALL_HINT = {
@@ -132,13 +131,13 @@ MODE_TEXT = {
 SAMSUNG_STOCK_PARTS = ("boot", "init_boot", "vendor_boot", "recovery", "vbmeta", "dtbo")
 
 # ---------------------------------------------------------------------------------------------------
-# Languages: English in the code, Romanian from twrpv2_rescue_ro.py (next to this file). Whole messages are
+# Languages: English in the code, Romanian from fmrre_rescue_ro.py (next to this file). Whole messages are
 # looked up when they are shown; "{}" in a key matches a changing part, which is itself translated if known.
 
 LANG = "en"
 try:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from twrpv2_rescue_ro import RO
+    from fmrre_rescue_ro import RO
 except ImportError:  # the dictionary wasn't copied along: English only
     RO = {}
 finally:
@@ -147,7 +146,7 @@ _PATTERNS = []
 
 
 def detect_language():
-    for v in (os.environ.get("TWRPV2_LANG"), os.environ.get("LC_ALL"), os.environ.get("LC_MESSAGES"), os.environ.get("LANG")):
+    for v in (os.environ.get("FMRRE_LANG"), os.environ.get("LC_ALL"), os.environ.get("LC_MESSAGES"), os.environ.get("LANG")):
         if v:
             return "ro" if v.lower().startswith("ro") else "en"
     try:
@@ -225,7 +224,7 @@ class Runner:
         self.log = log or (lambda s: print(T(s), flush=True))
         self.dry = dry
         self.serial = serial or os.environ.get("ANDROID_SERIAL") or None
-        self.wait_s = float(os.environ.get("TWRPV2_WAIT", "120")) if wait is None else wait
+        self.wait_s = float(os.environ.get("FMRRE_WAIT", "120")) if wait is None else wait
         self.tools = {"adb": find_tool("adb", "ADB"), "fastboot": find_tool("fastboot", "FASTBOOT"),
                       "heimdall": find_tool("heimdall", "HEIMDALL")}
         self.last_output = ""
@@ -317,7 +316,8 @@ class Phone:
         self.locked = None       # True / False / None = the phone doesn't say
         self.lock_how = ""
         self.unlock_allowed = None  # Developer options > OEM unlocking
-        self.twrpv2 = False      # TWRP v2 is the running recovery
+        self.fmrre = False      # FMRRE is the running recovery
+        self.cli = FMRRE_CLI      # how to call its command line tool (builds from before the rename: "twrp")
         self.notes = []
 
     @property
@@ -337,11 +337,11 @@ class Phone:
         return {"mode": self.mode, "mode_text": MODE_TEXT.get(self.mode, self.mode), "serial": self.serial,
                 "manufacturer": self.manufacturer, "model": self.model, "device": self.device, "android": self.android,
                 "slot": self.slot, "locked": self.locked, "lock_how": self.lock_how, "unlock_allowed": self.unlock_allowed,
-                "twrpv2": self.twrpv2, "notes": self.notes}
+                "fmrre": self.fmrre, "notes": self.notes}
 
 
 def cache_path():
-    return os.path.join(os.path.expanduser("~"), ".twrpv2_rescue.json")
+    return os.path.join(os.path.expanduser("~"), ".fmrre_rescue.json")
 
 
 def load_cache():
@@ -481,8 +481,13 @@ def detect(r):
                 if p.get("ro.boot.warranty_bit") == "1":
                     ph.notes.append("Samsung Knox warranty bit: tripped (0x1)")
                 if ph.mode == "recovery":
-                    rc, o = r.call("adb", "shell", *TWRP_CLI, "help", timeout=25)
-                    ph.twrpv2 = "TWRP v2" in o
+                    rc, o = r.call("adb", "shell", *FMRRE_CLI, "help", timeout=25)
+                    ph.fmrre = "FMRRE" in o
+                    if not ph.fmrre:  # a build from before the rename only knows "twrp" (with "fmrre" it would start its UI)
+                        rc, o = r.call("adb", "shell", "/system/bin/recovery", "twrp", "help", timeout=25)
+                        ph.fmrre = "TWRP v2" in o
+                        if ph.fmrre:
+                            ph.cli = ["/system/bin/recovery", "twrp"]
             save_cache(ph)
     return ph
 
@@ -520,7 +525,7 @@ def describe(ph):
     if ph.slot:
         rows.append(("Slot", ph.slot.upper() + slot_health(ph)))
     if ph.mode == "recovery":
-        rows.append(("Recovery", "TWRP v2" if ph.twrpv2 else "not TWRP v2 (stock or another recovery)"))
+        rows.append(("Recovery", "FMRRE" if ph.fmrre else "not FMRRE (stock or another recovery)"))
     word, _, _ = lock_verdict(ph)
     if ph.mode != "none":
         rows.append(("Bootloader", word + ("  (%s)" % ph.lock_how if ph.lock_how and ph.locked is not None else "")))
@@ -610,7 +615,7 @@ def diagnose(r, ph, image=None):
                              "switch_slot"))
         elif ph.slot and v.get("slot-unbootable:a") == "yes" and v.get("slot-unbootable:b") == "yes":
             f.append(Finding(2, "Both slots are marked unbootable",
-                             "Start TWRP v2 from this computer to look closer, or reinstall the firmware.", "boot_twrp"))
+                             "Start FMRRE from this computer to look closer, or reinstall the firmware.", "boot_fmrre"))
         snap = v.get("snapshot-update-status", "")
         if snap == "merging":
             f.append(Finding(1, "A system update is still being merged",
@@ -628,31 +633,31 @@ def diagnose(r, ph, image=None):
         if v.get("battery-soc-ok") == "no" or 0 < mv < 3500:
             f.append(Finding(1, "The battery is low", "Charge it for half an hour before flashing anything."))
         if image and image_kind(image) == "boot":
-            f.append(Finding(0, "TWRP v2 can be started from this computer",
+            f.append(Finding(0, "FMRRE can be started from this computer",
                              "'fastboot boot' runs it from RAM - nothing is written - and its Auto repair checks the logs, boot images, "
-                             "vbmeta, both slots and /data from the inside.", "boot_twrp"))
+                             "vbmeta, both slots and /data from the inside.", "boot_fmrre"))
         elif image:
             f.append(Finding(1, "This image can't be started with fastboot boot",
                              "%s isn't a boot/recovery image (vendor_boot images can only be flashed)." % os.path.basename(image)))
         else:
-            f.append(Finding(0, "For the most thorough check: a TWRP v2 image for this phone",
-                             "With --recovery twrpv2-recovery.img (built from this phone's own recovery or boot image) it is started from "
+            f.append(Finding(0, "For the most thorough check: an FMRRE image for this phone",
+                             "With --recovery fmrre-recovery.img (built from this phone's own recovery or boot image) it is started from "
                              "RAM and Auto repair looks at the phone from the inside. Without one: the recovery installed on the phone "
                              "is tried.", "reboot_recovery"))
     elif m == "download":
         f.append(Finding(0, "Samsung Download mode",
-                         "Install TWRP v2 (recovery + vbmeta with verification disabled) and let its Auto repair fix the phone, or flash "
-                         "the stock boot / vbmeta / recovery from your firmware's AP file to undo a bad change.", "samsung_twrp"))
+                         "Install FMRRE (recovery + vbmeta with verification disabled) and let its Auto repair fix the phone, or flash "
+                         "the stock boot / vbmeta / recovery from your firmware's AP file to undo a bad change.", "samsung_fmrre"))
     elif m == "android":
-        f.append(Finding(0, "Android starts", "When it misbehaves: the tool can reboot to recovery and run TWRP v2's Auto repair "
-                         "(when TWRP v2 is the installed recovery).", "reboot_recovery"))
+        f.append(Finding(0, "Android starts", "When it misbehaves: the tool can reboot to recovery and run FMRRE's Auto repair "
+                         "(when FMRRE is the installed recovery).", "reboot_recovery"))
     elif m == "recovery":
-        if ph.twrpv2:
-            rc, out = r.call("adb", "shell", *TWRP_CLI, "autofix", "--dry-run", timeout=180)
+        if ph.fmrre:
+            rc, out = r.call("adb", "shell", *ph.cli, "autofix", "--dry-run", timeout=180)
             lines = [l.rstrip() for l in out.splitlines() if l.strip() and not l.startswith(">")]
             planned = [l[4:].strip() for l in lines if l.startswith("[x]")]
             bad = [l[5:].strip() for l in lines if l.startswith("[!!]")]
-            head = lines[0] if lines else "TWRP v2 Auto repair"
+            head = lines[0] if lines else "FMRRE Auto repair"
             detail = []
             if bad:
                 detail.append("Problems: " + "; ".join(bad))
@@ -661,9 +666,9 @@ def diagnose(r, ph, image=None):
             detail += [l[len("Advice: "):] for l in lines if l.startswith("Advice: ")]
             f.append(Finding(2 if planned or bad else 0, head, "\n".join(detail) or "Nothing to repair.", "autofix" if planned else None))
         else:
-            f.append(Finding(1, "A recovery other than TWRP v2 is running",
+            f.append(Finding(1, "A recovery other than FMRRE is running",
                              "A stock recovery can reinstall the official system without unlocking: 'Apply update from ADB', then 'adb "
-                             "sideload <official OTA>.zip'. To use TWRP v2: reboot to the bootloader and start it from here.",
+                             "sideload <official OTA>.zip'. To use FMRRE: reboot to the bootloader and start it from here.",
                              "reboot_bootloader"))
     elif m == "sideload":
         f.append(Finding(0, "Waiting for adb sideload", "'adb sideload <rom-or-ota>.zip' installs it; cancel sideload on the phone to get back."))
@@ -679,7 +684,7 @@ def vbmeta_disabled(size=4096):
     h[0:4] = b"AVB0"
     struct.pack_into(">II", h, 4, 1, 0)
     struct.pack_into(">I", h, 120, 3)
-    rel = b"avbtool 1.3.0 (twrpv2)"
+    rel = b"avbtool 1.3.0 (fmrre)"
     h[128:128 + len(rel)] = rel
     return bytes(h) + bytes(size - len(h))
 
@@ -834,7 +839,7 @@ class Options:
     def __init__(self, **kw):
         self.yes = False
         self.unlocked = False     # the user checked: bootloader unlocked (when the phone doesn't say)
-        self.recovery = None      # TWRP v2 image
+        self.recovery = None      # FMRRE image
         self.ap = None            # Samsung AP tar
         self.vbmeta = None        # stock vbmeta.img
         self.both_slots = False
@@ -882,7 +887,7 @@ class Rescue:
 
     def workdir(self):
         if not self.o.workdir:
-            self.o.workdir = tempfile.mkdtemp(prefix="twrpv2-rescue-")
+            self.o.workdir = tempfile.mkdtemp(prefix="fmrre-rescue-")
         os.makedirs(self.o.workdir, exist_ok=True)
         return self.o.workdir
 
@@ -991,38 +996,38 @@ class Rescue:
                           "black for recovery).")
         raise Refused(HOW_TO_CONNECT)
 
-    def boot_twrp(self, image):
+    def boot_fmrre(self, image):
         kind = image_kind(image)
         if kind != "boot":
             raise Refused("%s can't be started with 'fastboot boot' (%s)." %
                           (os.path.basename(image), "a vendor_boot image" if kind else "not a boot/recovery image"))
-        self.need_unlocked("starting TWRP v2")
+        self.need_unlocked("starting FMRRE")
         self.to_bootloader()
-        if not self.ask("Start TWRP v2 from this computer (fastboot boot - nothing is written)?"):
+        if not self.ask("Start FMRRE from this computer (fastboot boot - nothing is written)?"):
             return False
         if not self.r.write("fastboot", "boot", image):
             raise Refused("The bootloader refused to start the image. On some phones 'fastboot boot' is disabled - flash it instead "
                           "(scripts/install.sh --permanent).")
-        return self.wait_twrp()
+        return self.wait_fmrre()
 
-    def wait_twrp(self, timeout=None):
+    def wait_fmrre(self, timeout=None):
         if not self.r.wait_for("recovery", timeout):
-            raise Refused("TWRP v2 didn't show up on adb. If its screen is on the phone, check the cable / USB driver.")
+            raise Refused("FMRRE didn't show up on adb. If its screen is on the phone, check the cable / USB driver.")
         self.refresh()
-        if not self.phone.twrpv2 and not self.r.dry:
-            raise Refused("A recovery started, but it isn't TWRP v2.")
-        self.log("   TWRP v2 is running.")
+        if not self.phone.fmrre and not self.r.dry:
+            raise Refused("A recovery started, but it isn't FMRRE.")
+        self.log("   FMRRE is running.")
         return True
 
     def autofix(self):
         if self.r.dry and self.phone.mode != "recovery":
-            self.log("   (dry run: TWRP v2 would now check the phone and repair it)")
+            self.log("   (dry run: FMRRE would now check the phone and repair it)")
             return True
         self.need_mode("recovery")
-        if not self.phone.twrpv2:
-            raise Refused("The running recovery isn't TWRP v2.")
-        self.log("TWRP v2 Auto repair - what it found:")
-        rc, out = self.r.call("adb", "shell", *TWRP_CLI, "autofix", "--dry-run", timeout=180)
+        if not self.phone.fmrre:
+            raise Refused("The running recovery isn't FMRRE.")
+        self.log("FMRRE Auto repair - what it found:")
+        rc, out = self.r.call("adb", "shell", *self.phone.cli, "autofix", "--dry-run", timeout=180)
         for line in out.splitlines():
             if line.strip() and not line.startswith(">"):
                 self.log("   " + line.rstrip())
@@ -1033,18 +1038,18 @@ class Rescue:
                 raise Refused("Not allowing Format Data (ERASE wasn't typed).")
             args.append("--allow-format-data")
         if not planned and not self.o.allow_wipe:
-            self.log("   Nothing for Auto repair to fix. Details: 'twrpv2_rescue.py logs' saves the phone's logs.")
+            self.log("   Nothing for Auto repair to fix. Details: 'fmrre_rescue.py logs' saves the phone's logs.")
             return False
         if self.o.reboot:
             args.append("--reboot")
         if not self.ask("Run these repairs on the phone and restart it?" if self.o.reboot else "Run these repairs on the phone?"):
             return False
-        ok = self.r.write("adb", "shell", *TWRP_CLI, *args)
+        ok = self.r.write("adb", "shell", *self.phone.cli, *args)
         return ok or "Repairs done" in self.r.last_output  # the reboot at the end drops the connection
 
-    def samsung_twrp(self, image):
+    def samsung_fmrre(self, image):
         self.need_mode("download")
-        self.need_unlocked("installing TWRP v2")
+        self.need_unlocked("installing FMRRE")
         if image_kind(image) != "boot":
             raise Refused("Samsung needs a recovery.img (build it from the stock recovery.img in your firmware's AP file: "
                           "scripts/install.sh --build-from recovery.img).")
@@ -1055,13 +1060,13 @@ class Rescue:
                     f.write(vbmeta_patch(s.read()))
             else:
                 f.write(vbmeta_disabled())
-        if not self.ask("Flash TWRP v2 to RECOVERY and a vbmeta with verification disabled to VBMETA?"):
+        if not self.ask("Flash FMRRE to RECOVERY and a vbmeta with verification disabled to VBMETA?"):
             return False
         if not self.r.write("heimdall", "flash", "--RECOVERY", image, "--VBMETA", vb, "--no-reboot"):
             raise Refused("Heimdall failed - see above. (Odin on Windows: scripts/install.sh --odin-only builds the AP package.)")
-        self.log("Flashed. Now start STRAIGHT into recovery, or stock Android replaces TWRP v2 on its first boot:\n"
+        self.log("Flashed. Now start STRAIGHT into recovery, or stock Android replaces FMRRE on its first boot:\n"
                  "   1. hold Volume Down + Power until the screen goes black\n"
-                 "   2. at once switch to Volume Up + Power (+ Bixby on older models) and hold until TWRP v2 appears")
+                 "   2. at once switch to Volume Up + Power (+ Bixby on older models) and hold until FMRRE appears")
         return True
 
     def samsung_stock(self, ap):
@@ -1091,8 +1096,8 @@ class Rescue:
             with open(p, "w") as f:
                 f.write(self.r.call("fastboot", "getvar", "all", timeout=45)[1])
             saved.append(p)
-        elif ph.mode == "recovery" and ph.twrpv2:
-            rc, out = self.r.call("adb", "shell", *TWRP_CLI, "rescue", "save", timeout=120)
+        elif ph.mode == "recovery" and ph.fmrre:
+            rc, out = self.r.call("adb", "shell", *ph.cli, "rescue", "save", timeout=120)
             m = re.search(r"Logs saved to (\S+)", out)
             with open(os.path.join(dest, "rescue.txt"), "w") as f:
                 f.write(out)
@@ -1125,32 +1130,32 @@ class Rescue:
             raise Refused(diagnose(self.r, ph)[0].detail if m in ("unauthorized", "offline") else
                           "The phone is waiting in %s - cancel it on the phone first." % MODE_TEXT[m])
         self.need_unlocked("repairing")
-        if m == "recovery" and ph.twrpv2:
+        if m == "recovery" and ph.fmrre:
             return self.autofix()
         if m == "android":
-            if not self.ask("Restart to recovery and run TWRP v2's Auto repair there?"):
+            if not self.ask("Restart to recovery and run FMRRE's Auto repair there?"):
                 return False
             if not self.r.write("adb", "reboot", "recovery"):
                 raise Refused("adb couldn't restart the phone.")
-            self.wait_twrp()
+            self.wait_fmrre()
             return self.autofix()
         if m == "recovery":  # some other recovery
             if not self.o.recovery:
-                raise Refused("This recovery isn't TWRP v2. Give a TWRP v2 image (--recovery twrpv2-recovery.img) to start it from "
+                raise Refused("This recovery isn't FMRRE. Give an FMRRE image (--recovery fmrre-recovery.img) to start it from "
                               "this computer, or use this recovery's 'Apply update from ADB' with the official firmware.")
             self.to_bootloader()
             m = self.phone.mode
         if m == "download":
             if self.o.recovery:
-                if not self.samsung_twrp(self.o.recovery):
+                if not self.samsung_fmrre(self.o.recovery):
                     return False
-                self.log("Waiting for TWRP v2 (start it with the key combination above)...")
-                self.wait_twrp(max(self.r.wait_s, 180))
+                self.log("Waiting for FMRRE (start it with the key combination above)...")
+                self.wait_fmrre(max(self.r.wait_s, 180))
                 return self.autofix()
             if self.o.ap:
                 return self.samsung_stock(self.o.ap)
             raise Refused("In Download mode the tool can:\n"
-                          "  - install TWRP v2 and let it repair the phone:   fix --recovery twrpv2-recovery.img\n"
+                          "  - install FMRRE and let it repair the phone:   fix --recovery fmrre-recovery.img\n"
                           "    (build the image from the stock recovery.img in your firmware: scripts/install.sh --build-from recovery.img)\n"
                           "  - flash the stock boot / vbmeta / recovery from your firmware, undoing root or a bad flash:\n"
                           "                                                    fix --ap AP_<model>_....tar.md5\n"
@@ -1165,22 +1170,22 @@ class Rescue:
                 return False
             if self.o.reboot:
                 self.r.write("fastboot", "reboot")
-            self.log("Done. If it still doesn't start, run fix again: the next step is starting TWRP v2 to repair from the inside.")
+            self.log("Done. If it still doesn't start, run fix again: the next step is starting FMRRE to repair from the inside.")
             return True
         if self.o.recovery:
-            self.boot_twrp(self.o.recovery)
+            self.boot_fmrre(self.o.recovery)
             return self.autofix()
-        # No image: maybe the installed recovery is TWRP v2.
-        if self.phone.mode == "fastboot" and self.ask("Try starting the recovery installed on the phone (TWRP v2, if it is installed)?"):
+        # No image: maybe the installed recovery is FMRRE.
+        if self.phone.mode == "fastboot" and self.ask("Try starting the recovery installed on the phone (FMRRE, if it is installed)?"):
             if self.r.write("fastboot", "reboot", "recovery") and self.r.wait_for("recovery", min(self.r.wait_s, 60)):
                 self.refresh()
-                if self.phone.twrpv2:
+                if self.phone.fmrre:
                     return self.autofix()
-                raise Refused("The installed recovery isn't TWRP v2. Give a TWRP v2 image (--recovery twrpv2-recovery.img) to start it "
+                raise Refused("The installed recovery isn't FMRRE. Give an FMRRE image (--recovery fmrre-recovery.img) to start it "
                               "from this computer, or use the stock recovery's 'Apply update from ADB' with the official firmware.")
-            raise Refused("The phone's recovery didn't start (or this bootloader can't 'reboot recovery'). Give a TWRP v2 image: "
-                          "fix --recovery twrpv2-recovery.img")
-        raise Refused("Nothing is clearly broken as far as the bootloader can tell. Give a TWRP v2 image (--recovery) so it can look "
+            raise Refused("The phone's recovery didn't start (or this bootloader can't 'reboot recovery'). Give an FMRRE image: "
+                          "fix --recovery fmrre-recovery.img")
+        raise Refused("Nothing is clearly broken as far as the bootloader can tell. Give an FMRRE image (--recovery) so it can look "
                       "inside, or choose a repair: switch-slot, disable-vbmeta, cancel-update, flash, wipe-data.")
 
 
@@ -1194,7 +1199,7 @@ def color(text, tone):
 
 
 def print_status(ph):
-    print(color("TWRP v2 PC rescue " + VERSION, "head"))
+    print(color("FMRRE PC rescue " + VERSION, "head"))
     word, tone, why = lock_verdict(ph)
     for k, v in describe(ph):
         if k == "Bootloader":
@@ -1228,7 +1233,7 @@ def main(argv=None):
         p.add_argument("--lang", choices=["en", "ro"], help="language (default: the computer's; ro = Romanian)", **d)
         return p
 
-    ap = common(argparse.ArgumentParser(prog="twrpv2_rescue.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter),
+    ap = common(argparse.ArgumentParser(prog="fmrre_rescue.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter),
                 False)
     ap.add_argument("--version", action="version", version=VERSION)
     sub = ap.add_subparsers(dest="cmd")
@@ -1238,11 +1243,11 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     sub.add_parser("diagnose").add_argument("--recovery")
     p = sub.add_parser("fix")
-    p.add_argument("--recovery", help="TWRP v2 image for this phone (started from RAM, or installed in Download mode)")
+    p.add_argument("--recovery", help="FMRRE image for this phone (started from RAM, or installed in Download mode)")
     p.add_argument("--ap", help="Samsung: the firmware's AP .tar.md5 (stock boot / vbmeta / recovery are flashed from it)")
     p.add_argument("--allow-wipe", action="store_true", help="let Auto repair Format Data when it finds that it is needed")
     p.add_argument("--no-reboot", action="store_true")
-    sub.add_parser("boot-twrp").add_argument("image")
+    sub.add_parser("boot-fmrre").add_argument("image")
     p = sub.add_parser("autofix")
     p.add_argument("--allow-wipe", action="store_true")
     p.add_argument("--no-reboot", action="store_true")
@@ -1254,7 +1259,7 @@ def main(argv=None):
     p = sub.add_parser("flash")
     p.add_argument("partition")
     p.add_argument("image")
-    p = sub.add_parser("samsung-twrp")
+    p = sub.add_parser("samsung-fmrre")
     p.add_argument("image")
     p.add_argument("--vbmeta")
     p = sub.add_parser("samsung-stock")
@@ -1309,8 +1314,8 @@ def main(argv=None):
     try:
         if a.cmd == "fix":
             ok = rs.fix()
-        elif a.cmd == "boot-twrp":
-            ok = rs.boot_twrp(a.image)
+        elif a.cmd == "boot-fmrre":
+            ok = rs.boot_fmrre(a.image)
         elif a.cmd == "autofix":
             ok = rs.autofix()
         elif a.cmd == "switch-slot":
@@ -1321,8 +1326,8 @@ def main(argv=None):
             ok = rs.disable_vbmeta()
         elif a.cmd == "flash":
             ok = rs.flash(a.partition, a.image)
-        elif a.cmd == "samsung-twrp":
-            ok = rs.samsung_twrp(a.image)
+        elif a.cmd == "samsung-fmrre":
+            ok = rs.samsung_fmrre(a.image)
         elif a.cmd == "samsung-stock":
             ok = rs.samsung_stock(a.ap)
         elif a.cmd == "wipe-data":
@@ -1330,7 +1335,7 @@ def main(argv=None):
         elif a.cmd == "reboot":
             ok = rs.reboot(a.target)
         elif a.cmd == "logs":
-            ok = rs.save_logs(a.dir or os.path.join(os.getcwd(), "twrpv2-logs-" + time.strftime("%Y%m%d-%H%M%S")))
+            ok = rs.save_logs(a.dir or os.path.join(os.getcwd(), "fmrre-logs-" + time.strftime("%Y%m%d-%H%M%S")))
         else:
             ap.print_help()
             return 2
@@ -1352,7 +1357,7 @@ def run_gui(a):
     from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
     root = tk.Tk()
-    root.title("TWRP v2 PC rescue")
+    root.title("FMRRE PC rescue")
     root.geometry("860x760")
     root.minsize(720, 600)
     logq = queue.Queue()
@@ -1365,7 +1370,7 @@ def run_gui(a):
         ev, box = threading.Event(), {}
 
         def show():
-            box["a"] = messagebox.askyesno("TWRP v2 PC rescue", q, parent=root)
+            box["a"] = messagebox.askyesno("FMRRE PC rescue", q, parent=root)
             ev.set()
         root.after(0, show)
         ev.wait()
@@ -1375,7 +1380,7 @@ def run_gui(a):
         ev, box = threading.Event(), {}
 
         def show():
-            box["a"] = simpledialog.askstring("TWRP v2 PC rescue", "%s\n\n%s" % (T(q), T("Type %s to continue:" % word)),
+            box["a"] = simpledialog.askstring("FMRRE PC rescue", "%s\n\n%s" % (T(q), T("Type %s to continue:" % word)),
                                               parent=root) == word
             ev.set()
         root.after(0, show)
@@ -1421,10 +1426,10 @@ def run_gui(a):
     img_var, ap_var = tk.StringVar(), tk.StringVar()
     row0 = ttk.Frame(act)
     row0.pack(fill="x")
-    ttk.Label(row0, text=T("TWRP v2 image:")).pack(side="left")
+    ttk.Label(row0, text=T("FMRRE image:")).pack(side="left")
     ttk.Entry(row0, textvariable=img_var).pack(side="left", fill="x", expand=True, padx=6)
     ttk.Button(row0, text=T("Browse..."), command=lambda: img_var.set(filedialog.askopenfilename(
-        title=T("TWRP v2 image for this phone"), filetypes=[("Images", "*.img"), ("All files", "*")]) or img_var.get())).pack(side="left")
+        title=T("FMRRE image for this phone"), filetypes=[("Images", "*.img"), ("All files", "*")]) or img_var.get())).pack(side="left")
     row0b = ttk.Frame(act)
     row0b.pack(fill="x", pady=(4, 0))
     ttk.Label(row0b, text=T("Samsung AP file:")).pack(side="left")
@@ -1465,8 +1470,8 @@ def run_gui(a):
     row1 = ttk.Frame(act)
     row1.pack(fill="x", pady=(10, 4))
     btn(row1, "Fix it for me", rs.fix, big=True).pack(side="left")
-    btn(row1, "Start TWRP v2", lambda: rs.boot_twrp(img_var.get().strip()) and rs.autofix()).pack(side="left", padx=(10, 0))
-    btn(row1, "Auto repair (TWRP v2)", rs.autofix).pack(side="left", padx=4)
+    btn(row1, "Start FMRRE", lambda: rs.boot_fmrre(img_var.get().strip()) and rs.autofix()).pack(side="left", padx=(10, 0))
+    btn(row1, "Auto repair (FMRRE)", rs.autofix).pack(side="left", padx=4)
     row2 = ttk.Frame(act)
     row2.pack(fill="x", pady=4)
     btn(row2, "Other slot", rs.switch_slot).pack(side="left")
@@ -1488,7 +1493,7 @@ def run_gui(a):
     row2b = ttk.Frame(act)
     row2b.pack(fill="x", pady=4)
     ttk.Label(row2b, text=T("Samsung:")).pack(side="left")
-    btn(row2b, "Install TWRP v2", lambda: rs.samsung_twrp(img_var.get().strip())).pack(side="left", padx=2)
+    btn(row2b, "Install FMRRE", lambda: rs.samsung_fmrre(img_var.get().strip())).pack(side="left", padx=2)
     btn(row2b, "Stock boot / vbmeta / recovery from AP", lambda: rs.samsung_stock(ap_var.get().strip())).pack(side="left", padx=2)
     row3 = ttk.Frame(act)
     row3.pack(fill="x", pady=4)
@@ -1499,7 +1504,7 @@ def run_gui(a):
     def logs_dialog():
         d = filedialog.askdirectory(title=T("Save the phone's logs to"))
         if d:
-            job(rs.save_logs, os.path.join(d, "twrpv2-logs-" + time.strftime("%Y%m%d-%H%M%S")))
+            job(rs.save_logs, os.path.join(d, "fmrre-logs-" + time.strftime("%Y%m%d-%H%M%S")))
     lb = ttk.Button(row3, text=T("Save logs..."), command=logs_dialog)
     lb.pack(side="right")
     buttons.append(lb)
@@ -1565,7 +1570,7 @@ def run_gui(a):
         root.after(4000, poll)
 
     ttk.Button(top, text=T("Refresh"), command=lambda: (state.update(sig=None), refresh())).grid(row=0, column=2, sticky="e")
-    log("TWRP v2 PC rescue %s - tools: %s" % (VERSION, ", ".join("%s %s" % (k, "ok" if v else "MISSING") for k, v in r.tools.items())))
+    log("FMRRE PC rescue %s - tools: %s" % (VERSION, ", ".join("%s %s" % (k, "ok" if v else "MISSING") for k, v in r.tools.items())))
     for k, v in r.tools.items():
         if not v:
             log("   %s: %s" % (k, INSTALL_HINT[k]))

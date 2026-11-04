@@ -1,5 +1,5 @@
-"""Romanian for TWRP v2 PC rescue. Keys are the exact English messages; "{}" stands for a part that changes
-(it is translated too when it is a known message), "{w}" for one word. Used by twrpv2_rescue.T()."""
+"""Romanian for FMRRE PC rescue. Keys are the exact English messages; "{}" stands for a part that changes
+(it is translated too when it is a known message), "{w}" for one word. Used by fmrre_rescue.T()."""
 
 RO = {
     # ---- modes, status
@@ -14,7 +14,7 @@ RO = {
     "Samsung Download mode (Heimdall)": "modul Download Samsung (Heimdall)",
     "Phone": "Telefon", "Mode": "Mod", "Serial": "Serie", "Slot": "Slot", "Note": "Notă", "serial": "serie", "slot": "slot",
     "Unknown phone": "Telefon necunoscut",
-    "not TWRP v2 (stock or another recovery)": "nu este TWRP v2 (original sau alt recovery)",
+    "not FMRRE (stock or another recovery)": "nu este FMRRE (original sau alt recovery)",
     "UNLOCKED": "DEBLOCAT", "LOCKED": "BLOCAT", "CHECK THE SCREEN": "VERIFICĂ ECRANUL", "UNKNOWN": "NECUNOSCUT",
     "unbootable": "nu pornește", "booted fine": "a pornit bine", "never booted fully": "nu a pornit niciodată complet",
     "{w} tries left": "{} încercări rămase", "{w} try left": "{} încercare rămasă",
@@ -137,8 +137,8 @@ RO = {
     "Switching to slot {w} goes back to the system that worked - often the one before an update.":
         "Trecerea pe slotul {} întoarce sistemul care mergea - de obicei cel de dinaintea unei actualizări.",
     "Both slots are marked unbootable": "Ambele sloturi sunt marcate că nu pornesc",
-    "Start TWRP v2 from this computer to look closer, or reinstall the firmware.":
-        "Pornește TWRP v2 de pe acest calculator ca să vezi mai bine, sau reinstalează firmware-ul.",
+    "Start FMRRE from this computer to look closer, or reinstall the firmware.":
+        "Pornește FMRRE de pe acest calculator ca să vezi mai bine, sau reinstalează firmware-ul.",
     "A system update is still being merged": "O actualizare de sistem încă se aplică (merge)",
     "Don't flash or wipe anything until Android finishes it. If it can't start to finish it, the maker's official firmware tool "
     "is the safe way.":
@@ -151,7 +151,7 @@ RO = {
         "anterioară. fastbootd refuză să instaleze partițiile de sistem până nu este anulată.",
     "The battery is low": "Bateria este descărcată",
     "Charge it for half an hour before flashing anything.": "Încarcă-l o jumătate de oră înainte să instalezi ceva.",
-    "TWRP v2 can be started from this computer": "TWRP v2 poate fi pornit de pe acest calculator",
+    "FMRRE can be started from this computer": "FMRRE poate fi pornit de pe acest calculator",
     "'fastboot boot' runs it from RAM - nothing is written - and its Auto repair checks the logs, boot images, vbmeta, both "
     "slots and /data from the inside.":
         "'fastboot boot' îl rulează din RAM - nu se scrie nimic - iar Repararea automată verifică din interior jurnalele, "
@@ -159,27 +159,27 @@ RO = {
     "This image can't be started with fastboot boot": "Această imagine nu poate fi pornită cu fastboot boot",
     "{} isn't a boot/recovery image (vendor_boot images can only be flashed).":
         "{} nu este o imagine boot/recovery (imaginile vendor_boot pot fi doar instalate).",
-    "For the most thorough check: a TWRP v2 image for this phone": "Pentru cea mai temeinică verificare: o imagine TWRP v2 pentru acest telefon",
-    "With --recovery twrpv2-recovery.img (built from this phone's own recovery or boot image) it is started from RAM and Auto "
+    "For the most thorough check: an FMRRE image for this phone": "Pentru cea mai temeinică verificare: o imagine FMRRE pentru acest telefon",
+    "With --recovery fmrre-recovery.img (built from this phone's own recovery or boot image) it is started from RAM and Auto "
     "repair looks at the phone from the inside. Without one: the recovery installed on the phone is tried.":
-        "Cu --recovery twrpv2-recovery.img (făcută din imaginea recovery sau boot a acestui telefon) pornește din RAM și "
+        "Cu --recovery fmrre-recovery.img (făcută din imaginea recovery sau boot a acestui telefon) pornește din RAM și "
         "Repararea automată verifică telefonul din interior. Fără ea: se încearcă recovery-ul instalat pe telefon.",
     "Samsung Download mode": "Modul Download Samsung",
-    "Install TWRP v2 (recovery + vbmeta with verification disabled) and let its Auto repair fix the phone, or flash the stock "
+    "Install FMRRE (recovery + vbmeta with verification disabled) and let its Auto repair fix the phone, or flash the stock "
     "boot / vbmeta / recovery from your firmware's AP file to undo a bad change.":
-        "Instalează TWRP v2 (recovery + vbmeta cu verificarea oprită) și lasă Repararea automată să repare telefonul, sau "
+        "Instalează FMRRE (recovery + vbmeta cu verificarea oprită) și lasă Repararea automată să repare telefonul, sau "
         "instalează boot / vbmeta / recovery originale din fișierul AP al firmware-ului ca să anulezi o modificare greșită.",
     "Android starts": "Android pornește",
-    "When it misbehaves: the tool can reboot to recovery and run TWRP v2's Auto repair (when TWRP v2 is the installed recovery).":
-        "Când nu merge bine: unealta poate reporni în recovery și rula Repararea automată din TWRP v2 (când TWRP v2 este "
+    "When it misbehaves: the tool can reboot to recovery and run FMRRE's Auto repair (when FMRRE is the installed recovery).":
+        "Când nu merge bine: unealta poate reporni în recovery și rula Repararea automată din FMRRE (când FMRRE este "
         "recovery-ul instalat).",
     "Problems: {}": "Probleme: {}", "Planned fixes: {}": "Reparații planificate: {}", "Nothing to repair.": "Nimic de reparat.",
-    "TWRP v2 Auto repair": "Reparare automată TWRP v2",
-    "A recovery other than TWRP v2 is running": "Rulează un alt recovery decât TWRP v2",
+    "FMRRE Auto repair": "Reparare automată FMRRE",
+    "A recovery other than FMRRE is running": "Rulează un alt recovery decât FMRRE",
     "A stock recovery can reinstall the official system without unlocking: 'Apply update from ADB', then 'adb sideload "
-    "<official OTA>.zip'. To use TWRP v2: reboot to the bootloader and start it from here.":
+    "<official OTA>.zip'. To use FMRRE: reboot to the bootloader and start it from here.":
         "Un recovery original poate reinstala sistemul oficial fără deblocare: 'Apply update from ADB', apoi 'adb sideload "
-        "<OTA oficial>.zip'. Pentru TWRP v2: repornește în bootloader și pornește-l de aici.",
+        "<OTA oficial>.zip'. Pentru FMRRE: repornește în bootloader și pornește-l de aici.",
     "Waiting for adb sideload": "Se așteaptă adb sideload",
     "'adb sideload <rom-or-ota>.zip' installs it; cancel sideload on the phone to get back.":
         "'adb sideload <rom-sau-ota>.zip' îl instalează; anulează sideload pe telefon ca să revii.",
@@ -191,7 +191,7 @@ RO = {
     "Not {}: the phone doesn't say whether its bootloader is unlocked.\n{}":
         "Nu se face {}: telefonul nu spune dacă bootloader-ul este deblocat.\n{}",
     "switching slots": "schimbarea slotului", "cancelling the update": "anularea actualizării", "changing vbmeta": "modificarea vbmeta",
-    "flashing": "instalarea", "wiping": "ștergerea", "starting TWRP v2": "pornirea TWRP v2", "installing TWRP v2": "instalarea TWRP v2",
+    "flashing": "instalarea", "wiping": "ștergerea", "starting FMRRE": "pornirea FMRRE", "installing FMRRE": "instalarea FMRRE",
     "repairing": "repararea",
     "This needs the phone in {} mode - it is in: {}.": "Pentru asta telefonul trebuie să fie în modul {} - acum este în: {}.",
     "or": "sau",
@@ -220,81 +220,81 @@ RO = {
         "înnegrește, pentru recovery).",
     "{} can't be started with 'fastboot boot' ({}).": "{} nu poate fi pornit cu 'fastboot boot' ({}).",
     "a vendor_boot image": "o imagine vendor_boot", "not a boot/recovery image": "nu este o imagine boot/recovery",
-    "Start TWRP v2 from this computer (fastboot boot - nothing is written)?":
-        "Pornești TWRP v2 de pe acest calculator (fastboot boot - nu se scrie nimic)?",
+    "Start FMRRE from this computer (fastboot boot - nothing is written)?":
+        "Pornești FMRRE de pe acest calculator (fastboot boot - nu se scrie nimic)?",
     "The bootloader refused to start the image. On some phones 'fastboot boot' is disabled - flash it instead (scripts/install.sh "
     "--permanent).":
         "Bootloader-ul a refuzat să pornească imaginea. Pe unele telefoane 'fastboot boot' este dezactivat - instaleaz-o în "
         "schimb (scripts/install.sh --permanent).",
-    "TWRP v2 didn't show up on adb. If its screen is on the phone, check the cable / USB driver.":
-        "TWRP v2 nu a apărut pe adb. Dacă ecranul lui este pe telefon, verifică cablul / driverul USB.",
-    "A recovery started, but it isn't TWRP v2.": "A pornit un recovery, dar nu este TWRP v2.",
-    "TWRP v2 is running.": "TWRP v2 rulează.",
-    "(dry run: TWRP v2 would now check the phone and repair it)": "(simulare: acum TWRP v2 ar verifica telefonul și l-ar repara)",
-    "The running recovery isn't TWRP v2.": "Recovery-ul care rulează nu este TWRP v2.",
-    "TWRP v2 Auto repair - what it found:": "Reparare automată TWRP v2 - ce a găsit:",
+    "FMRRE didn't show up on adb. If its screen is on the phone, check the cable / USB driver.":
+        "FMRRE nu a apărut pe adb. Dacă ecranul lui este pe telefon, verifică cablul / driverul USB.",
+    "A recovery started, but it isn't FMRRE.": "A pornit un recovery, dar nu este FMRRE.",
+    "FMRRE is running.": "FMRRE rulează.",
+    "(dry run: FMRRE would now check the phone and repair it)": "(simulare: acum FMRRE ar verifica telefonul și l-ar repara)",
+    "The running recovery isn't FMRRE.": "Recovery-ul care rulează nu este FMRRE.",
+    "FMRRE Auto repair - what it found:": "Reparare automată FMRRE - ce a găsit:",
     "Auto repair may Format Data if it finds that it is needed - that ERASES the phone.":
         "Repararea automată poate formata Data dacă găsește că e nevoie - asta ȘTERGE telefonul.",
     "Not allowing Format Data (ERASE wasn't typed).": "Formatarea Data nu este permisă (nu s-a tastat ERASE).",
-    "Nothing for Auto repair to fix. Details: 'twrpv2_rescue.py logs' saves the phone's logs.":
-        "Nimic de reparat pentru Repararea automată. Detalii: 'twrpv2_rescue.py logs' salvează jurnalele telefonului.",
+    "Nothing for Auto repair to fix. Details: 'fmrre_rescue.py logs' saves the phone's logs.":
+        "Nimic de reparat pentru Repararea automată. Detalii: 'fmrre_rescue.py logs' salvează jurnalele telefonului.",
     "Run these repairs on the phone and restart it?": "Rulezi aceste reparații pe telefon și îl repornești?",
     "Run these repairs on the phone?": "Rulezi aceste reparații pe telefon?",
     "Samsung needs a recovery.img (build it from the stock recovery.img in your firmware's AP file: scripts/install.sh "
     "--build-from recovery.img).":
         "Samsung are nevoie de un recovery.img (fă-l din recovery.img original din fișierul AP al firmware-ului: "
         "scripts/install.sh --build-from recovery.img).",
-    "Flash TWRP v2 to RECOVERY and a vbmeta with verification disabled to VBMETA?":
-        "Instalezi TWRP v2 în RECOVERY și un vbmeta cu verificarea oprită în VBMETA?",
+    "Flash FMRRE to RECOVERY and a vbmeta with verification disabled to VBMETA?":
+        "Instalezi FMRRE în RECOVERY și un vbmeta cu verificarea oprită în VBMETA?",
     "Heimdall failed - see above. (Odin on Windows: scripts/install.sh --odin-only builds the AP package.)":
         "Heimdall a eșuat - vezi mai sus. (Odin pe Windows: scripts/install.sh --odin-only face pachetul AP.)",
-    "Flashed. Now start STRAIGHT into recovery, or stock Android replaces TWRP v2 on its first boot:\n"
+    "Flashed. Now start STRAIGHT into recovery, or stock Android replaces FMRRE on its first boot:\n"
     "   1. hold Volume Down + Power until the screen goes black\n"
-    "   2. at once switch to Volume Up + Power (+ Bixby on older models) and hold until TWRP v2 appears":
-        "Instalat. Acum pornește DIRECT în recovery, altfel Android-ul original înlocuiește TWRP v2 la prima pornire:\n"
+    "   2. at once switch to Volume Up + Power (+ Bixby on older models) and hold until FMRRE appears":
+        "Instalat. Acum pornește DIRECT în recovery, altfel Android-ul original înlocuiește FMRRE la prima pornire:\n"
         "   1. ține Volum Jos + Pornire până se înnegrește ecranul\n"
-        "   2. treci imediat la Volum Sus + Pornire (+ Bixby pe modelele vechi) și ține până apare TWRP v2",
+        "   2. treci imediat la Volum Sus + Pornire (+ Bixby pe modelele vechi) și ține până apare FMRRE",
     "{} has none of: {}": "{} nu conține niciuna dintre: {}",
     "Flash the stock {} from {}?": "Instalezi {} originale din {}?",
     "No logs to save in this mode ({}).": "Nu sunt jurnale de salvat în acest mod ({}).",
     "Saved: {}": "Salvat: {}",
     "The phone is waiting in {} - cancel it on the phone first.": "Telefonul așteaptă în {} - anulează întâi pe telefon.",
-    "Restart to recovery and run TWRP v2's Auto repair there?": "Repornești în recovery și rulezi acolo Repararea automată TWRP v2?",
+    "Restart to recovery and run FMRRE's Auto repair there?": "Repornești în recovery și rulezi acolo Repararea automată FMRRE?",
     "adb couldn't restart the phone.": "adb nu a putut reporni telefonul.",
-    "This recovery isn't TWRP v2. Give a TWRP v2 image (--recovery twrpv2-recovery.img) to start it from this computer, or use "
+    "This recovery isn't FMRRE. Give an FMRRE image (--recovery fmrre-recovery.img) to start it from this computer, or use "
     "this recovery's 'Apply update from ADB' with the official firmware.":
-        "Acest recovery nu este TWRP v2. Dă o imagine TWRP v2 (--recovery twrpv2-recovery.img) ca să-l pornești de pe acest "
+        "Acest recovery nu este FMRRE. Dă o imagine FMRRE (--recovery fmrre-recovery.img) ca să-l pornești de pe acest "
         "calculator, sau folosește 'Apply update from ADB' din acest recovery cu firmware-ul oficial.",
-    "Waiting for TWRP v2 (start it with the key combination above)...":
-        "Se așteaptă TWRP v2 (pornește-l cu combinația de taste de mai sus)...",
+    "Waiting for FMRRE (start it with the key combination above)...":
+        "Se așteaptă FMRRE (pornește-l cu combinația de taste de mai sus)...",
     "In Download mode the tool can:\n"
-    "  - install TWRP v2 and let it repair the phone:   fix --recovery twrpv2-recovery.img\n"
+    "  - install FMRRE and let it repair the phone:   fix --recovery fmrre-recovery.img\n"
     "    (build the image from the stock recovery.img in your firmware: scripts/install.sh --build-from recovery.img)\n"
     "  - flash the stock boot / vbmeta / recovery from your firmware, undoing root or a bad flash:\n"
     "                                                    fix --ap AP_<model>_....tar.md5\n"
     "  The whole firmware (BL, AP, CP, CSC) is best flashed with Odin or Smart Switch.":
         "În modul Download unealta poate:\n"
-        "  - instala TWRP v2 și să-l lase să repare telefonul:   fix --recovery twrpv2-recovery.img\n"
+        "  - instala FMRRE și să-l lase să repare telefonul:   fix --recovery fmrre-recovery.img\n"
         "    (fă imaginea din recovery.img original din firmware: scripts/install.sh --build-from recovery.img)\n"
         "  - instala boot / vbmeta / recovery originale din firmware, anulând root-ul sau o instalare greșită:\n"
         "                                                    fix --ap AP_<model>_....tar.md5\n"
         "  Firmware-ul întreg (BL, AP, CP, CSC) se instalează cel mai bine cu Odin sau Smart Switch.",
     "Slot {w} {}, slot {w} booted fine before: going back to slot {w}.": "Slotul {} {}, slotul {} a pornit bine înainte: se revine la slotul {}.",
-    "Done. If it still doesn't start, run fix again: the next step is starting TWRP v2 to repair from the inside.":
-        "Gata. Dacă tot nu pornește, rulează din nou fix: pasul următor este pornirea TWRP v2 ca să repare din interior.",
-    "Try starting the recovery installed on the phone (TWRP v2, if it is installed)?":
-        "Încerci să pornești recovery-ul instalat pe telefon (TWRP v2, dacă este instalat)?",
-    "The installed recovery isn't TWRP v2. Give a TWRP v2 image (--recovery twrpv2-recovery.img) to start it from this "
+    "Done. If it still doesn't start, run fix again: the next step is starting FMRRE to repair from the inside.":
+        "Gata. Dacă tot nu pornește, rulează din nou fix: pasul următor este pornirea FMRRE ca să repare din interior.",
+    "Try starting the recovery installed on the phone (FMRRE, if it is installed)?":
+        "Încerci să pornești recovery-ul instalat pe telefon (FMRRE, dacă este instalat)?",
+    "The installed recovery isn't FMRRE. Give an FMRRE image (--recovery fmrre-recovery.img) to start it from this "
     "computer, or use the stock recovery's 'Apply update from ADB' with the official firmware.":
-        "Recovery-ul instalat nu este TWRP v2. Dă o imagine TWRP v2 (--recovery twrpv2-recovery.img) ca să-l pornești de pe "
+        "Recovery-ul instalat nu este FMRRE. Dă o imagine FMRRE (--recovery fmrre-recovery.img) ca să-l pornești de pe "
         "acest calculator, sau folosește 'Apply update from ADB' din recovery-ul original cu firmware-ul oficial.",
-    "The phone's recovery didn't start (or this bootloader can't 'reboot recovery'). Give a TWRP v2 image: fix --recovery "
-    "twrpv2-recovery.img":
-        "Recovery-ul telefonului nu a pornit (sau acest bootloader nu poate face 'reboot recovery'). Dă o imagine TWRP v2: fix "
-        "--recovery twrpv2-recovery.img",
-    "Nothing is clearly broken as far as the bootloader can tell. Give a TWRP v2 image (--recovery) so it can look inside, or "
+    "The phone's recovery didn't start (or this bootloader can't 'reboot recovery'). Give an FMRRE image: fix --recovery "
+    "fmrre-recovery.img":
+        "Recovery-ul telefonului nu a pornit (sau acest bootloader nu poate face 'reboot recovery'). Dă o imagine FMRRE: fix "
+        "--recovery fmrre-recovery.img",
+    "Nothing is clearly broken as far as the bootloader can tell. Give an FMRRE image (--recovery) so it can look inside, or "
     "choose a repair: switch-slot, disable-vbmeta, cancel-update, flash, wipe-data.":
-        "Din ce vede bootloader-ul, nimic nu este clar stricat. Dă o imagine TWRP v2 (--recovery) ca să se uite în interior, "
+        "Din ce vede bootloader-ul, nimic nu este clar stricat. Dă o imagine FMRRE (--recovery) ca să se uite în interior, "
         "sau alege o reparație: switch-slot, disable-vbmeta, cancel-update, flash, wipe-data.",
     "not a vbmeta image (no AVB0 header)": "nu este o imagine vbmeta (lipsește antetul AVB0)",
     "{} is not a firmware tar: {}": "{} nu este un tar de firmware: {}",
@@ -307,16 +307,16 @@ RO = {
     "Bootloader: {}": "Bootloader: {}",
     "I checked on the phone: the bootloader is unlocked (Samsung: OEM LOCK: OFF)":
         "Am verificat pe telefon: bootloader-ul este deblocat (Samsung: OEM LOCK: OFF)",
-    "What was found": "Ce s-a găsit", "TWRP v2 image:": "Imagine TWRP v2:", "Browse...": "Alege...",
-    "Samsung AP file:": "Fișier AP Samsung:", "Fix it for me": "Repară-l în locul meu", "Start TWRP v2": "Pornește TWRP v2",
-    "Auto repair (TWRP v2)": "Reparare automată (TWRP v2)", "Other slot": "Celălalt slot", "Disable vbmeta": "Dezactivează vbmeta",
+    "What was found": "Ce s-a găsit", "FMRRE image:": "Imagine FMRRE:", "Browse...": "Alege...",
+    "Samsung AP file:": "Fișier AP Samsung:", "Fix it for me": "Repară-l în locul meu", "Start FMRRE": "Pornește FMRRE",
+    "Auto repair (FMRRE)": "Reparare automată (FMRRE)", "Other slot": "Celălalt slot", "Disable vbmeta": "Dezactivează vbmeta",
     "Cancel update": "Anulează actualizarea", "Flash image...": "Instalează imagine...", "Wipe data...": "Șterge datele...",
-    "Samsung:": "Samsung:", "Install TWRP v2": "Instalează TWRP v2",
+    "Samsung:": "Samsung:", "Install FMRRE": "Instalează FMRRE",
     "Stock boot / vbmeta / recovery from AP": "boot / vbmeta / recovery originale din AP", "Restart to:": "Repornire în:",
     "System": "Sistem", "Save logs...": "Salvează jurnalele...", "Refresh": "Reîmprospătează",
-    "TWRP v2 image for this phone": "Imagine TWRP v2 pentru acest telefon", "Samsung firmware AP file": "Fișierul AP al firmware-ului Samsung",
+    "FMRRE image for this phone": "Imagine FMRRE pentru acest telefon", "Samsung firmware AP file": "Fișierul AP al firmware-ului Samsung",
     "Flash an image": "Instalează o imagine",
     "Partition (boot, init_boot, vendor_boot, recovery, vbmeta, dtbo...):": "Partiția (boot, init_boot, vendor_boot, recovery, vbmeta, dtbo...):",
     "Image for {}": "Imagine pentru {}", "Save the phone's logs to": "Salvează jurnalele telefonului în",
-    "TWRP v2 PC rescue {} - tools: {}": "TWRP v2 PC rescue {} - unelte: {}",
+    "FMRRE PC rescue {} - tools: {}": "FMRRE PC rescue {} - unelte: {}",
 }

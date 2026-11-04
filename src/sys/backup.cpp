@@ -22,7 +22,7 @@
 namespace tw::backup {
 
 std::string backupRoot() {
-    return Partitions::get().storagePath() + "/TWRP/BACKUPS/" + device::info().serial;
+    return Partitions::get().appDir() + "/BACKUPS/" + device::info().serial;
 }
 
 static bool isDataLike(const Partition& p) { return p.mountPoint == "/data"; }
@@ -256,14 +256,14 @@ static bool backupOne(Partition& p, const std::string& dir, const Options& o, Ta
 }
 
 static void writeManifest(const std::string& dir, const std::vector<Item>& items) {
-    std::string m = "# TWRP v2 backup manifest\n";
+    std::string m = "# FMRRE backup manifest\n";
     m += "device=" + device::info().device + "\nmodel=" + device::info().model + "\ncreated=" + util::dateStamp() + "\n";
     for (auto& i : items) {
         m += "item=" + i.part + "|" + i.file + "|" + i.type + "|" + (i.compressed ? "1" : "0") + "|" +
              std::to_string(i.size) + "|" + i.sha256 + "|" + (i.encrypted ? "1" : "0") + "\n";
         if (!i.sha256.empty()) util::writeFile(dir + "/" + i.file + ".sha2", i.sha256 + "  " + i.file + "\n");
     }
-    util::writeFile(dir + "/twrpv2.manifest", m);
+    util::writeFile(dir + "/fmrre.manifest", m);
 }
 
 bool create(const Options& o, Task& t) {
@@ -308,42 +308,48 @@ bool create(const Options& o, Task& t) {
 
 std::vector<Set> list() {
     std::vector<Set> out;
-    std::string root = backupRoot();
-    for (auto& e : util::listDir(root)) {
-        if (!e.dir) continue;
-        Set s;
-        s.name = e.name;
-        s.path = root + "/" + e.name;
-        s.mtime = e.mtime;
-        std::string m;
-        if (util::readFile(s.path + "/twrpv2.manifest", m)) {
-            s.hasManifest = true;
-            for (auto& line : util::split(m, '\n')) {
-                if (!util::startsWith(line, "item=")) continue;
-                auto f = util::split(line.substr(5), '|', false);
-                if (f.size() < 6) continue;
-                Item i{f[0], f[1], f[2], f[3] == "1", (uint64_t)std::stoull(f[4]), f[5]};
-                i.encrypted = f.size() > 6 ? f[6] == "1" : crypt::isEncrypted(s.path + "/" + i.file);
-                s.items.push_back(i);
+    // Ours, then classic TWRP's (and TWRP v2's, from before the rename) - same layout.
+    std::string legacy = Partitions::get().legacyDir() + "/BACKUPS/" + device::info().serial;
+    for (const std::string& root : {backupRoot(), legacy}) {
+        for (auto& e : util::listDir(root)) {
+            if (!e.dir) continue;
+            Set s;
+            s.name = e.name;
+            s.path = root + "/" + e.name;
+            s.mtime = e.mtime;
+            bool dup = false;
+            for (auto& o : out) dup |= o.name == s.name;
+            if (dup) continue;  // same name in both folders: the newer FMRRE one wins
+            std::string m;
+            if (util::readFile(s.path + "/fmrre.manifest", m) || util::readFile(s.path + "/twrpv2.manifest", m)) {
+                s.hasManifest = true;
+                for (auto& line : util::split(m, '\n')) {
+                    if (!util::startsWith(line, "item=")) continue;
+                    auto f = util::split(line.substr(5), '|', false);
+                    if (f.size() < 6) continue;
+                    Item i{f[0], f[1], f[2], f[3] == "1", (uint64_t)std::stoull(f[4]), f[5]};
+                    i.encrypted = f.size() > 6 ? f[6] == "1" : crypt::isEncrypted(s.path + "/" + i.file);
+                    s.items.push_back(i);
+                }
+            } else {
+                // Classic TWRP backup: infer from file names (boot.emmc.win, data.ext4.win, ...).
+                for (auto& f : util::listDir(s.path)) {
+                    if (f.dir || !util::endsWith(f.name, ".win") || util::endsWith(f.name, ".sha2")) continue;
+                    auto parts = util::split(f.name, '.');
+                    if (parts.size() < 3) continue;
+                    Item i;
+                    i.part = parts[0];
+                    i.file = f.name;
+                    i.type = parts[1] == "emmc" ? "img" : "tar";
+                    i.size = f.size;
+                    std::string sha = util::readLine(s.path + "/" + f.name + ".sha2");
+                    if (!sha.empty()) i.sha256 = util::splitWs(sha)[0];
+                    s.items.push_back(i);
+                }
             }
-        } else {
-            // Classic TWRP backup: infer from file names (boot.emmc.win, data.ext4.win, ...).
-            for (auto& f : util::listDir(s.path)) {
-                if (f.dir || !util::endsWith(f.name, ".win") || util::endsWith(f.name, ".sha2")) continue;
-                auto parts = util::split(f.name, '.');
-                if (parts.size() < 3) continue;
-                Item i;
-                i.part = parts[0];
-                i.file = f.name;
-                i.type = parts[1] == "emmc" ? "img" : "tar";
-                i.size = f.size;
-                std::string sha = util::readLine(s.path + "/" + f.name + ".sha2");
-                if (!sha.empty()) i.sha256 = util::splitWs(sha)[0];
-                s.items.push_back(i);
-            }
+            for (auto& i : s.items) s.size += i.size;
+            out.push_back(s);
         }
-        for (auto& i : s.items) s.size += i.size;
-        out.push_back(s);
     }
     std::sort(out.begin(), out.end(), [](const Set& a, const Set& b) { return a.mtime > b.mtime; });
     return out;

@@ -76,7 +76,8 @@ int guessTarget(const std::vector<FlashTarget>& ts, const img::Info& info) {
             if (name.find("magisk_patched") != std::string::npos || name.find("kernelsu") != std::string::npos ||
                 name.find("apatch") != std::string::npos)
                 return findName(bootimg::rootTarget().name);
-            if (name.find("recovery") != std::string::npos || name.find("twrp") != std::string::npos) {
+            if (name.find("recovery") != std::string::npos || name.find("twrp") != std::string::npos ||
+                name.find("fmrre") != std::string::npos) {
                 int r = findName("recovery");
                 if (r >= 0) return r;
             }
@@ -98,6 +99,12 @@ namespace {
 
 // The zip queue survives leaving the screen, like TWRP's "Add more zips".
 std::vector<std::string> g_queue;
+
+}  // namespace
+
+void queueZip(const std::string& path) { g_queue.push_back(path); }
+
+namespace {
 
 void pickImage(App& app) {
     app.push(makeFilesScreen("", img::imageExtensions(),

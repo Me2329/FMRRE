@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Put TWRP v2 on a phone from a computer (Linux / macOS; Windows: scripts/install.ps1).
+# Put FMRRE on a phone from a computer (Linux / macOS; Windows: scripts/install.ps1).
 #
-#   scripts/install.sh [options] [twrpv2-recovery.img]
+#   scripts/install.sh [options] [fmrre-recovery.img]
 #
 # Fastboot (Pixel, Xiaomi, OnePlus, Motorola, Nothing, Sony, ...):
-#   default    fastboot boot  - runs TWRP v2 once, writes NOTHING to the phone
+#   default    fastboot boot  - runs FMRRE once, writes NOTHING to the phone
 #   --permanent               - flashes it (recovery, vendor_boot or boot - detected)
 # Samsung Download mode:
 #   always builds an Odin package (AP slot, Windows) and, if Heimdall is installed,
@@ -61,19 +61,19 @@ confirm() {
 
 # ---- image ------------------------------------------------------------------
 if [ -n "$BUILD_FROM" ]; then
-  say "Building TWRP v2 from $(basename "$BUILD_FROM")"
+  say "Building FMRRE from $(basename "$BUILD_FROM")"
   # "auto": the CPU architecture is taken from the stock ramdisk (and built if needed).
   scripts/make_recovery_img.sh "$BUILD_FROM" "${TW_BINARY:-auto}"
-  IMG="$ROOT/twrpv2-$(basename "$BUILD_FROM")"
+  IMG="$ROOT/fmrre-$(basename "$BUILD_FROM")"
 fi
 if [ -z "$IMG" ]; then
-  for c in twrpv2-recovery.img twrpv2-boot.img twrpv2-vendor_boot.img out/twrpv2-recovery.img; do
+  for c in fmrre-recovery.img fmrre-boot.img fmrre-vendor_boot.img out/fmrre-recovery.img; do
     [ -f "$c" ] && { IMG="$ROOT/$c"; break; }
   done
 fi
-[ -n "$IMG" ] && [ -f "$IMG" ] || die "No TWRP v2 image. Build one from your stock image:
+[ -n "$IMG" ] && [ -f "$IMG" ] || die "No FMRRE image. Build one from your stock image:
      scripts/install.sh --build-from recovery.img      (or boot.img / vendor_boot.img of YOUR phone)
-   or pass an existing one: scripts/install.sh twrpv2-recovery.img"
+   or pass an existing one: scripts/install.sh fmrre-recovery.img"
 MAGIC="$(head -c 8 "$IMG" | tr -d '\0')"
 case "$MAGIC" in
   ANDROID!) KIND=boot ;;
@@ -131,7 +131,7 @@ fi
 if [ "$MODE" = samsung ]; then
   [ "$KIND" = boot ] || die "Samsung needs a recovery.img (build it from the stock recovery.img in your firmware's AP file)."
   mkdir -p out/samsung
-  TAR="out/samsung/twrpv2-recovery-odin.tar.md5"
+  TAR="out/samsung/fmrre-recovery-odin.tar.md5"
   VBARG=(--vbmeta-disabled)
   [ -n "$VBMETA" ] && VBARG=(--vbmeta "$VBMETA")
   [ "$NO_VBMETA" = 1 ] && VBARG=(--no-vbmeta)
@@ -148,9 +148,9 @@ EOF
    Before flashing a Samsung:
      - Settings > Developer options > OEM unlocking was ON and the bootloader is UNLOCKED
      - KG/RMM state is not "Prenormal" (the bootloader would reject the image)
-     - this ERASES nothing, but Samsung's encryption usually requires Format Data in TWRP v2 afterwards
+     - this ERASES nothing, but Samsung's encryption usually requires Format Data in FMRRE afterwards
 EOF
-    confirm "Flash TWRP v2 to RECOVERY with Heimdall?"
+    confirm "Flash FMRRE to RECOVERY with Heimdall?"
     [ "$DRY" = 1 ] || heim_detect || die "No Samsung in Download mode."
     ARGS=(flash --RECOVERY "$IMG")
     if [ "$NO_VBMETA" = 0 ]; then
@@ -162,9 +162,9 @@ EOF
     run "$HEIMDALL" "${ARGS[@]}" --no-reboot
     cat <<EOF
 
-==> Flashed. Now boot STRAIGHT into recovery, or stock Android replaces TWRP v2 on its first boot:
+==> Flashed. Now boot STRAIGHT into recovery, or stock Android replaces FMRRE on its first boot:
      1. hold Volume Down + Power until the screen goes black
-     2. immediately switch to Volume Up + Power (+ Bixby on older models) and hold until TWRP v2 appears
+     2. immediately switch to Volume Up + Power (+ Bixby on older models) and hold until FMRRE appears
 EOF
   fi
   exit 0
@@ -206,7 +206,7 @@ say "Target partition: $PARTITION"
 
 if [ "$PERMANENT" = 0 ]; then
   [ "$KIND" = vendor_boot ] && die "vendor_boot images can't be test-booted. Use --permanent (or build from recovery.img/boot.img)."
-  say "Test boot: TWRP v2 runs once from RAM, nothing on the phone is changed."
+  say "Test boot: FMRRE runs once from RAM, nothing on the phone is changed."
   run "$FASTBOOT" boot "$IMG"
   echo
   echo "   If it works:   scripts/install.sh --permanent $(basename "$IMG")"
@@ -214,7 +214,7 @@ if [ "$PERMANENT" = 0 ]; then
 fi
 
 if [ "$PARTITION" = boot ] || [ "$PARTITION" = vendor_boot ] || [ "$PARTITION" = init_boot ]; then
-  warn "This phone has no recovery partition: TWRP v2 goes into '$PARTITION'."
+  warn "This phone has no recovery partition: FMRRE goes into '$PARTITION'."
   warn "That is only safe if the image was built from THIS phone's own $PARTITION.img (scripts/install.sh --build-from $PARTITION.img)."
   warn "Keep the stock $PARTITION.img to restore with:  fastboot flash $PARTITION $PARTITION.img"
 fi
@@ -232,5 +232,5 @@ elif [ "$DISABLE_VBMETA" = 1 ]; then
   "$PY" tools/odin_pack.py vbmeta-disabled -o out/vbmeta_disabled.img >/dev/null
   run "$FASTBOOT" --disable-verity --disable-verification flash vbmeta out/vbmeta_disabled.img
 fi
-say "Rebooting into TWRP v2"
+say "Rebooting into FMRRE"
 run "$FASTBOOT" reboot recovery || { warn "This bootloader can't 'reboot recovery': hold Volume Up + Power while it restarts."; run "$FASTBOOT" reboot; }

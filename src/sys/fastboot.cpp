@@ -595,7 +595,7 @@ bool getvar(const std::string& name, std::string& v) {
     else if (key == "security-patch-level") v = di.patch;
     else if (key == "first-api-level") v = device::prop("ro.product.first_api_level", di.sdk);
     else if (key == "treble-enabled") v = device::prop("ro.treble.enabled", "true");
-    else if (key == "recovery") v = "TWRP v2";
+    else if (key == "recovery") v = "FMRRE";
     else return false;
     return true;
 }
@@ -670,7 +670,7 @@ private:
         if (util::startsWith(c, "oem ")) return doOem(util::trim(arg("oem ")));
         if (c == "reboot" || c == "continue") return finish(Exit::Reboot, "", "Rebooting");
         if (c == "reboot-bootloader") return finish(Exit::Reboot, "bootloader", "Rebooting to the bootloader");
-        if (c == "reboot-recovery") return finish(Exit::Recovery, "recovery", "Back to TWRP v2");
+        if (c == "reboot-recovery") return finish(Exit::Recovery, "recovery", "Back to FMRRE");
         if (c == "reboot-fastboot") return finish(Exit::Reconnect, "", "Restarting fastbootd");
         if (util::startsWith(c, "snapshot-update")) {
             std::string why;
@@ -963,7 +963,7 @@ private:
         auto sp = a.find(' ');
         std::string cmd = a.substr(0, sp), rest = sp == std::string::npos ? "" : util::trim(a.substr(sp + 1));
         if (cmd == "help" || cmd.empty()) {
-            for (auto l : {"oem twrp <command>   run a TWRP v2 command (twrp help), e.g. oem twrp vbmeta disable",
+            for (auto l : {"oem fmrre <command>  run an FMRRE command (fmrre help), e.g. oem fmrre vbmeta disable",
                            "oem log [lines]      the end of the recovery log", "oem getprop <name>   a system property"})
                 if (!info(l)) return false;
             return okay();
@@ -974,8 +974,8 @@ private:
                 if (!info(l.text)) return false;
             return okay();
         }
-        if (cmd == "twrp") {
-            if (rest.empty() || util::startsWith(rest, "fastboot")) return fail("usage: oem twrp <command>");
+        if (cmd == "fmrre" || cmd == "twrp") {
+            if (rest.empty() || util::startsWith(rest, "fastboot")) return fail("usage: oem fmrre <command>");
             size_t cursor = t_.lines(1000000).size();
             const float rs = t_.rangeStart(), rl = t_.rangeLen();
             bool ok = ors::run({rest}, t_);
@@ -1080,7 +1080,7 @@ bool run(const Options& o, Task& t, std::string& rebootTo) {
         device::reboot(rebootTo);
         return true;
     }
-    t.print(t.cancelled() ? "Left fastboot mode." : "fastbootd: back to TWRP v2");
+    t.print(t.cancelled() ? "Left fastboot mode." : "fastbootd: back to FMRRE");
     return true;
 }
 

@@ -48,8 +48,8 @@ std::string slotDev(const std::string& name, const std::string& slot) {
     return d.empty() ? byName(name) : d;
 }
 
-// Newest stock image TWRP v2 saved for <name><slot> (before rooting: TWRP/root, before installing
-// TWRP v2: TWRP/stock). `fromStock` tells which.
+// Newest stock image FMRRE saved for <name><slot> (before rooting: FMRRE/root, before installing
+// FMRRE: FMRRE/stock). `fromStock` tells which.
 std::string stockImageFor(const std::string& name, const std::string& slot, bool* fromStock = nullptr) {
     std::string best;
     int64_t bestTime = -1;
@@ -243,28 +243,28 @@ Plan diagnose(bool userSaysBootFails) {
             "Verified boot stopped the last boot: the system image is modified or not the one vbmeta expects (normal after a GSI).",
             Risk::Undoable, true);
     if (!vbDev.empty() && !vb.ok) {
-        std::string f = newestFile(parts.storagePath() + "/TWRP/vbmeta", util::basename(vbDev) + "_header_");
+        std::string f = newestFile(parts.appDir() + "/vbmeta", util::basename(vbDev) + "_header_");
         if (!f.empty())
-            add("restore_vbmeta", "Restore the saved vbmeta header", "vbmeta is damaged; TWRP v2 saved its header before changing it.",
+            add("restore_vbmeta", "Restore the saved vbmeta header", "vbmeta is damaged; FMRRE saved its header before changing it.",
                 Risk::Undoable, true, f);
     }
     if (haveSuper && !superOk) {
         std::string f = newestFile(lp::backupDir(), "super_metadata_");
         if (!f.empty())
-            add("restore_super", "Restore the last dynamic partition table", "The partition table in super is unreadable; TWRP v2 saved a copy.",
+            add("restore_super", "Restore the last dynamic partition table", "The partition table in super is unreadable; FMRRE saved a copy.",
                 Risk::Undoable, true, f);
     }
     for (auto name : {"boot", "init_boot", "vendor_boot"}) {
         bool fromStock = false;
         std::string f = stockImageFor(name, slot, &fromStock);
-        bool changedLast = lastPart == name || (last && last->action == "Install TWRP v2" && fromStock);
+        bool changedLast = lastPart == name || (last && last->action == "Install FMRRE" && fromStock);
         if (f.empty() || !(damaged[name] || kernelCrash || changedLast)) continue;
-        std::string why = damaged[name] ? std::string("The ") + name + " image is damaged; TWRP v2 saved the original."
+        std::string why = damaged[name] ? std::string("The ") + name + " image is damaged; FMRRE saved the original."
                           : changedLast ? std::string("The phone stopped starting after ") + name + " was changed; this puts the original back."
                                         : "The kernel crashed; if a kernel, boot image or root patch caused it, the original image undoes it.";
         bool rec = damaged[name] || (changedLast && (kernelCrash || !enabled || escalate)) || (kernelCrash && escalate);
         add(std::string("restore_") + name, std::string("Restore the original ") + name + slot, why, Risk::Undoable, rec && p.bootFailed, f);
-        if (fromStock && name != std::string("init_boot")) p.steps.back().note = "This also removes TWRP v2 from " + std::string(name) + ".";
+        if (fromStock && name != std::string("init_boot")) p.steps.back().note = "This also removes FMRRE from " + std::string(name) + ".";
     }
     if (di.ab && otherComplete && (systemMissing || p.bootFailed))
         add("switch_slot", "Start the other slot (" + slotLetter(other(slot)) + ")",
@@ -290,9 +290,9 @@ Plan diagnose(bool userSaysBootFails) {
     for (auto& s : p.steps) safeLeft |= !s.triedBefore && s.risk != Risk::ErasesData;
     if (p.bootFailed && !safeLeft)
         p.advice.push_back(p.earlierFixes ? "The safe fixes have been tried. What's left erases data: Format Data (copy your files first), or "
-                                            "flash the stock firmware - from a computer with the TWRP v2 PC rescue tool if needed."
+                                            "flash the stock firmware - from a computer with the FMRRE PC rescue tool if needed."
                                           : "No safe automatic fix applies. Format Data (copy your files first), or flash the ROM / stock "
-                                            "firmware again - from a computer with the TWRP v2 PC rescue tool if needed.");
+                                            "firmware again - from a computer with the FMRRE PC rescue tool if needed.");
 
     // ---- one line for the top of the screen
     if (p.bootFailed) {

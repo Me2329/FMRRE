@@ -27,7 +27,7 @@ void Settings::load(const std::string& path) {
 void Settings::save() {
     if (path_.empty()) return;
     util::mkdirs(util::dirname(path_));
-    std::string out = "# TWRP v2 settings\n";
+    std::string out = "# FMRRE settings\n";
     for (auto& [k, v] : kv_) out += k + "=" + v + "\n";
     if (!util::writeFile(path_, out)) LOGW("settings: failed to save %s", path_.c_str());
 }

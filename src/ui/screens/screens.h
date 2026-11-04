@@ -12,6 +12,8 @@ namespace tw {
 
 std::unique_ptr<Screen> makeHomeScreen();
 std::unique_ptr<Screen> makeInstallScreen();
+// Adds a zip to the Install screen's queue (scripts and screenshots).
+void queueZip(const std::string& path);
 std::unique_ptr<Screen> makeFlashImageScreen(const std::string& image, const std::string& zipEntry = "");
 // "Can't find your file?": type a path, see why it may be hidden, get a dd command.
 std::unique_ptr<Screen> makeManualFlashScreen(const std::string& path = "");
@@ -24,7 +26,7 @@ std::unique_ptr<Screen> makeRescueScreen();
 // Auto repair: health checks + logs -> a plan of fixes, safest first. autostart: count down and run the
 // recommended fixes unattended (after a failed boot). prompt: Android asked for a factory reset.
 std::unique_ptr<Screen> makeAutoRepairScreen(bool autostart = false, bool prompt = false);
-// fastbootd built into TWRP v2 (USB FunctionFS; TCP in the simulator).
+// fastbootd built into FMRRE (USB FunctionFS; TCP in the simulator).
 std::unique_ptr<Screen> makeFastbootScreen(bool autostart = true);
 std::unique_ptr<Screen> makeVbmetaScreen();
 std::unique_ptr<Screen> makeFsToolsScreen(const std::string& mountPoint);
@@ -46,7 +48,7 @@ std::unique_ptr<Screen> makeRebootScreen();
 std::unique_ptr<Screen> makeOperationScreen(Icon icon);
 std::unique_ptr<Screen> makeAboutScreen();
 std::unique_ptr<Screen> makeOrsScreen(const ors::Script& s);
-// Picks up `twrp` CLI requests queued in /tmp/twrpv2/cli (install as App::idleHook).
+// Picks up `fmrre` CLI requests queued in /tmp/fmrre/cli (install as App::idleHook).
 void orsIdle(App& app);
 
 // File browser. With `filter` (e.g. {".zip"}) and `onPick` it works as a picker.

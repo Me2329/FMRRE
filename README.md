@@ -1,8 +1,11 @@
-# TWRP v2
+# FMRRE - FMR Recovery Environment
 
 **A modern, native Android custom recovery, rebuilt from scratch with a fresh interface and many more features.**
 
-TWRP v2 is a real recovery environment: a single static binary that `init` starts from the recovery
+*Formerly "TWRP v2". It is its own project, not affiliated with TeamWin's TWRP, but it speaks TWRP's languages:
+TWRP fstabs, OpenRecoveryScript, the `twrp` command and classic TWRP backups all keep working.*
+
+FMRRE is a real recovery environment: a single static binary that `init` starts from the recovery
 ramdisk. It draws directly to the display (DRM/KMS or fbdev), reads the touchscreen and buttons from
 `/dev/input`, and does the work itself: it flashes zips and images, makes backups, wipes, mounts and more.
 It does not need Android, a framework or a GPU.
@@ -22,7 +25,7 @@ It does not need Android, a framework or a GPU.
 > by the real `fastboot` client in the tests (over TCP; the USB FunctionFS path needs a phone). The features that
 > touch `super`, `vbmeta`, `misc` and device-mapper follow the AOSP on-disk formats exactly and are covered by
 > tests, but they have **never run on hardware**. Always try it with `fastboot boot` first, keep a working
-> recovery, and keep the super/vbmeta/boot backups TWRP v2 makes automatically.
+> recovery, and keep the super/vbmeta/boot backups FMRRE makes automatically.
 
 ---
 
@@ -56,28 +59,28 @@ It does not need Android, a framework or a GPU.
 |---|---|
 | **Install** | Zip **queue**, CRC **integrity check** before flashing, real `update-binary` protocol (`ui_print`, `progress`, `set_progress`, `wipe_cache`), zip type detection (Edify, script, Magisk/KSU module, A/B OTA), optional cache/ART wipe and auto-reboot afterwards |
 | **A/B ROMs & OTAs** | Flash **`payload.bin` zips** (LineageOS & co. on A/B phones, full factory OTAs) natively, no `update_engine` needed: REPLACE / bzip2 / xz / ZERO operations (bzip2 decoder built in), every block checked against its **SHA-256**, dynamic partitions **re-laid out in super** like update_engine (on Virtual A/B phones the current slot is freed only if super is too small), the **dm-verity hash tree and FEC computed on the phone** exactly like Android does (modern OTAs leave them out), a hash check of every finished partition, then a **slot switch**. Installs go to the **inactive slot**, so a failed install leaves your current system untouched. **Extract images** too, e.g. `boot.img` / `init_boot.img` for Magisk, with verity filled in so they match the factory images. Incremental OTAs and foreign-device packages are refused with an explanation |
-| **fastbootd built in** | `fastboot reboot fastboot`, `adb reboot fastboot` or Advanced → Fastboot mode lands in TWRP v2's **own userspace fastboot**: `flash` (raw and sparse, split images), logical partitions **resized in super automatically** (so `fastboot flash system gsi.img` just works), `create/resize/delete-logical-partition`, `update-super` / `wipe-super` and `fastboot update` factory zips (also the newer clients' whole-`super` flash), `erase`, `fetch`, `set_active`, `getvar all`, `reboot` to anywhere, and **`fastboot oem twrp <command>`** to run any TWRP v2 command from the computer. USB through FunctionFS like AOSP's fastbootd (Windows gets WinUSB descriptors), or TCP (`fastboot -s tcp:IP`) for emulators. Tested against the real `fastboot` client |
+| **fastbootd built in** | `fastboot reboot fastboot`, `adb reboot fastboot` or Advanced → Fastboot mode lands in FMRRE's **own userspace fastboot**: `flash` (raw and sparse, split images), logical partitions **resized in super automatically** (so `fastboot flash system gsi.img` just works), `create/resize/delete-logical-partition`, `update-super` / `wipe-super` and `fastboot update` factory zips (also the newer clients' whole-`super` flash), `erase`, `fetch`, `set_active`, `getvar all`, `reboot` to anywhere, and **`fastboot oem fmrre <command>`** to run any FMRRE command from the computer. USB through FunctionFS like AOSP's fastbootd (Windows gets WinUSB descriptors), or TCP (`fastboot -s tcp:IP`) for emulators. Tested against the real `fastboot` client |
 | **ADB sideload** | Receive a package over `adb sideload` without copying it to storage first. Spawns `minadbd` when the ramdisk has it, or falls back to switching the USB function to `sideload` and watching the drop paths; then flashes with the same verified installer pipeline |
 | **Images** | Flash **raw and Android sparse** images that are also **`.xz`, `.gz`, `.zst`, `.lz4` or inside a `.zip`** - streamed, no temp files (xz decoder built in). Target picked from the image *content* (boot / init_boot / vendor_boot / vbmeta / dtbo / super / system), fit check, optional archive pre-check, **SHA-256 read-back verify**, logical partitions remapped read-write (the reason plain `dd` fails on `system_a`) |
 | **GSI wizard** | Pick a GSI in any format → checks it fits → **grows `system_a` inside super** (optionally frees the other slot or deletes `product_a`) → streams it → **disables AVB in vbmeta** → optional factory reset. Refuses while a Virtual A/B update is merging |
 | **Super partitions** | Reads and rewrites the LP metadata like fastbootd: usage map, groups, **resize / delete / create** logical partitions, free the inactive slot, map read-write, **automatic metadata backup + restore** before every change (written to all slots, backup copy first, verified by read-back) |
 | **Find & flash a file** | "Can't find your file?": type a path (`/sdcard/...` is mapped to recovery's real path), get a **diagnosis** (wrong folder, typo with fuzzy suggestions, unfinished download, encrypted or unmounted storage, missing extension - files are recognised by their content) and a **ready-to-run command** (`dd`, `xz -dc \| dd`, `simg2img` for sparse, `blockdev --setrw` for logical partitions) to open in the terminal, save as a script, or flash with the built-in streamer |
 | **Verified boot** | Show and change vbmeta flags for both slots (`--disable-verity --disable-verification` equivalent), original header saved first; flashing a `vbmeta.img` can patch it on the fly |
-| **Install TWRP v2** | From a computer: `scripts/install.sh` / `install.ps1` handle **fastboot** (test boot or permanent, A/B slots, vbmeta) and **Samsung Download mode** (Odin `.tar.md5` + Heimdall). From inside the recovery: **Install TWRP v2 permanently** after a `fastboot boot`, with an automatic stock backup |
+| **Install FMRRE** | From a computer: `scripts/install.sh` / `install.ps1` handle **fastboot** (test boot or permanent, A/B slots, vbmeta) and **Samsung Download mode** (Odin `.tar.md5` + Heimdall). From inside the recovery: **Install FMRRE permanently** after a `fastboot boot`, with an automatic stock backup |
 | **Root** | Detects Magisk / KernelSU / APatch and whether the ramdisk is in `boot` or `init_boot`; installs from zip/APK or flashes a `magisk_patched` image to the right partition **after an automatic stock backup**; one-tap unroot; **module manager** (enable, disable, remove, "bootloop? disable all") |
-| **Automation** | **OpenRecoveryScript** (`/cache/recovery/openrecoveryscript`) with a cancellable countdown, AOSP `/cache/recovery/command` and the **bootloader message in `misc`** (read and cleared, no recovery boot loops), and a **`twrp` command line tool** for `adb shell` (see below) |
+| **Automation** | **OpenRecoveryScript** (`/cache/recovery/openrecoveryscript`) with a cancellable countdown, AOSP `/cache/recovery/command` and the **bootloader message in `misc`** (read and cleared, no recovery boot loops), and a **`fmrre` command line tool** for `adb shell` (see below) |
 | **Wipe** | Factory reset (keeps internal storage), Advanced wipe checklist, **Format Data** (mkfs + metadata), ART/Dalvik wipe |
 | **Backup** | Streaming tar/raw backups with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), optional **password encryption** (AES-256-CTR + HMAC-SHA256, key from PBKDF2-HMAC-SHA256 with 200,000 iterations; the password is asked twice), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
-| **Restore** | Reads TWRP v2 and **classic TWRP** backups, per-partition selection, **verify before restore** (refuses corrupt backups; works on encrypted backups without the password), a wrong password is caught **before anything is wiped**, tampering is caught by the HMAC, verify-only and delete |
+| **Restore** | Reads FMRRE and **classic TWRP** backups (from `FMRRE/BACKUPS` and TWRP's `TWRP/BACKUPS`), per-partition selection, **verify before restore** (refuses corrupt backups; works on encrypted backups without the password), a wrong password is caught **before anything is wiped**, tampering is caught by the HMAC, verify-only and delete |
 | **Mount** | Toggle each partition with live usage bars, read-only system by default (dm-verity safe), unmount all, **USB OTG auto-detect** and rescan, **exFAT / NTFS** via kernel drivers (exfat, sdfat, ntfs3) or FUSE helpers |
 | **File systems** | Check & repair (e2fsck, fsck.f2fs, fsck.fat, fsck.exfat, ntfsfix), grow to fill the partition (resize2fs, resize.f2fs), change file system, info - long-press a partition in Mount |
 | **Files** | Full file manager: sort, hidden files, quick locations, **multi-select**, copy/move/paste, rename, chmod, delete, SHA-256, text and **hex viewer**, install/flash straight from a file, "flash as GSI", "dd command for this file". Pickers show **how many files the type filter hides** and have an **All files** switch |
 | **Terminal** | Root shell with on-screen keyboard, history, quick-command chips, Ctrl-C |
-| **Bootloop rescue** | Reads what the previous boot left behind (pstore `console-ramoops`, panic dumps, `last_kmsg`, **the previous boot's Android log** decoded from pstore `pmsg` - so the actual `FATAL EXCEPTION IN SYSTEM PROCESS` is shown -, the boot reason, A/B slot state) and explains it: verified boot rejecting a GSI, a system image that doesn't mount (wrong CPU type / not A/B), SELinux policy mismatch, encryption keys after a ROM switch, a zygote crash loop, Rescue Party, kernel panic or watchdog freeze, enabled Magisk modules. **Recent changes** come from the flash history (`TWRP/history.txt`: every zip, image, OTA, fastboot flash, wipe, format, restore and vbmeta change, with the time - `twrp history` prints it), so "it began after flashing X" is right there. Each cause comes with **the matching one-tap fix** (disable modules, disable vbmeta verification, other slot, Format Data, reflash system, restore stock boot) and the log line it is based on; logs can be saved for a bug report. `twrp rescue` prints the same |
-| **Auto repair** | For "my phone doesn't start and I don't know why": one screen **checks everything** (boot / init_boot / vendor_boot headers, vbmeta, the super partition table, both A/B slots, free space on /data, Magisk modules, battery), reads the previous boot's logs (Bootloop rescue), **what Android itself said** when it gave up (`--reason=RescueParty`, `init_user0_failed` ...) and **the last change** from the flash history - then plans the fixes **safest first**: disable modules → clear the ART/Dalvik and cache → disable verity (when verity stopped the boot) → restore the saved vbmeta header / super table → put back the **stock boot / init_boot / vendor_boot** saved before rooting or installing TWRP v2 (when that changed last, the header is damaged or the kernel panicked) → **boot the other slot** (rollback after an OTA that doesn't start, or a slot without system) → **fsck /data** → Format Data (offered last, never preselected, never unattended). Each step shows *why*, a risk label (Safe / Can be undone / Erases data) and can be switched off; swipe to repair. It **escalates across boots**: a fix an earlier run already made is not repeated, so coming back after another bootloop tries the next one. Phones that keep no log: "My phone doesn't start" plans the usual fixes anyway. After a failed boot the home card says so and opens it; Settings → **Repair automatically after a failed boot** runs the safe fixes after a 15 s countdown and reboots (at most 3 times a day - no endless loop). When Android asks recovery to *offer* a factory reset (`--prompt_and_wipe_data`), TWRP v2 opens auto repair instead of erasing anything. `twrp autofix --dry-run` prints the diagnosis; `twrp autofix [--allow-slot-switch] [--allow-format-data] [--reboot]` runs it |
-| **PC rescue** | `pc/twrpv2_rescue.py`: for phones that bootloop or can't reach recovery. From a computer it identifies the phone (model, mode, **bootloader locked or not**) and fixes it from fastboot or Samsung Download mode: boots TWRP v2 from RAM and runs Auto repair, rolls back to the other slot, disables vbmeta, flashes stock images (Samsung AP `.lz4` files unpacked). Nothing is written to a locked phone - [details below](#pc-rescue-the-phone-doesnt-start) |
+| **Bootloop rescue** | Reads what the previous boot left behind (pstore `console-ramoops`, panic dumps, `last_kmsg`, **the previous boot's Android log** decoded from pstore `pmsg` - so the actual `FATAL EXCEPTION IN SYSTEM PROCESS` is shown -, the boot reason, A/B slot state) and explains it: verified boot rejecting a GSI, a system image that doesn't mount (wrong CPU type / not A/B), SELinux policy mismatch, encryption keys after a ROM switch, a zygote crash loop, Rescue Party, kernel panic or watchdog freeze, enabled Magisk modules. **Recent changes** come from the flash history (`FMRRE/history.txt`: every zip, image, OTA, fastboot flash, wipe, format, restore and vbmeta change, with the time - `fmrre history` prints it), so "it began after flashing X" is right there. Each cause comes with **the matching one-tap fix** (disable modules, disable vbmeta verification, other slot, Format Data, reflash system, restore stock boot) and the log line it is based on; logs can be saved for a bug report. `fmrre rescue` prints the same |
+| **Auto repair** | For "my phone doesn't start and I don't know why": one screen **checks everything** (boot / init_boot / vendor_boot headers, vbmeta, the super partition table, both A/B slots, free space on /data, Magisk modules, battery), reads the previous boot's logs (Bootloop rescue), **what Android itself said** when it gave up (`--reason=RescueParty`, `init_user0_failed` ...) and **the last change** from the flash history - then plans the fixes **safest first**: disable modules → clear the ART/Dalvik and cache → disable verity (when verity stopped the boot) → restore the saved vbmeta header / super table → put back the **stock boot / init_boot / vendor_boot** saved before rooting or installing FMRRE (when that changed last, the header is damaged or the kernel panicked) → **boot the other slot** (rollback after an OTA that doesn't start, or a slot without system) → **fsck /data** → Format Data (offered last, never preselected, never unattended). Each step shows *why*, a risk label (Safe / Can be undone / Erases data) and can be switched off; swipe to repair. It **escalates across boots**: a fix an earlier run already made is not repeated, so coming back after another bootloop tries the next one. Phones that keep no log: "My phone doesn't start" plans the usual fixes anyway. After a failed boot the home card says so and opens it; Settings → **Repair automatically after a failed boot** runs the safe fixes after a 15 s countdown and reboots (at most 3 times a day - no endless loop). When Android asks recovery to *offer* a factory reset (`--prompt_and_wipe_data`), FMRRE opens auto repair instead of erasing anything. `fmrre autofix --dry-run` prints the diagnosis; `fmrre autofix [--allow-slot-switch] [--allow-format-data] [--reboot]` runs it |
+| **PC rescue** | `pc/fmrre_rescue.py`: for phones that bootloop or can't reach recovery. From a computer it identifies the phone (model, mode, **bootloader locked or not**) and fixes it from fastboot or Samsung Download mode: boots FMRRE from RAM and runs Auto repair, rolls back to the other slot, disables vbmeta, flashes stock images (Samsung AP `.lz4` files unpacked). Nothing is written to a locked phone - [details below](#pc-rescue-the-phone-doesnt-start) |
 | **Advanced** | **System monitor** (CPU graph, per-core frequency, RAM, battery details, every thermal zone), partition info, **input and touch tester**, copy log, fix contexts, restart ADB, A/B **slot switching** |
-| **Reboot** | System, Recovery, Bootloader, **Fastbootd** (TWRP v2's own when it is the installed recovery), **Download** (Samsung), **EDL** (Qualcomm), Power off |
+| **Reboot** | System, Recovery, Bootloader, **Fastbootd** (FMRRE's own when it is the installed recovery), **Download** (Samsung), **EDL** (Qualcomm), Power off |
 | **Devices** | DRM/KMS and fbdev (32 bpp in any channel order, RGB565), multitouch protocol A/B and single touch, touch calibration (swap/flip), A/B slots, **dynamic/logical partitions** (`/dev/block/mapper`), reads **TWRP or AOSP fstabs**, **7 CPU architectures**: arm64-v8a, armeabi-v7a, armeabi (ARMv5), x86, x86_64, riscv64, mips. The right build is picked automatically from your stock image |
 
 **Speed:** SHA-256 (read-back verification, OTA and dm-verity hashing, backup digests) runs on the CPU's crypto
@@ -96,7 +99,7 @@ src/
   platform/   DRM/KMS + fbdev + simulator displays, evdev input, device info/power/battery
   sys/        partitions & fstab, installer (zip/update-binary), image streaming (sparse/xz/gz/zip),
               super (LP metadata + device-mapper), A/B OTA payloads, dm-verity hash tree + FEC, fastbootd, vbmeta,
-              boot images & root, path diagnostics, OpenRecoveryScript + twrp CLI, sideload, backup engine
+              boot images & root, path diagnostics, OpenRecoveryScript + fmrre CLI, sideload, backup engine
   ui/         immediate-mode widget toolkit, app shell (navigation, dialogs, console, lock)
   ui/screens/ home, install, GSI wizard, super, vbmeta, find & flash, root, fs tools, wipe,
               backup/restore, mount, files, terminal, advanced, settings, reboot, ORS
@@ -108,7 +111,7 @@ scripts/      build (7 architectures), test them on emulated CPUs, make a recove
               (fastboot / Samsung), try on a device
 tools/        odin_pack.py (Odin .tar.md5, disabled vbmeta), elf_abi.py (which build fits a phone),
               resource embedding, Zig toolchain
-pc/           PC rescue tool (twrpv2_rescue.py + a Windows launcher): fix a phone that doesn't start, from a computer
+pc/           PC rescue tool (fmrre_rescue.py + a Windows launcher): fix a phone that doesn't start, from a computer
 ```
 
 ---
@@ -116,7 +119,7 @@ pc/           PC rescue tool (twrpv2_rescue.py + a Windows launcher): fix a phon
 ## Building
 
 ### Android binary (no NDK needed)
-TWRP v2 cross-compiles to a **fully static** binary with [Zig](https://ziglang.org/), so it runs from any
+FMRRE cross-compiles to a **fully static** binary with [Zig](https://ziglang.org/), so it runs from any
 recovery ramdisk regardless of the bionic version.
 
 ```bash
@@ -152,7 +155,7 @@ backend can't build it.
 
 **Every architecture is run, not just compiled:** `scripts/test_archs.sh` starts each build on an emulated CPU
 of the oldest kind it supports (qemu-user). It runs the full self-test suite, boots the recovery UI headless and
-compares the screenshot with the desktop build, and uses the `twrp` CLI to resize super and flash a GSI from
+compares the screenshot with the desktop build, and uses the `fmrre` CLI to resize super and flash a GSI from
 `.img.xz`. CI does this for all seven architectures.
 ```bash
 TW_SELFTEST=1 scripts/build.sh all
@@ -167,9 +170,9 @@ ANDROID_NDK=/path/to/ndk scripts/build.sh ndk arm64-v8a     # or armeabi-v7a, x8
 ```
 
 ### Inside an AOSP / LineageOS / TWRP tree
-Put this repo anywhere in the tree (for example `bootable/twrpv2`) and add the module from `Android.bp`:
+Put this repo anywhere in the tree (for example `bootable/fmrre`) and add the module from `Android.bp`:
 ```make
-PRODUCT_PACKAGES += twrpv2_recovery
+PRODUCT_PACKAGES += fmrre_recovery
 ```
 It installs as `/system/bin/recovery` in the recovery ramdisk and overrides the stock recovery.
 See `device/example/` for an fstab and a device-tree snippet.
@@ -179,7 +182,7 @@ Soong builds it for whatever CPU the device tree targets (arm64, arm, x86, x86_6
 
 ## Putting it on a phone
 
-You need **an unlocked bootloader**, and a TWRP v2 image built from **your phone's own** stock
+You need **an unlocked bootloader**, and an FMRRE image built from **your phone's own** stock
 `recovery.img` (or `boot.img` / `vendor_boot.img` on phones without a recovery partition). Get the stock
 image from your firmware package; for Samsung it's inside the `AP_*.tar.md5`.
 
@@ -191,7 +194,7 @@ scripts/build.sh arm64
 ```bash
 scripts/make_recovery_img.sh recovery.img auto device/example/twrp.fstab
 ```
-This writes `twrpv2-recovery.img` (or `twrpv2-boot.img` / `twrpv2-vendor_boot.img`).
+This writes `fmrre-recovery.img` (or `fmrre-boot.img` / `fmrre-vendor_boot.img`).
 `scripts/install.sh --build-from recovery.img` does steps 1 and 2 in one go.
 
 **2. Install it** with `scripts/install.sh` (Linux / macOS) or `scripts\install.ps1` (Windows). It finds the
@@ -199,9 +202,9 @@ phone in fastboot, Download mode or plain Android (USB debugging), and reboots i
 
 | Phone | Command | What happens |
 |---|---|---|
-| **Fastboot** (Pixel, Xiaomi, OnePlus, Motorola, Nothing, Sony...) | `scripts/install.sh` | **Test boot** (`fastboot boot`): TWRP v2 runs once from RAM, **nothing is written** |
+| **Fastboot** (Pixel, Xiaomi, OnePlus, Motorola, Nothing, Sony...) | `scripts/install.sh` | **Test boot** (`fastboot boot`): FMRRE runs once from RAM, **nothing is written** |
 | | `scripts/install.sh --permanent` | Flashes it: to `recovery`, or to `boot` / `vendor_boot` on phones without a recovery partition (with a warning). `--both-slots`, `--vbmeta stock_vbmeta.img` or `--disable-vbmeta` as needed |
-| **Samsung** (Download mode) | `scripts/install.sh` | Builds an **Odin package** (`out/samsung/twrpv2-recovery-odin.tar.md5`: recovery.img + a vbmeta with verification disabled) and flashes it with **Heimdall** |
+| **Samsung** (Download mode) | `scripts/install.sh` | Builds an **Odin package** (`out/samsung/fmrre-recovery-odin.tar.md5`: recovery.img + a vbmeta with verification disabled) and flashes it with **Heimdall** |
 | | Windows: `scripts\install.ps1 -Samsung` | Builds the same package: put it in Odin's **AP** slot, untick **Auto Reboot**, Start |
 | Windows, fastboot | `scripts\install.ps1` / `-Permanent` | Same as the first two rows |
 
@@ -210,13 +213,13 @@ Samsung has no test boot, so it's always permanent. After flashing, boot **strai
 Android puts its own recovery back. The bootloader must be unlocked (OEM unlocking on) and the KG state must
 not be `Prenormal`.
 
-**3. Or make it permanent from inside TWRP v2.** After a test boot, copy the image to the phone
-(`adb push twrpv2-recovery.img /sdcard/Download/`). Then use **Advanced → Install TWRP v2 permanently** or
-`twrp recovery /sdcard/Download/twrpv2-recovery.img`. It saves the stock recovery/boot to `TWRP/stock`
+**3. Or make it permanent from inside FMRRE.** After a test boot, copy the image to the phone
+(`adb push fmrre-recovery.img /sdcard/Download/`). Then use **Advanced → Install FMRRE permanently** or
+`fmrre recovery /sdcard/Download/fmrre-recovery.img`. It saves the stock recovery/boot to `FMRRE/stock`
 first, refuses images whose header doesn't match the phone's boot, verifies the write, and lists the stock
 backups for a one-tap undo.
 
-Already in a recovery with root adb (TWRP, OrangeFox, LineageOS recovery)? You can also run TWRP v2 without
+Already in a recovery with root adb (TWRP, OrangeFox, LineageOS recovery)? You can also run FMRRE without
 building an image at all: `scripts/try_on_device.sh` (it picks the build for the phone's CPU).
 
 The installers are tested against fake `fastboot`/`adb`/`heimdall` (`tests/install_test.sh`), **not yet with
@@ -224,9 +227,9 @@ a real phone**. `install.ps1` hasn't been run on Windows yet either. Please repo
 
 ## PC rescue: the phone doesn't start
 
-`pc/twrpv2_rescue.py` (Windows: double-click `pc\twrpv2_rescue.bat`) is the same idea as Auto repair, run from a
+`pc/fmrre_rescue.py` (Windows: double-click `pc\fmrre_rescue.bat`) is the same idea as Auto repair, run from a
 computer, for phones that bootloop, stop at a vbmeta / "verification failed" error or **can't get into recovery
-any more**. It is one Python 3 file (plus `twrpv2_rescue_ro.py` for **Romanian**, picked automatically on a Romanian
+any more**. It is one Python 3 file (plus `fmrre_rescue_ro.py` for **Romanian**, picked automatically on a Romanian
 system or with `--lang ro`), standard library only: a window (tkinter) or commands. It uses `adb` and `fastboot`
 (Android platform-tools) and, for Samsung, Heimdall.
 
@@ -234,8 +237,8 @@ system or with `--lang ro`), standard library only: a window (tkinter) or comman
 
 Plug the phone in, in whatever mode it is in, and it tells you:
 - **which phone** it is: model, codename, serial, Android version. The bootloader only reports a codename, so the
-  model seen over adb is remembered by serial (`~/.twrpv2_rescue.json`), and Pixel codenames are built in.
-- **which mode** it is in: Android, recovery (TWRP v2 or another one), sideload, bootloader, fastbootd, Samsung
+  model seen over adb is remembered by serial (`~/.fmrre_rescue.json`), and Pixel codenames are built in.
+- **which mode** it is in: Android, recovery (FMRRE or another one), sideload, bootloader, fastbootd, Samsung
   Download mode, or connected but not authorized for USB debugging.
 - **whether the bootloader is unlocked**:
   - fastboot: `getvar unlocked`, or `oem device-info`
@@ -248,22 +251,22 @@ On a **locked** phone it changes nothing: it explains how that maker's phones ar
 phone), and which **official** tool restores the firmware instead (Pixel Repair, Smart Switch / Odin, sideloading the
 official OTA from the stock recovery...).
 
-**Fix it for me** (`twrpv2_rescue.py fix`) then works out the repair. It asks before every change (`--yes` to not
+**Fix it for me** (`fmrre_rescue.py fix`) then works out the repair. It asks before every change (`--yes` to not
 ask; Format Data / `-w` always needs `ERASE` typed):
 
 | The phone is in | What it does |
 |---|---|
 | Bootloader, this slot marked unbootable / out of tries, other slot booted fine | `set_active` the other slot (rollback after a bad update; a pending Virtual A/B update is cancelled first) and reboots |
-| Bootloader, and you give a TWRP v2 image (`--recovery`) | `fastboot boot` - TWRP v2 runs from RAM, **nothing is written** - then runs **Auto repair** inside it over adb (`twrp autofix`) and reboots |
-| Bootloader, no image | Tries the installed recovery (`fastboot reboot recovery`): if it is TWRP v2, Auto repair runs there |
-| Android | Restarts to recovery and runs Auto repair (when TWRP v2 is installed) |
-| TWRP v2 | Shows Auto repair's diagnosis (`autofix --dry-run`), then repairs |
-| Samsung Download mode | `--recovery`: flashes TWRP v2 to RECOVERY + a vbmeta with verification disabled (Heimdall), you start recovery with the keys, Auto repair runs. `--ap AP_....tar.md5`: flashes the **stock** boot / init_boot / vendor_boot / recovery / vbmeta / dtbo from your firmware - the `.lz4` images inside are unpacked by the tool (pure Python LZ4), partition names come from the phone's PIT |
+| Bootloader, and you give an FMRRE image (`--recovery`) | `fastboot boot` - FMRRE runs from RAM, **nothing is written** - then runs **Auto repair** inside it over adb (`fmrre autofix`) and reboots |
+| Bootloader, no image | Tries the installed recovery (`fastboot reboot recovery`): if it is FMRRE, Auto repair runs there |
+| Android | Restarts to recovery and runs Auto repair (when FMRRE is installed) |
+| FMRRE | Shows Auto repair's diagnosis (`autofix --dry-run`), then repairs |
+| Samsung Download mode | `--recovery`: flashes FMRRE to RECOVERY + a vbmeta with verification disabled (Heimdall), you start recovery with the keys, Auto repair runs. `--ap AP_....tar.md5`: flashes the **stock** boot / init_boot / vendor_boot / recovery / vbmeta / dtbo from your firmware - the `.lz4` images inside are unpacked by the tool (pure Python LZ4), partition names come from the phone's PIT |
 
-Single repairs: `boot-twrp IMG`, `autofix`, `switch-slot`, `cancel-update`, `disable-vbmeta [--vbmeta stock.img]
+Single repairs: `boot-fmrre IMG`, `autofix`, `switch-slot`, `cancel-update`, `disable-vbmeta [--vbmeta stock.img]
 [--both-slots]` (the GSI fix: stock vbmeta with flags set, or a generated empty one), `flash PART IMG` (the image
-header is checked first), `samsung-twrp IMG`, `samsung-stock AP.tar.md5 [--parts boot,vbmeta]`, `wipe-data`,
-`reboot system|recovery|bootloader|fastboot|download`, and `logs [DIR]` (TWRP v2's rescue logs, recovery.log,
+header is checked first), `samsung-fmrre IMG`, `samsung-stock AP.tar.md5 [--parts boot,vbmeta]`, `wipe-data`,
+`reboot system|recovery|bootloader|fastboot|download`, and `logs [DIR]` (FMRRE's rescue logs, recovery.log,
 `getvar all` or logcat, for a bug report). `status --json` is for scripts; `--dry-run` shows every command that would
 change the phone and runs none. Flashing and wiping are refused while a Virtual A/B update is still merging.
 
@@ -273,7 +276,7 @@ Romanian translation. **Not yet tested with a real phone**, and not yet on Windo
 and tkinter, but that is untested there).
 
 ### fstab
-TWRP v2 looks for `/etc/twrp.fstab`, `/etc/recovery.fstab`, `/system/etc/recovery.fstab` and finally
+FMRRE looks for `/etc/twrp.fstab`, `/etc/recovery.fstab`, `/system/etc/recovery.fstab` and finally
 `/vendor/etc/fstab.<hardware>`. Both the TWRP format and the AOSP format work, and partitions such as boot,
 init_boot, vendor_boot and dtbo are added automatically from `/dev/block/by-name`. See
 `device/example/twrp.fstab` for every supported flag.
@@ -294,60 +297,62 @@ as a dry run.
 scripts/build.sh sim
 ```
 ```bash
-out/sim/twrpv2 --sim
+out/sim/fmrre --sim
 ```
 
 In the window, the mouse acts as touch, ↑/↓ are Vol+/Vol−, Enter is Power, Esc is Back and F1 is Home.
 
 **Headless automation** (used for the screenshots and in CI):
 ```bash
-out/sim/twrpv2 --sim --headless --script tools/scripts/tour.txt --out shots/
+out/sim/fmrre --sim --headless --script tools/scripts/tour.txt --out shots/
 ```
 Script commands: `tap X Y`, `longpress X Y`, `swipe X1 Y1 X2 Y2 MS`, `wait MS`, `waittask`,
-`key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|files|root|advanced|fastboot|rescue|autofix|settings|backup|restore [path]`.
+`key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|manual|install|files|root|advanced|fastboot|rescue|autofix|settings|backup|restore [path]`,
+`open monitor`, `open terminal [command]`.
 
 **Self-tests:**
 ```bash
-build-host/twrpv2_selftest
+build-host/fmrre_selftest
 ```
 
 ---
 
-## Command line (`twrp`)
+## Command line (`fmrre`, or `twrp` as before)
 
-From a computer, over `adb shell` while TWRP v2 runs (the UI shows progress), or from the recovery terminal:
+From a computer, over `adb shell` while FMRRE runs (the UI shows progress), or from the recovery terminal:
 ```bash
-adb shell /system/bin/recovery twrp gsi /sdcard/Download/system-td-arm64-ab-vanilla.img.xz
+adb shell /system/bin/recovery fmrre gsi /sdcard/Download/system-td-arm64-ab-vanilla.img.xz
 ```
 ```bash
-adb shell /system/bin/recovery twrp check /sdcard/Download/system.img
+adb shell /system/bin/recovery fmrre check /sdcard/Download/system.img
 ```
-`ln -s /system/bin/recovery /sbin/twrp` lets you just type `twrp ...`. Commands (the same ones work in
+Images made with `scripts/make_recovery_img.sh` have `fmrre` (and `twrp`, for classic TWRP scripts) next to the
+recovery binary, so `adb shell fmrre ...` works as well. Commands (the same ones work in
 OpenRecoveryScript files): `install`, `flash <image> <partition>`, `gsi`, `wipe`, `format data`, `backup`,
 `restore`, `mount`, `unmount`, `mkdir`, `cmd`, `sideload`, `lp list|resize|delete|free-other-slot`,
 `vbmeta disable|enable|status`, `root status|backup|modules-off`, `recovery <image>`, `check <path>`, `dd <image> <partition>`,
-`payload info|extract|install <ota.zip>` (A/B ROMs: `payload extract rom.zip boot init_boot` writes them to `TWRP/payload/`),
+`payload info|extract|install <ota.zip>` (A/B ROMs: `payload extract rom.zip boot init_boot` writes them to `FMRRE/payload/`),
 `fastboot [--tcp PORT]` (fastbootd until the computer reboots the phone or sends `fastboot reboot recovery`),
 `lp export [--empty] <file>` (the partition table as a `super_empty.img`), `rescue [save]` (why the last boot failed), `history [N]`,
 `autofix [--dry-run] [--bootloop] [--only=id,id] [--allow-slot-switch] [--allow-format-data] [--reboot]` (find and fix what stops the phone booting),
-`print`, `sleep`, `reboot [target]`. `twrp help` lists them.
+`print`, `sleep`, `reboot [target]`. `fmrre help` lists them.
 
-In the simulator: `out/sim/twrpv2 --sim twrp lp list`.
+In the simulator: `out/sim/fmrre --sim fmrre lp list`.
 
 ### fastbootd
-On the phone: Advanced → **Fastboot mode** (or `adb reboot fastboot` when TWRP v2 is the installed recovery). On the computer:
+On the phone: Advanced → **Fastboot mode** (or `adb reboot fastboot` when FMRRE is the installed recovery). On the computer:
 ```bash
 fastboot flash system system-td-arm64-ab-vanilla.img
 ```
 ```bash
-fastboot oem twrp vbmeta disable
+fastboot oem fmrre vbmeta disable
 ```
 ```bash
 fastboot reboot recovery
 ```
-`fastboot getvar all` shows `recovery:TWRP v2`. In the simulator the same works over TCP:
+`fastboot getvar all` shows `recovery:FMRRE`. In the simulator the same works over TCP:
 ```bash
-out/sim/twrpv2 --sim twrp fastboot --tcp 5554
+out/sim/fmrre --sim fmrre fastboot --tcp 5554
 ```
 ```bash
 fastboot -s tcp:127.0.0.1:5554 getvar all
@@ -356,32 +361,32 @@ fastboot -s tcp:127.0.0.1:5554 getvar all
 ---
 
 ## Known limitations (honest list)
-- **No decryption** of FBE/FDE `/data`. When data is encrypted, TWRP v2 detects it and keeps backups and
+- **No decryption** of FBE/FDE `/data`. When data is encrypted, FMRRE detects it and keeps backups and
   settings off `/data`; **Format Data** still works.
 - **No MTP** yet. Use **ADB sideload** or `adb push` to copy files.
 - **A/B OTAs: full packages only.** Incremental OTAs patch one exact old build (bsdiff / puffdiff) and are refused;
   use the full OTA or ROM zip. Payload signatures aren't checked (the per-block SHA-256 hashes are).
 - **Super metadata editing has only been tested on images, not on a phone.** Retrofit dynamic partitions (super
-  split across `system_a`/`system_b`) are read-only on purpose, in TWRP v2's fastbootd too; use the stock fastbootd there.
+  split across `system_a`/`system_b`) are read-only on purpose, in FMRRE's fastbootd too; use the stock fastbootd there.
 - **fastbootd over USB hasn't met a phone yet** (the protocol is tested with the real client over TCP). It needs the
-  `/dev/usb-ffs/fastboot` FunctionFS mount that recovery ramdisks since Android 10 have; without it TWRP v2 tries to
+  `/dev/usb-ffs/fastboot` FunctionFS mount that recovery ramdisks since Android 10 have; without it FMRRE tries to
   set the gadget up itself. `snapshot-update cancel|merge` is not supported (finish the OTA in Android first), and,
   as with AOSP's fastbootd, `fastboot boot` and `flashing unlock` need the bootloader.
 - `.zst` and `.lz4` images need the `zstd` / `lz4` tools in the ramdisk (`.xz`, `.gz` and `.zip` are built in).
-- Root: TWRP v2 installs and manages Magisk / KernelSU / APatch; it has no `su` of its own.
-- ADB sideload needs `minadbd` in the ramdisk for the real sideload protocol; without it TWRP v2 flips USB to the `sideload` function and watches the standard drop paths instead.
+- Root: FMRRE installs and manages Magisk / KernelSU / APatch; it has no `su` of its own.
+- ADB sideload needs `minadbd` in the ramdisk for the real sideload protocol; without it FMRRE flips USB to the `sideload` function and watches the standard drop paths instead.
 - Zip flashing checks integrity (CRC) but not OTA **signatures**.
 - SELinux labels are preserved only if the ramdisk's `tar` supports it (`--selinux` or `--xattrs`).
   Otherwise use *Advanced → Fix storage contexts*.
 - Download and EDL reboot targets only work where the bootloader supports them.
 - **Auto repair and the PC rescue tool haven't met a broken phone yet.** Their logic is tested on the simulator and
-  with fake adb / fastboot / heimdall. Every step is one the rest of TWRP v2 already does (wipe, flash, slot switch,
+  with fake adb / fastboot / heimdall. Every step is one the rest of FMRRE already does (wipe, flash, slot switch,
   fsck); what can't be undone is never done unattended.
 
 ---
 
 ## Credits & licences
-TWRP v2 is an independent project inspired by the original TWRP (Team Win Recovery Project); its code is
+FMRRE is an independent project inspired by the original TWRP (Team Win Recovery Project); its code is
 written from scratch. Licensed under the **Apache License 2.0** (see `LICENSE`).
 Third-party components: [Inter](https://rsms.me/inter/) (SIL OFL 1.1), DejaVu Sans Mono (Bitstream Vera
 licence), [stb_truetype](https://github.com/nothings/stb) (public domain), [miniz](https://github.com/richgel999/miniz) (MIT),

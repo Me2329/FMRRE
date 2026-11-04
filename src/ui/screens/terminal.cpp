@@ -22,7 +22,7 @@ class TerminalScreen : public Screen {
 public:
     TerminalScreen(const std::string& initial, const std::string& prefill) {
         cwd_ = device::isSim() ? device::simRoot() : "/";
-        add("TWRP v2 terminal - commands run as root via " + util::shellPath());
+        add("FMRRE terminal - commands run as root via " + util::shellPath());
         add("Tip: tap the keyboard icon to hide/show the keyboard.");
         if (!prefill.empty()) {
             add("Command ready below - check it, then press the run button.");

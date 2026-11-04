@@ -160,7 +160,7 @@ static void ensureSuper(const std::string& root) {
         util::mkdirs(root + "/data/adb/modules/" + m.id);
         util::writeFile(root + "/data/adb/modules/" + m.id + "/module.prop", m.prop);
     }
-    bootHdr(dl + "twrpv2-recovery.img", 3 << 20, 1 << 20);  // as built by scripts/make_recovery_img.sh from boot.img
+    bootHdr(dl + "fmrre-recovery.img", 3 << 20, 1 << 20);  // as built by scripts/make_recovery_img.sh from boot.img
     util::writeFile(dl + "magisk_patched-29000_Xy12z.img", "");
     bootHdr(dl + "magisk_patched-29000_Xy12z.img", 0, 950 << 10);
     // Demo GSIs as they are actually downloaded.
@@ -274,7 +274,7 @@ static void ensurePstore(const std::string& root) {
 void ensureRoot(const std::string& root) {
     if (util::exists(root + "/sim.prop")) { ensureSuper(root); ensureOta(root); ensurePstore(root); return; }
     LOGI("sim: creating sandbox in %s", root.c_str());
-    for (auto d : {"/data/media/0/Download", "/data/media/0/TWRP", "/data/media/0/Pictures", "/data/app", "/data/data/com.android.settings",
+    for (auto d : {"/data/media/0/Download", "/data/media/0/FMRRE", "/data/media/0/Pictures", "/data/app", "/data/data/com.android.settings",
                    "/data/dalvik-cache/arm64", "/data/system", "/cache/recovery", "/system_root/system/app", "/vendor/etc",
                    "/product/app", "/metadata", "/persist", "/dev/block/by-name", "/dev/block/mapper", "/etc", "/tmp",
                    "/external_sd/Music"})
@@ -287,7 +287,7 @@ void ensureRoot(const std::string& root) {
                     "ro.boot.bootreason=reboot,rescueparty\nro.boot.flash.locked=0\nro.boot.verifiedbootstate=orange\n"
                     "ro.boot.vbmeta.device_state=unlocked\n");
     util::writeFile(root + "/etc/recovery.fstab",
-                    "# TWRP v2 fstab (simulator)\n"
+                    "# FMRRE fstab (simulator)\n"
                     "/system_root  ext4   system       flags=display=\"System\";logical;slotselect;backup=1\n"
                     "/vendor       ext4   vendor       flags=display=\"Vendor\";logical;slotselect;backup=1\n"
                     "/product      ext4   product      flags=display=\"Product\";logical;slotselect\n"
@@ -332,10 +332,10 @@ void ensureRoot(const std::string& root) {
             false);
     makeZip(root + "/data/media/0/Download/NikGapps-core-15.zip",
             "ui_print(\"NikGapps core for Android 15\");\nui_print(\"Installing 12 packages\");\nui_print(\"Done\");\n", false);
-    randomFile(root + "/data/media/0/Download/twrpv2-husky.img", 3 << 20);
+    randomFile(root + "/data/media/0/Download/fmrre-husky.img", 3 << 20);
     randomFile(root + "/data/media/0/Download/kernel-boot.img", 2 << 20);
     util::writeFile(root + "/data/media/0/Download/notes.txt",
-                    "TWRP v2 simulator\n\nThis sandbox mimics an Android device.\nEverything you do here stays inside this folder.\n");
+                    "FMRRE simulator\n\nThis sandbox mimics an Android device.\nEverything you do here stays inside this folder.\n");
     util::writeFile(root + "/external_sd/Music/song.mp3", std::string(500000, '\x11'));
     ensureSuper(root);
     ensureOta(root);

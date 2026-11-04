@@ -14,7 +14,7 @@ namespace {
 
 class HomeScreen : public Screen {
 public:
-    std::string title() const override { return "TWRP v2"; }
+    std::string title() const override { return "FMRRE"; }
     bool hasHeader() const override { return false; }
 
     void onShow(App&) override { refresh(); }
@@ -40,11 +40,11 @@ public:
         Rect logo(top.x + pad, top.cy() - ui.dp(22), ui.dp(44), ui.dp(44));
         c.fillRoundRect(logo, ui.dp(14), th.accent);
         c.radialGlowRR(logo.r(), logo.b(), ui.dp(50), withAlpha(th.accent2, 0.9f), logo, ui.dp(14));
-        font::drawIn(c, Face::Bold, ui.dp(17), logo.offset(0, -ui.dp(1)), "TW", th.onAccent, AlignCenter);
+        font::drawIn(c, Face::Bold, ui.dp(17), logo.offset(0, -ui.dp(1)), "FM", th.onAccent, AlignCenter);
         float tx = logo.r() + ui.dp(12);
-        font::drawIn(c, Face::Bold, ui.dp(24), Rect(tx, top.cy() - ui.dp(23), ui.dp(200), ui.dp(30)), "TWRP v2", th.text);
+        font::drawIn(c, Face::Bold, ui.dp(24), Rect(tx, top.cy() - ui.dp(23), ui.dp(200), ui.dp(30)), "FMRRE", th.text);
         font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(tx, top.cy() + ui.dp(5), ui.dp(200), ui.dp(18)),
-                     "Custom recovery 2.0.0", th.textDim);
+                     "FMR Recovery Environment", th.textDim);
         float bx = top.r() - pad - ui.dp(44);
         if (ui.iconButton(ui.id("q_power"), Rect(bx, top.cy() - ui.dp(22), ui.dp(44), ui.dp(44)), Icon::Power, th.text, true))
             app.push(makeRebootScreen());
