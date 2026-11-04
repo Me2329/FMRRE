@@ -319,6 +319,7 @@ std::string help() {
            "  vbmeta disable|enable|status\n"
            "  root status|backup|modules-off   modules-off fixes module bootloops\n"
            "  verify-zip <zip>          whose signature is on it (the installed system's key, another ROM's...)\n"
+           "  unpack <image> <file>     decompress an image (.xz .gz .lz4 .zst, or the .img inside a .zip) to a file\n"
            "  check <path>              why can't I see this file?\n"
            "  dd <image> <partition>    print the equivalent dd command\n"
            "  print <text>, sleep <seconds>\n"
@@ -525,6 +526,44 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 t.print("ramdisk target: %s%s", tg.name.c_str(), device::info().slot.c_str());
                 for (auto& m : bootimg::modules()) t.print("  module %-24s %s%s", m.id.c_str(), m.disabled ? "disabled" : "enabled", m.removing ? ", removing" : "");
             }
+        } else if (cmd == "unpack") {  // decompress an image to a file (xz / gz / lz4 / zst, or the image inside a zip)
+            std::string in = a.size() > 1 ? pathcheck::resolve(a[0]) : "", out = a.size() > 1 ? pathcheck::resolve(a[1]) : "", err;
+            img::Info info = img::inspect(in);
+            std::unique_ptr<img::Source> src = a.size() > 1 && info.ok ? img::open(in, info.zipEntry, err) : nullptr;
+            int fd = src && in != out ? ::open(out.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644) : -1;
+            if (a.size() < 2) {
+                t.print("usage: unpack <image> <out-file>");
+                ok = false;
+            } else if (!src) {
+                t.print("unpack: %s", (info.ok ? err : info.error).c_str());
+                ok = false;
+            } else if (fd < 0) {
+                t.print("unpack: can't write %s", out.c_str());
+                ok = false;
+            } else {
+                t.setStatus("Unpacking " + util::basename(in));
+                std::vector<char> buf(1 << 20);
+                ssize_t r;
+                while (ok && (r = src->read(buf.data(), buf.size())) != 0) {
+                    if (r < 0 || t.cancelled()) {
+                        t.print("unpack: %s", r < 0 ? src->error.c_str() : "cancelled");
+                        ok = false;
+                        break;
+                    }
+                    for (ssize_t done = 0; done < r;) {
+                        ssize_t w = ::write(fd, buf.data() + done, size_t(r - done));
+                        if (w <= 0) { t.print("unpack: write failed: %s", strerror(errno)); ok = false; break; }
+                        done += w;
+                    }
+                    float pr = src->progress();
+                    if (pr >= 0) t.setSubProgress(pr);
+                }
+                if (fsync(fd) != 0 && ok) ok = false;
+                close(fd);
+                if (!ok) unlink(out.c_str());
+                else t.print("%s -> %s: %s (%s)%s", util::basename(in).c_str(), out.c_str(), util::humanSize(src->produced).c_str(),
+                             img::compressionName(info.comp), info.sparse ? ", still an Android sparse image" : "");
+            }
         } else if (cmd == "verify-zip") {
             std::string p = pathcheck::resolve(rest);
             if (rest.empty() || !util::exists(p)) {
@@ -605,7 +644,7 @@ int cliMain(const std::vector<std::string>& args) {
     for (auto& a : args) line += (line.empty() ? "" : " ") + a;
     std::string pid = util::readLine(uiPidFile());
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
-    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
+    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "unpack" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
                     (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
                     (args[0] == "payload" && args.size() > 1 && (args[1] == "info" || args[1] == "verify")) || (args[0] == "rescue" && args.size() == 1) || args[0] == "history" ||
                     (args[0] == "autofix" && std::find(args.begin(), args.end(), "--dry-run") != args.end());

@@ -14,6 +14,7 @@
 #include "sys/history.h"
 #include "core/log.h"
 #include "core/lz4.h"
+#include "core/zstd.h"
 #include "core/sha256.h"
 #include "core/task.h"
 #include "core/util.h"
@@ -351,55 +352,35 @@ private:
     uint64_t total_ = 0;
 };
 
-// External decompressor (zstd / lz4): the file is the child's stdin, so its
-// shared file offset tells us how far it got.
-class ProcSource : public Source {
+class ZstdSource : public Source {
 public:
-    ProcSource(int fd, uint64_t size, const std::string& cmd) : fd_(fd), size_(size) {
-        int p[2];
-        if (pipe2(p, O_CLOEXEC) != 0) return;
-        pid_ = fork();
-        if (pid_ == 0) {
-            dup2(fd, 0);
-            dup2(p[1], 1);
-            int devnull = ::open("/dev/null", O_WRONLY);
-            if (devnull >= 0) dup2(devnull, 2);
-            std::string sh = util::shellPath();
-            execl(sh.c_str(), "sh", "-c", cmd.c_str(), (char*)nullptr);
-            _exit(127);
-        }
-        close(p[1]);
-        out_ = p[0];
+    ZstdSource(int fd, uint64_t size) : dec_([this](uint8_t* p, size_t n) { return pull(p, n); }) {
+        in_.fd = fd;
+        in_.size = size;
     }
-    ~ProcSource() override {
-        if (out_ >= 0) close(out_);
-        if (pid_ > 0) { kill(pid_, SIGTERM); waitpid(pid_, nullptr, 0); }
-        close(fd_);
-    }
-    ssize_t read(void* buf, size_t n) override {
-        if (out_ < 0) { error = "cannot start decompressor"; return -1; }
-        ssize_t r = readFd(out_, buf, n);
-        if (r == 0 && pid_ > 0) {
-            int st = 0;
-            waitpid(pid_, &st, 0);
-            pid_ = -1;
-            if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-                error = WIFEXITED(st) && WEXITSTATUS(st) == 127 ? "decompressor not found in this ramdisk" : "decompressor failed";
-                return -1;
-            }
+    ~ZstdSource() override { close(in_.fd); }
+    float progress() const override { return in_.progress(); }
+
+    ssize_t read(void* out, size_t n) override {
+        ssize_t r = dec_.read(out, n);
+        if (r < 0) {
+            error = dec_.error();
+            return -1;
         }
-        if (r > 0) produced += r;
+        produced += r;
         return r;
-    }
-    float progress() const override {
-        off_t p = lseek(fd_, 0, SEEK_CUR);
-        return size_ && p >= 0 ? float(p) / size_ : -1;
     }
 
 private:
-    int fd_, out_ = -1;
-    pid_t pid_ = -1;
-    uint64_t size_;
+    size_t pull(uint8_t* p, size_t n) {
+        if (in_.off >= in_.len && !in_.fill()) return 0;
+        size_t k = std::min(n, in_.len - in_.off);
+        memcpy(p, in_.buf.data() + in_.off, k);
+        in_.off += k;
+        return k;
+    }
+    InBuf in_;
+    ZstdFrame dec_;
 };
 
 Compression sniff(const uint8_t* h, size_t n) {
@@ -487,7 +468,7 @@ std::unique_ptr<Source> open(const std::string& path, const std::string& zipEntr
     switch (c) {
         case Compression::Gzip: return std::make_unique<GzipSource>(fd, size);
         case Compression::Xz: return std::make_unique<XzSource>(fd, size);
-        case Compression::Zstd: return std::make_unique<ProcSource>(fd, size, "zstd -dc 2>/dev/null || toybox zstd -dc");
+        case Compression::Zstd: return std::make_unique<ZstdSource>(fd, size);
         case Compression::Lz4: return std::make_unique<Lz4Source>(fd, size);
         case Compression::Zip: {
             close(fd);

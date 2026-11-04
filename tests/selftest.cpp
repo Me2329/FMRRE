@@ -22,6 +22,7 @@
 #include "core/sha1.h"
 #include "core/sha256.h"
 #include "core/x509.h"
+#include "core/zstd.h"
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
@@ -43,6 +44,7 @@
 #include "sys/zipsig.h"
 #include "miniz.h"
 #include "sig_fixtures.h"
+#include "zstd_fixtures.h"
 
 #include <fcntl.h>
 #include <vector>
@@ -1426,6 +1428,111 @@ static void testZipSig(const std::string& dir) {
     unlink(ota.c_str());
 }
 
+// The plaintext of tests/zstd_fixtures.h (the same generators as tools/make_zstd_fixtures.py).
+static std::string zText(size_t n, uint32_t seed = 1) {
+    static const char* parts[] = {"boot", "init_boot", "vendor_boot", "dtbo", "vbmeta", "system", "vendor", "product"};
+    std::string out;
+    uint32_t x = seed;
+    for (int i = 0; out.size() < n; i++) {
+        x = (x * 1103515245u + 12345u) & 0x7FFFFFFF;
+        char line[96];
+        snprintf(line, sizeof line, "flash %s_%c: block %d of %d ok\n", parts[(x >> 16) % 8], "ab"[(x >> 20) & 1], i % 8, 8);
+        out += line;
+    }
+    out.resize(n);
+    return out;
+}
+static std::string zNoise(size_t n, uint32_t seed = 7) {
+    std::string out;
+    uint32_t x = seed;
+    for (size_t i = 0; i < n; i++) {
+        x = (x * 1103515245u + 12345u) & 0x7FFFFFFF;
+        out += char((x >> 16) & 0xFF);
+    }
+    return out;
+}
+// step: hand the decoder at most this many input bytes at a time (0 = as many as it asks for)
+static bool zstdDecode(const std::string& in, std::string& out, std::string& err, size_t step = 0, size_t maxWindow = size_t(256) << 20) {
+    size_t pos = 0;
+    ZstdFrame z(
+        [&](uint8_t* p, size_t n) {
+            size_t k = std::min(n, in.size() - pos);
+            if (step) k = std::min(k, step);
+            memcpy(p, in.data() + pos, k);
+            pos += k;
+            return k;
+        },
+        maxWindow);
+    out.clear();
+    char buf[7777];
+    for (;;) {
+        ssize_t r = z.read(buf, sizeof buf);
+        if (r < 0) return err = z.error(), false;
+        if (r == 0) return true;
+        out.append(buf, size_t(r));
+    }
+}
+
+static void testZstd(const std::string& dir) {
+    // xxHash64 reference values (the xxhash library)
+    CHECK(Xxh64::of("", 0) == 0xef46db3751d8e999ull && Xxh64::of("abc", 3) == 0x44bc2cf5ad770999ull);
+    std::string spam = zText(1000);
+    Xxh64 x;
+    for (size_t i = 0; i < spam.size(); i += 13) x.update(spam.data() + i, std::min<size_t>(13, spam.size() - i));
+    CHECK(x.digest() == Xxh64::of(spam.data(), spam.size()));
+    // Frames from the zstd library; together they use every part of the format (see tools/make_zstd_fixtures.py).
+    std::string A = x509::base64Decode(kZstA), B = x509::base64Decode(kZstB), C = x509::base64Decode(kZstC),
+                E = x509::base64Decode(kZstE), out, err;
+    const std::string a = zText(140000);
+    CHECK(zstdDecode(A, out, err) && out == a);
+    CHECK(zstdDecode(A, out, err, 1) && out == a);  // the input one byte at a time
+    CHECK(zstdDecode(B, out, err) && out == zText(30000, 5));
+    CHECK(zstdDecode(C, out, err) && out == std::string(150000, '\0') + zNoise(2000) + zText(3000, 9));
+    std::string nz = zNoise(3000, 11), e = nz;
+    for (int k = 0; k < 120; k++) e += "Z" + nz.substr(size_t(k) * 24, 24);
+    CHECK(zstdDecode(E, out, err) && out == e);
+    // An empty frame (what `zstd` makes of an empty file): no data, checksum checked.
+    CHECK(zstdDecode(std::string("\x28\xb5\x2f\xfd\x24\x00\x01\x00\x00\x99\xe9\xd8\x51", 13), out, err) && out.empty());
+    CHECK(!zstdDecode(std::string("\x28\xb5\x2f\xfd\x24\x00\x01\x00\x00\x99\xe9\xd8\x52", 13), out, err) &&
+          err.find("checksum") != std::string::npos);
+    // Refused: cut off, not zstd, a dictionary, more history than allowed.
+    CHECK(!zstdDecode(A.substr(0, A.size() - 100), out, err) && err.find("cut off") != std::string::npos);
+    CHECK(!zstdDecode("PK\x03\x04 nope", out, err) && err.find("not a Zstandard") != std::string::npos);
+    std::string dict = A;
+    dict[4] = char(dict[4] | 1);
+    dict.insert(5, "\x42");
+    CHECK(!zstdDecode(dict, out, err) && err.find("dictionary") != std::string::npos);
+    CHECK(!zstdDecode(B, out, err, 0, 1024) && err.find("history") != std::string::npos);
+    // Damage: a checksummed frame either fails or decodes to exactly the original - never to something else,
+    // never outside its buffers. Random bit flips and cuts all over it.
+    uint32_t r = 12345;
+    int failed = 0, same = 0;
+    for (int k = 0; k < 300; k++) {
+        r = r * 1103515245u + 12345u;
+        std::string bad = A;
+        size_t at = 4 + (r >> 8) % (A.size() - 4);
+        if (k % 10 == 9) bad.resize(at);
+        else bad[at] = char(bad[at] ^ (1 << (r & 7)));
+        if (zstdDecode(bad, out, err)) same += out == a;
+        else failed++;
+    }
+    CHECK(failed + same == 300 && failed > 250);
+    // Flashing an .img.zst decodes it on the way (no zstd tool needed).
+    std::string img = dir + "/sim/data/media/0/Download/dtbo-test.img.zst", dev = dir + "/sim/dev/block/by-name/dtbo_b";
+    CHECK(util::writeFile(img, A));
+    img::Info zi = img::inspect(img);
+    CHECK(zi.comp == img::Compression::Zstd && zi.imageSize == a.size());
+    img::FlashOptions fo;
+    fo.verify = true;
+    CHECK(runTask("flash-zst", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
+    std::string got;
+    CHECK(util::readFile(dev, got) && got.substr(0, a.size()) == a);
+    std::string bad = A;
+    bad[A.size() / 2] = char(bad[A.size() / 2] ^ 4);
+    CHECK(util::writeFile(img, bad));
+    CHECK(!runTask("flash-zst-bad", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
+}
+
 int main() {
     char tmpl[] = "/tmp/fmrre-selftest-XXXXXX";
     std::string dir = mkdtemp(tmpl);
@@ -1443,6 +1550,7 @@ int main() {
     testFrozenFormats();
     testDecoders(dir);
     testLz4(dir);
+    testZstd(dir);
     testZipSig(dir);
     testPayload(dir);
     testRescue();
