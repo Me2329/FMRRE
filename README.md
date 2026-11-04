@@ -12,6 +12,7 @@ It does not need Android, a framework or a GPU.
 ![Themes](docs/screenshots/themes.png)
 ![GSI wizard, Find & flash, dd command, Root](docs/screenshots/gsi_root.png)
 ![A/B ROM / OTA install, built-in fastbootd, Bootloop rescue, Romanian UI](docs/screenshots/ota_fastboot_rescue.png)
+![Auto repair: the home card after a failed boot, the diagnosis and plan, the repair, in Romanian](docs/screenshots/autofix.png)
 
 > **Status: experimental - NOT tested on a real phone yet.** Everything here builds (host and static binaries
 > for 7 CPU architectures, each one also run on an emulated CPU with qemu-user), runs in the desktop simulator
@@ -227,6 +228,8 @@ a real phone**. `install.ps1` hasn't been run on Windows yet either. Please repo
 computer, for phones that bootloop, stop at a vbmeta / "verification failed" error or **can't get into recovery
 any more**. It is one Python 3 file, standard library only: a window (tkinter) or commands. It uses `adb` and
 `fastboot` (Android platform-tools) and, for Samsung, Heimdall.
+
+![PC rescue window: a Pixel in the bootloader whose slot A no longer boots](docs/screenshots/pc_rescue.png)
 
 Plug the phone in, in whatever mode it is in, and it tells you:
 - **which phone** it is: model, codename, serial, Android version. The bootloader only reports a codename, so the
