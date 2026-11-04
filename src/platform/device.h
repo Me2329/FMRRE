@@ -60,6 +60,9 @@ void vibrate(int ms);
 // target: "" (system), recovery, bootloader, fastboot, edl, download, poweroff
 void reboot(const std::string& target);
 bool switchSlot(std::string& msg);
+// Bootloader lock state from the boot properties (ro.boot.flash.locked, vbmeta.device_state,
+// verifiedbootstate): 1 unlocked, 0 locked, -1 not reported. `how` gets the evidence ("verifiedbootstate=orange").
+int bootloaderUnlocked(std::string* how = nullptr);
 // Make slot "_a" / "_b" active for the next boot (boot control HAL via bootctl).
 bool setActiveSlot(const std::string& suffix, std::string& msg);
 

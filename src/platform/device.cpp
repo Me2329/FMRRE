@@ -344,6 +344,18 @@ void reboot(const std::string& target) {
     }
 }
 
+int bootloaderUnlocked(std::string* how) {
+    std::string fl = prop("ro.boot.flash.locked"), st = prop("ro.boot.vbmeta.device_state"), vbs = prop("ro.boot.verifiedbootstate");
+    if (how) {
+        how->clear();
+        for (auto& [k, v] : {std::pair<const char*, std::string>{"flash.locked", fl}, {"vbmeta.device_state", st}, {"verifiedbootstate", vbs}})
+            if (!v.empty()) *how += (how->empty() ? "" : ", ") + std::string(k) + "=" + v;
+    }
+    if (fl == "0" || st == "unlocked" || vbs == "orange") return 1;
+    if (fl == "1" || st == "locked" || vbs == "green" || vbs == "yellow") return 0;
+    return -1;
+}
+
 bool switchSlot(std::string& msg) {
     const Info& i = info();
     if (!i.ab) { msg = "This device is not A/B"; return false; }

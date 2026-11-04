@@ -284,7 +284,8 @@ void ensureRoot(const std::string& root) {
                     "ro.product.manufacturer=Google\nro.build.version.release=15\nro.build.version.sdk=35\n"
                     "ro.boot.slot_suffix=_a\nro.serialno=1A2B3C4D5E\nro.build.version.security_patch=2026-10-05\n"
                     "ro.board.platform=zuma\nro.build.fingerprint=google/husky/husky:15/AP4A/12345:user/release-keys\n"
-                    "ro.boot.bootreason=reboot,rescueparty\n");
+                    "ro.boot.bootreason=reboot,rescueparty\nro.boot.flash.locked=0\nro.boot.verifiedbootstate=orange\n"
+                    "ro.boot.vbmeta.device_state=unlocked\n");
     util::writeFile(root + "/etc/recovery.fstab",
                     "# TWRP v2 fstab (simulator)\n"
                     "/system_root  ext4   system       flags=display=\"System\";logical;slotselect;backup=1\n"

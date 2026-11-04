@@ -162,6 +162,10 @@ Plan diagnose(bool userSaysBootFails) {
         check(std::string("Boot image (") + name + (byName(name + slot).empty() ? "" : slot) + ")", bi.ok ? ok : "damaged - " + bi.error,
               bi.ok ? 0 : 2);
     }
+    std::string lockHow;
+    int unlocked = device::bootloaderUnlocked(&lockHow);
+    if (unlocked >= 0)
+        check("Bootloader", unlocked ? "unlocked" : "locked - modified images are refused", unlocked ? 0 : 1);
     std::string vbDev = avb::vbmetaDevice(slot);
     avb::Info vb;
     if (!vbDev.empty()) {
@@ -230,7 +234,11 @@ Plan diagnose(bool userSaysBootFails) {
             storageFull ? "Frees space on a full /data. Android rebuilds the caches on the next boot (the first boot takes longer)."
                         : "Stale compiled app code after an update can crash Android at boot. It is rebuilt automatically; no apps or files are lost.",
             Risk::Safe, p.bootFailed || storageFull);
-    if (vb.ok && vb.flags == 0 && hasFinding(r, rescue::Fix::DisableVerity))
+    // A locked bootloader refuses vbmeta with verification off: the phone wouldn't start at all.
+    if (unlocked == 0 && hasFinding(r, rescue::Fix::DisableVerity))
+        p.advice.push_back("Verified boot stopped the boot, but the bootloader is locked: it only starts the official images. Flash the stock "
+                           "firmware, or unlock the bootloader (that erases the phone).");
+    if (unlocked != 0 && vb.ok && vb.flags == 0 && hasFinding(r, rescue::Fix::DisableVerity))
         add("disable_verity", "Disable verified boot (vbmeta)",
             "Verified boot stopped the last boot: the system image is modified or not the one vbmeta expects (normal after a GSI).",
             Risk::Undoable, true);

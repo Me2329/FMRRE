@@ -392,6 +392,10 @@ const Entry kRo[] = {
     {"Repair automatically after a failed boot", "Repară automat după o pornire eșuată"},
     {"Runs the safe fixes after a 15 s countdown, then reboots. Never erases data", "Rulează reparațiile sigure după 15 s, apoi repornește. Nu șterge niciodată datele"},
     {"Android sent the phone to recovery", "Android a trimis telefonul în recovery"},
+    {"Locked", "Blocat"}, {"unlocked", "deblocat"},
+    {"locked - modified images are refused", "blocat - imaginile modificate sunt refuzate"},
+    {"Verified boot stopped the boot, but the bootloader is locked: it only starts the official images. Flash the stock firmware, or unlock the bootloader (that erases the phone).",
+     "Pornirea verificată a oprit pornirea, dar bootloader-ul este blocat: pornește doar imaginile oficiale. Instalează firmware-ul original sau deblochează bootloader-ul (asta șterge telefonul)."},
     {"Android stopped the boot itself and asked for recovery, with the reason below. Auto repair tries the safe fixes first.",
      "Android a oprit singur pornirea și a cerut recovery, cu motivul de mai jos. Reparare automată încearcă întâi reparațiile sigure."},
 };

@@ -231,6 +231,11 @@ private:
     float bright_ = 1;
 };
 
+std::string bootloaderText() {
+    int u = device::bootloaderUnlocked();
+    return u == 1 ? "Unlocked" : u == 0 ? "Locked" : "not reported";
+}
+
 class AboutScreen : public Screen {
 public:
     std::string title() const override { return "About"; }
@@ -256,6 +261,7 @@ public:
             {"Model", i.model}, {"Device", i.device}, {"Manufacturer", i.manufacturer}, {"Platform", i.platform},
             {"Android", i.android + " (SDK " + i.sdk + ")"}, {"Security patch", i.patch}, {"Kernel", i.kernel},
             {"Slot", i.ab ? std::string(1, (char)toupper(i.slot.back())) : "not A/B"}, {"Serial", i.serial},
+            {"Bootloader", bootloaderText()},
             {"Display", std::to_string(c.width()) + " x " + std::to_string(c.height())},
             {"fstab", Partitions::get().fstabPath()},
             {"Build", std::string(device::buildAbi()) + "  \xE2\x80\xA2  CPU " + device::machine()},

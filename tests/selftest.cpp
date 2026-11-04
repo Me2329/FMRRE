@@ -809,6 +809,28 @@ static void testAutofix(const std::string& dir) {
     CHECK(autofix::autoRunAllowed());
     for (int i = 0; i < 3; i++) autofix::noteAutoRun();
     CHECK(!autofix::autoRunAllowed());
+
+    // Verified boot stopped the boot: disable verity on an unlocked bootloader - never on a locked one,
+    // which refuses vbmeta with verification off (the phone wouldn't start at all).
+    CHECK(device::bootloaderUnlocked() == 1);  // the simulator is unlocked (orange)
+    std::string ps = root + "/sys/fs/pstore/dmesg-ramoops-1";
+    CHECK(util::writeFile(ps, "[ 5.1] device-mapper: verity: 252:1: data block 12345 is corrupted\n"));
+    p = autofix::diagnose();
+    CHECK(find(p, "disable_verity") && find(p, "disable_verity")->recommended);
+    device::setProp("ro.boot.flash.locked", "1");
+    device::setProp("ro.boot.verifiedbootstate", "green");
+    device::setProp("ro.boot.vbmeta.device_state", "locked");
+    std::string how;
+    CHECK(device::bootloaderUnlocked(&how) == 0 && how.find("verifiedbootstate=green") != std::string::npos);
+    p = autofix::diagnose();
+    CHECK(!find(p, "disable_verity"));
+    bool advised = false;
+    for (auto& a : p.advice) advised |= a.find("bootloader is locked") != std::string::npos;
+    CHECK(advised);
+    device::setProp("ro.boot.flash.locked", "0");
+    device::setProp("ro.boot.verifiedbootstate", "orange");
+    device::setProp("ro.boot.vbmeta.device_state", "unlocked");
+    unlink(ps.c_str());
 }
 
 static void testI18n() {
