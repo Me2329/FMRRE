@@ -128,6 +128,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             } else if (name == "monitor") sc = makeMonitorScreen();
             else if (name == "terminal") sc = makeTerminalScreen(raw);  // a command, not a path
             else if (name == "payload") sc = makePayloadScreen(arg);
+            else if (name == "signature") sc = makeSignatureScreen(arg);
             else if (name == "gsi") sc = makeGsiScreen(arg);
             else if (name == "super") sc = makeSuperScreen();
             else if (name == "flash") sc = makeFlashImageScreen(arg);

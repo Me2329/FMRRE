@@ -162,10 +162,11 @@ public:
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Security & feedback");
         y += ui.dp(30);
         bool hasPin = !s.str("pin_hash").empty();
-        Rect sc(x, y, w, ui.dp(68) * 4 + ui.dp(8));
+        Rect sc(x, y, w, ui.dp(68) * 5 + ui.dp(8));
         ui.card(sc);
         yy = sc.y + ui.dp(4);
         bool vib = s.flag("vibrate", true), lob = s.flag("lock_on_blank", true), afx = s.flag("autofix_auto");
+        bool req = s.flag("zip_sig_require");
         if (ui.toggleRow(ui.id("vib"), rowRect(yy), Icon::Vibrate, "Haptic feedback", "Vibrate on touch", vib)) s.setFlag("vibrate", vib);
         int pr = ui.listItem(ui.id("pin"), rowRect(yy), Icon::Lock, hasPin ? "Remove PIN lock" : "Set PIN lock",
                              hasPin ? "Recovery asks for the PIN on boot" : "Protect this recovery with a PIN", "", hasPin ? th.danger : th.accent);
@@ -189,6 +190,9 @@ public:
         if (ui.toggleRow(ui.id("afx"), rowRect(yy), Icon::Wrench, "Repair automatically after a failed boot",
                          "Runs the safe fixes after a 15 s countdown, then reboots. Never erases data", afx))
             s.setFlag("autofix_auto", afx);
+        if (ui.toggleRow(ui.id("sigreq"), rowRect(yy), Icon::Key, "Only install zips signed with a trusted key",
+                         "The installed system's keys, this recovery's and FMRRE/keys - like a stock recovery", req))
+            s.setFlag("zip_sig_require", req);
         y += sc.h + ui.dp(18);
 
         // ---- Touch calibration (handy when porting)

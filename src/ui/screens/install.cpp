@@ -1,7 +1,9 @@
 #include "ui/screens/screens.h"
 
+#include <map>
 #include <unistd.h>
 
+#include "core/i18n.h"
 #include "core/log.h"
 #include "core/settings.h"
 #include "core/util.h"
@@ -15,6 +17,7 @@
 #include "sys/payload.h"
 #include "sys/sideload.h"
 #include "sys/super.h"
+#include "sys/zipsig.h"
 
 namespace tw {
 
@@ -250,6 +253,8 @@ public:
 
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Queue");
         y += ui.dp(30);
+        const bool sigOn = s.flag("zip_sig", true);
+        std::vector<std::string> romSwitch;  // queued ROMs signed with another key than the installed system
         if (g_queue.empty()) {
             Rect e(x, y, w, ui.dp(150));
             ui.card(e);
@@ -266,8 +271,18 @@ public:
             for (size_t i = 0; i < g_queue.size(); i++) {
                 Rect row(x + ui.dp(4), iy, w - ui.dp(8), ui.dp(62));
                 std::string sz = util::humanSize(util::fileSize(g_queue[i]));
-                ui.listItem(ui.id("q", (int)i), row.cutLeft(row.w - ui.dp(52)), Icon::Zip, std::to_string(i + 1) + ". " + util::basename(g_queue[i]),
-                            sz + "  \xE2\x80\xA2  " + pathcheck::pretty(util::dirname(g_queue[i])), "", th.accent, false);
+                std::string badge;
+                Color tint = th.accent;
+                if (sigOn) {  // checked in the background; tap for whose key it is
+                    zipsig::Check ck = zipsig::check(g_queue[i]);
+                    badge = ck.done ? ck.result.badge() : std::to_string(int(ck.progress * 100)) + "%";
+                    if (ck.done) tint = signatureTint(th, ck.result);
+                    if (ck.done && ck.result.otherThanSystem() && isRom(g_queue[i])) romSwitch.push_back(g_queue[i]);
+                }
+                int f = ui.listItem(ui.id("q", (int)i), row.cutLeft(row.w - ui.dp(52)), Icon::Zip,
+                                    std::to_string(i + 1) + ". " + util::basename(g_queue[i]),
+                                    sz + "  \xE2\x80\xA2  " + pathcheck::pretty(util::dirname(g_queue[i])), badge, tint, false);
+                if ((f & Clicked) && sigOn) app.push(makeSignatureScreen(g_queue[i]));
                 if (ui.iconButton(ui.id("qdel", (int)i), Rect(row.r() - ui.dp(48), row.cy() - ui.dp(20), ui.dp(40), ui.dp(40)), Icon::Close,
                                   th.textDim)) {
                     g_queue.erase(g_queue.begin() + i);
@@ -276,6 +291,39 @@ public:
                 iy += ui.dp(66);
             }
             y += card.h + ui.dp(12);
+        }
+        if (!romSwitch.empty()) {
+            // A ROM signed with another key than the installed system: a ROM switch - data has to go.
+            bool enc = Partitions::get().dataEncrypted();
+            const char* msg = "Signed with another key than the system on the phone now. Wipe data after flashing it, or "
+                              "Android usually stops at the boot animation.";
+            const char* encMsg = "Data is encrypted: after a ROM switch a factory reset is often not enough - Format Data "
+                                 "erases internal storage too (copy your files off first, e.g. over MTP).";
+            float tw = w - ui.dp(60);
+            float mh = font::wrap(Face::Regular, ui.dp(13), msg, tw).size() * font::lineHeight(Face::Regular, ui.dp(13));
+            float eh = enc ? font::wrap(Face::Regular, ui.dp(12.5f), encMsg, tw).size() * font::lineHeight(Face::Regular, ui.dp(12.5f)) : 0;
+            Rect rc(x, y, w, ui.dp(66) + mh + (enc ? eh + ui.dp(70) : ui.dp(76)));
+            ui.c->fillRoundRect(rc, ui.dp(18), withAlpha(th.warn, 0.12f));
+            icons::drawCentered(*ui.c, Icon::Warning, x + ui.dp(26), y + ui.dp(28), ui.dp(20), th.warn);
+            ui.label(Rect(x + ui.dp(46), y + ui.dp(16), tw, ui.dp(24)), "Another ROM than the one installed", ui.dp(15), th.warn,
+                     Face::SemiBold);
+            {
+                i18n::NoTranslate raw;
+                ui.label(Rect(x + ui.dp(46), y + ui.dp(40), tw, ui.dp(20)), util::basename(romSwitch[0]), ui.dp(12.5f), th.textDim);
+            }
+            float ty = y + ui.dp(64);
+            ty += ui.textBlock(x + ui.dp(46), ty, tw, msg, ui.dp(13), th.text);
+            if (enc) {
+                ty += ui.dp(6) + ui.textBlock(x + ui.dp(46), ty + ui.dp(6), tw, encMsg, ui.dp(12.5f), th.textDim);
+                if (ui.button(ui.id("rs_fmt"), Rect(x + ui.dp(12), ty + ui.dp(10), w - ui.dp(24), ui.dp(46)), "Format Data...",
+                              Icon::Wipe, BtnStyle::Outline))
+                    app.push(makeFormatDataScreen());
+                wipeAfter_ = false;
+            } else {
+                ui.toggleRow(ui.id("rs_wipe"), Rect(x + ui.dp(4), ty + ui.dp(6), w - ui.dp(8), ui.dp(64)), Icon::Wipe,
+                             "Factory reset after flashing", "Apps and settings go; internal storage stays", wipeAfter_);
+            }
+            y += rc.h + ui.dp(12);
         }
         float bw = (w - ui.dp(10)) / 2;
         if (ui.button(ui.id("add"), Rect(x, y, g_queue.empty() ? w : bw, ui.dp(52)), g_queue.empty() ? "Select zip" : "Add more", Icon::Plus,
@@ -316,12 +364,16 @@ public:
 
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Options");
         y += ui.dp(30);
-        Rect opt(x, y, w, ui.dp(68) * 3 + ui.dp(8));
+        Rect opt(x, y, w, ui.dp(68) * 4 + ui.dp(8));
         ui.card(opt);
         float oy = y + ui.dp(4);
         bool verify = s.flag("zip_verify", true), wipeAfter = s.flag("zip_wipe_cache", false), reboot = s.flag("zip_reboot", false);
+        bool sig = sigOn;
         if (ui.toggleRow(ui.id("o1"), Rect(x + ui.dp(4), oy, w - ui.dp(8), ui.dp(64)), Icon::Shield, "Verify zip integrity",
                          "CRC-check every entry before flashing", verify)) s.setFlag("zip_verify", verify), s.save();
+        oy += ui.dp(68);
+        if (ui.toggleRow(ui.id("o4"), Rect(x + ui.dp(4), oy, w - ui.dp(8), ui.dp(64)), Icon::Key, "Check signatures",
+                         "Who signed it; spots a ROM switch", sig)) s.setFlag("zip_sig", sig), s.save();
         oy += ui.dp(68);
         if (ui.toggleRow(ui.id("o2"), Rect(x + ui.dp(4), oy, w - ui.dp(8), ui.dp(64)), Icon::Wipe, "Wipe cache & dalvik after",
                          "Recommended after ROM updates", wipeAfter)) s.setFlag("zip_wipe_cache", wipeAfter), s.save();
@@ -340,13 +392,24 @@ public:
             g_queue.clear();
             installer::InstallOptions o = installer::optionsFromSettings();
             bool rb = s.flag("zip_reboot", false);
+            bool reset = wipeAfter_ && !romSwitch.empty();
+            wipeAfter_ = false;
             app.runTask(queue.size() > 1 ? "Flashing " + std::to_string(queue.size()) + " zips" : "Flashing " + util::basename(queue[0]),
-                        Icon::Install, [queue, o, rb](Task& t) {
+                        Icon::Install, [queue, o, rb, reset](Task& t) {
                             bool ok = true;
+                            float share = reset ? 0.9f : 1.0f;
                             for (size_t i = 0; i < queue.size() && ok; i++) {
-                                t.setRange(float(i) / queue.size(), 1.0f / queue.size());
+                                t.setRange(share * i / queue.size(), share / queue.size());
                                 t.setSubProgress(0);
                                 ok = installer::installZip(queue[i], o, t);
+                            }
+                            if (ok && reset) {  // the ROM switch's factory reset: /data without internal storage, cache, ART
+                                t.setRange(0.9f, 0.1f);
+                                t.print("Factory reset for the new ROM (internal storage stays)...");
+                                auto& P = Partitions::get();
+                                if (Partition* d = P.find("/data")) ok = P.wipe(*d, t);
+                                if (Partition* c = P.find("/cache")) P.wipe(*c, t);
+                                P.wipeDalvik(t);
                             }
                             if (ok && rb) {
                                 t.print("Rebooting in 3 seconds...");
@@ -359,7 +422,14 @@ public:
     }
 
 private:
+    bool isRom(const std::string& zip) {
+        auto it = rom_.find(zip);
+        if (it == rom_.end()) it = rom_.emplace(zip, installer::inspectZip(zip).isRom).first;
+        return it->second;
+    }
     int mode_ = 0;
+    bool wipeAfter_ = false;
+    std::map<std::string, bool> rom_;
 };
 
 class FlashImageScreen : public Screen {

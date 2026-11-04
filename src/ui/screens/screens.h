@@ -20,6 +20,13 @@ std::unique_ptr<Screen> makeManualFlashScreen(const std::string& path = "");
 std::unique_ptr<Screen> makeGsiScreen(const std::string& image = "");
 // A/B ROM / OTA zip (payload.bin): install to the inactive slot, or extract images.
 std::unique_ptr<Screen> makePayloadScreen(const std::string& path);
+// Whose signature is on a zip - the installed system's key, a trusted one, the public test key, another ROM's -
+// with "Trust this key". The helpers give the Install and OTA screens the same colours and words.
+namespace zipsig { struct Result; }
+std::unique_ptr<Screen> makeSignatureScreen(const std::string& zip);
+Color signatureTint(const Theme& th, const zipsig::Result& r);
+Icon signatureIcon(const zipsig::Result& r);
+std::string signatureExplanation(const zipsig::Result& r, bool isRom);
 std::unique_ptr<Screen> makeSuperScreen();
 // "Why did my phone bootloop?": previous boot's kernel log explained, with fixes.
 std::unique_ptr<Screen> makeRescueScreen();

@@ -12,6 +12,7 @@
 #include "sys/pathcheck.h"
 #include "sys/payload.h"
 #include "sys/super.h"
+#include "sys/zipsig.h"
 
 namespace tw {
 
@@ -152,6 +153,23 @@ public:
             return;
         }
 
+        // ---- signature (checked in the background): whose key, and is it another ROM than the installed one?
+        bool romSwitch = false;
+        if (Settings::get().flag("zip_sig", true)) {
+            zipsig::Check ck = zipsig::check(path_);
+            Rect sr(x, y, w, ui.dp(70));
+            ui.card(sr);
+            int f = ui.listItem(ui.id("pl_sig"), sr.inset(ui.dp(2)), ck.done ? signatureIcon(ck.result) : Icon::Shield, "Signature",
+                                ck.done ? ck.result.headline() : "Checking the signature...",
+                                ck.done ? ck.result.badge() : std::to_string(int(ck.progress * 100)) + "%",
+                                ck.done ? signatureTint(th, ck.result) : th.accent, true);
+            if (f & Clicked) app.push(makeSignatureScreen(path_));
+            y += sr.h + ui.dp(12);
+            romSwitch = ck.done && ck.result.otherThanSystem();
+        }
+        const bool enc = romSwitch && Partitions::get().dataEncrypted();
+        if (!romSwitch) reset_ = false;
+
         // ---- plan
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "What happens");
         y += ui.dp(30);
@@ -178,6 +196,12 @@ public:
 
         std::vector<std::pair<std::string, Color>> notes;
         if (!plan_.ok) notes.push_back({plan_.error, th.danger});
+        if (romSwitch)
+            notes.push_back({enc ? "Another ROM than the one installed (another signing key). Data is encrypted: after a ROM switch "
+                                   "only Format Data reliably helps - it erases internal storage too (Wipe)."
+                                 : "Another ROM than the one installed (another signing key): wipe data after installing it, or "
+                                   "Android usually stops at the boot animation.",
+                             th.warn});
         for (auto& n : plan_.notes) notes.push_back({n, plan_.needsFreeSource && n.find("one slot") != std::string::npos ? th.warn : th.textDim});
         for (auto& n : notes) {
             float h = textHeight(ui, n.first, ui.dp(12.5f), w - ui.dp(56));
@@ -211,7 +235,8 @@ public:
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Options");
         y += ui.dp(30);
         bool forceRow = plan_.deviceMismatch || opts_.force;
-        Rect oc(x, y, w, ui.dp(72) * (3 + forceRow) + ui.dp(8));
+        bool resetRow = romSwitch && !enc;
+        Rect oc(x, y, w, ui.dp(72) * (3 + forceRow + resetRow) + ui.dp(8));
         ui.card(oc);
         float oy = y + ui.dp(4);
         auto row = [&](const char* id, Icon icon, const std::string& t, const std::string& s, bool& v, const char* key) {
@@ -224,6 +249,7 @@ public:
         row("pl_sw", Icon::Swap, "Switch to slot " + slotName(plan_.targetSlot.empty() ? "_b" : plan_.targetSlot) + " afterwards",
             "Like a normal OTA. Off: install only, stay on " + slotName(cur), opts_.switchSlot, "ota_switch");
         row("pl_ver", Icon::Shield, "Verify every partition", "Check each partition's SHA-256 after writing", opts_.verify, "ota_verify");
+        if (resetRow) row("pl_reset", Icon::Wipe, "Factory reset after installing", "Apps and settings go; internal storage stays", reset_, nullptr);
         row("pl_rb", Icon::Reboot, "Reboot when done", "Boot the new system right away", reboot_, nullptr);
         if (forceRow)
             row("pl_force", Icon::Warning, "Ignore the device check", "Only if you're sure this build is for your phone "
@@ -242,13 +268,21 @@ public:
         } else if (ui.slideToConfirm(ui.id("pl_go"), sb, "Swipe to install to slot " + slotName(plan_.targetSlot), th.accent)) {
             payload::Payload p = p_;
             payload::InstallOptions o = opts_;
-            bool rb = reboot_;
-            app.runTask("Installing " + util::basename(path_), Icon::Install, [p, o, rb](Task& t) {
+            bool rb = reboot_, reset = reset_ && romSwitch && !enc;
+            app.runTask("Installing " + util::basename(path_), Icon::Install, [p, o, rb, reset](Task& t) {
                 payload::InstallOptions po = o;
                 t.setRange(0, 0.05f);
                 if (!installer::checkSignature(p.path, installer::optionsFromSettings(), true, t, po.historyNote)) return false;
-                t.setRange(0.05f, 0.95f);
+                t.setRange(0.05f, reset ? 0.87f : 0.95f);
                 bool ok = payload::install(p, po, t);
+                if (ok && reset) {  // the ROM switch's factory reset: /data without internal storage, cache, ART
+                    t.setRange(0.92f, 0.08f);
+                    t.print("Factory reset for the new ROM (internal storage stays)...");
+                    auto& P = Partitions::get();
+                    if (Partition* d = P.find("/data")) ok = P.wipe(*d, t);
+                    if (Partition* c = P.find("/cache")) P.wipe(*c, t);
+                    P.wipeDalvik(t);
+                }
                 if (ok) {
                     t.print("Flashing GApps / Magisk too? Reboot to recovery first, so they go to the new slot.");
                     if (rb) {
@@ -264,7 +298,7 @@ public:
 
 private:
     std::string path_, err_;
-    bool ok_ = false, reboot_ = false;
+    bool ok_ = false, reboot_ = false, reset_ = false;
     payload::Payload p_;
     payload::InstallOptions opts_;
     payload::Plan plan_;
