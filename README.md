@@ -18,6 +18,7 @@ It does not need Android, a framework or a GPU.
 ![GSI wizard, Find & flash (a mistyped path explained, the file found), Root](docs/screenshots/gsi_root.png)
 ![A/B ROM / OTA install, built-in fastbootd, Bootloop rescue, Romanian UI](docs/screenshots/ota_fastboot_rescue.png)
 ![Auto repair: the home card after a failed boot, the diagnosis and plan, the repair, in Romanian](docs/screenshots/autofix.png)
+![Zip signatures: a ROM signed with another key than the installed system in the queue, whose key it is, an update of the installed ROM, auto repair after that ROM was flashed without a data wipe](docs/screenshots/signatures.png)
 
 > **Status: experimental - NOT tested on a real phone yet.** Everything here builds (host and static binaries
 > for 7 CPU architectures, each one also run on an emulated CPU with qemu-user), runs in the desktop simulator
@@ -321,7 +322,7 @@ In the window, the mouse acts as touch, ↑/↓ are Vol+/Vol−, Enter is Power,
 out/sim/fmrre --sim --headless --script tools/scripts/tour.txt --out shots/
 ```
 Script commands: `tap X Y`, `longpress X Y`, `swipe X1 Y1 X2 Y2 MS`, `wait MS`, `waittask`,
-`key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|manual|install|files|root|advanced|fastboot|rescue|autofix|settings|backup|restore [path]`,
+`key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|manual|install|signature|files|root|advanced|fastboot|rescue|autofix|settings|backup|restore [path]`,
 `open monitor`, `open about`, `open mount`, `open terminal [command]`.
 
 **Self-tests:**

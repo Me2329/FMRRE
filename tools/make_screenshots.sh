@@ -109,4 +109,50 @@ wait 900
 shot a4_ro.png"
 row "$OUT/autofix.png" "$W/shots/a1_home.png" "$W/shots/a2_autofix.png" "$W/shots/a3_done.png" "$W/shots/a4_ro.png"
 
+# ---- Zip signatures: a ROM signed with another key in the queue, whose key it is, an update of the installed ROM,
+# then auto repair after that ROM was flashed without wiping data. The keys are made with openssl (tests/signapk.py).
+S="$(sandbox sig)"
+python3 - "$S" "$W/keys" <<'PY'
+import io, os, sys, zipfile
+sys.path.insert(0, 'tests')
+import signapk
+root, keys = sys.argv[1], sys.argv[2]
+os.makedirs(keys, exist_ok=True)
+lin_c, lin_k = signapk.make_key('rsa:4096', '/O=LineageOS/CN=LineageOS', keys + '/lineage')
+cr_c, cr_k = signapk.make_key('rsa:2048', '/O=crDroid/CN=crDroid release key', keys + '/crdroid')
+sec = root + '/system_root/system/etc/security'  # the installed system (LineageOS) trusts its own key
+os.makedirs(sec, exist_ok=True)
+with zipfile.ZipFile(sec + '/otacerts.zip', 'w') as z:
+    z.write(lin_c, 'releasekey.x509.pem')
+def rom(name):
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('META-INF/com/google/android/update-binary', '#!/sbin/sh\n')
+        z.writestr('META-INF/com/google/android/updater-script', 'ui_print("Installing %s");\n' % name)
+        z.writestr('system.transfer.list', '4\n0\n0\n0\n')
+        z.writestr('system.new.dat', os.urandom(1 << 20))
+    return b.getvalue()
+dl = root + '/data/media/0/Download/'
+open(dl + 'crDroid-11.2-husky.zip', 'wb').write(signapk.sign_zip(rom('crDroid 11.2'), cr_c, cr_k))
+open(dl + 'lineage-22.2-20261108-husky.zip', 'wb').write(signapk.sign_zip(rom('LineageOS 22.2'), lin_c, lin_k))
+PY
+shoot "$S" "wait 1200
+open install /sdcard/Download/crDroid-11.2-husky.zip
+wait 1500
+shot s1_queue.png
+open signature /sdcard/Download/crDroid-11.2-husky.zip
+wait 900
+shot s2_other.png
+key back
+open signature /sdcard/Download/lineage-22.2-20261108-husky.zip
+wait 900
+shot s3_same.png"
+"$BIN" --sim --sim-root "$S" fmrre install /sdcard/Download/crDroid-11.2-husky.zip > /dev/null 2>&1
+shoot "$S" "wait 1200
+open autofix
+swipe 270 900 270 330 400
+wait 900
+shot s4_autofix.png"
+row "$OUT/signatures.png" "$W/shots/s1_queue.png" "$W/shots/s2_other.png" "$W/shots/s3_same.png" "$W/shots/s4_autofix.png"
+
 ls -la "$OUT"
