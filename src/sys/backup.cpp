@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <functional>
+#include <map>
 #include <csignal>
 #include <cstring>
 #include <memory>
@@ -286,18 +287,33 @@ std::vector<Set> list() {
                     s.items.push_back(i);
                 }
             } else {
-                // Classic TWRP backup: infer from file names (boot.emmc.win, data.ext4.win, ...).
+                // Classic TWRP backup: infer from file names (boot.emmc.win, data.ext4.win, and the split parts
+                // TWRP makes of big archives: data.ext4.win000, data.ext4.win001 ...).
+                std::map<std::string, std::vector<std::pair<std::string, uint64_t>>> groups;  // "data.ext4.win" -> parts
                 for (auto& f : util::listDir(s.path)) {
-                    if (f.dir || !util::endsWith(f.name, ".win") || util::endsWith(f.name, ".sha2")) continue;
-                    auto parts = util::split(f.name, '.');
+                    if (f.dir) continue;
+                    std::string base = f.name;
+                    size_t w = base.rfind(".win");
+                    if (w == std::string::npos) continue;
+                    std::string tail = base.substr(w + 4);
+                    if (!tail.empty() && (tail.size() != 3 || tail.find_first_not_of("0123456789") != std::string::npos)) continue;
+                    groups[base.substr(0, w + 4)].push_back({f.name, f.size});
+                }
+                for (auto& g : groups) {
+                    auto parts = util::split(g.first, '.');
                     if (parts.size() < 3) continue;
+                    std::sort(g.second.begin(), g.second.end());
                     Item i;
                     i.part = parts[0];
-                    i.file = f.name;
                     i.type = parts[1] == "emmc" ? "img" : "tar";
-                    i.size = f.size;
-                    std::string sha = util::readLine(s.path + "/" + f.name + ".sha2");
-                    if (!sha.empty()) i.sha256 = util::splitWs(sha)[0];
+                    for (size_t k = 0; k < g.second.size(); k++) {
+                        std::string sha = util::readLine(s.path + "/" + g.second[k].first + ".sha2");
+                        sha = sha.empty() ? "" : util::splitWs(sha)[0];
+                        if (k == 0) i.file = g.second[k].first, i.sha256 = sha;
+                        else i.extra.push_back({g.second[k].first, sha});
+                        i.size += g.second[k].second;
+                    }
+                    if (i.type == "img" && !i.extra.empty()) continue;  // images are never split: not a TWRP backup
                     s.items.push_back(i);
                 }
             }
@@ -466,18 +482,23 @@ static bool streamOut(const std::string& file, int out, Task& t, uint64_t& writt
     }, t, written, password);
 }
 
-static bool verifyItem(const Set& s, const Item& i, Task& t) {
-    if (i.sha256.empty()) {
-        t.print("  %s: no digest stored, skipped", i.file.c_str());
+static bool verifyFile(const Set& s, const std::string& file, const std::string& sha256, Task& t) {
+    if (sha256.empty()) {
+        t.print("  %s: no digest stored, skipped", file.c_str());
         return true;
     }
-    t.setStatus("Verifying " + i.file);
+    t.setStatus("Verifying " + file);
     struct Ctx { Task* t; } ctx{&t};
     std::string got = Sha256::hexOfFile(
-        s.path + "/" + i.file, [](uint64_t d, uint64_t tot, void* c) { ((Ctx*)c)->t->setSubProgress(float(d) / tot); },
-        &ctx);
-    bool ok = got == i.sha256;
-    t.print("  %s: %s", i.file.c_str(), ok ? "SHA-256 OK" : "DIGEST MISMATCH!");
+        s.path + "/" + file, [](uint64_t d, uint64_t tot, void* c) { ((Ctx*)c)->t->setSubProgress(float(d) / tot); }, &ctx);
+    bool ok = got == sha256;
+    t.print("  %s: %s", file.c_str(), ok ? "SHA-256 OK" : "DIGEST MISMATCH!");
+    return ok;
+}
+
+static bool verifyItem(const Set& s, const Item& i, Task& t) {
+    bool ok = verifyFile(s, i.file, i.sha256, t);
+    for (auto& e : i.extra) ok = verifyFile(s, e.first, e.second, t) && ok;
     return ok;
 }
 
@@ -550,8 +571,14 @@ static bool restoreImpl(const Set& s, const std::vector<std::string>& parts, boo
             if (!Partitions::get().wipe(*p, t)) t.print("  warning: wipe before restore was incomplete");
             if (!Partitions::get().mount(*p)) { t.print("  cannot mount %s", p->displayName.c_str()); return false; }
             // FMRRE's own tar: labels go back; names of classic TWRP backups ("/data/app/...") land in the partition.
+            // A split TWRP backup is one archive per part: all go into the same folder, one after the other.
             tar::Extractor x(p->contentPath(), {p->mountPoint, "/" + p->name});
-            bool ok = streamOut(file, [&x](const unsigned char* d, size_t n) { return x.feed(d, n); }, t, written, password);
+            auto feed = [&x](const unsigned char* d, size_t n) { return x.feed(d, n); };
+            bool ok = streamOut(file, feed, t, written, password);
+            for (size_t k = 0; ok && k < i.extra.size(); k++) {
+                t.print("  part %zu of %zu", k + 2, i.extra.size() + 1);
+                ok = x.nextArchive() && streamOut(s.path + "/" + i.extra[k].first, feed, t, written, password);
+            }
             ok = ok && x.finish();
             const tar::Stats& xs = x.stats();
             for (auto& n : xs.notes) t.print("  note: %s", n.c_str());

@@ -587,6 +587,17 @@ bool Extractor::feed(const void* data, size_t n) {
     return true;
 }
 
+bool Extractor::nextArchive() {
+    Impl& d = *d_;
+    if (d.state != Impl::End && (d.state != Impl::Header || d.hdrFill)) {
+        err_ = "the archive is cut off";
+        return false;
+    }
+    d.state = Impl::Header;
+    d.zeros = 0;
+    return true;
+}
+
 bool Extractor::finish() {
     Impl& d = *d_;
     if (d.state != Impl::End && (d.state != Impl::Header || d.hdrFill)) {

@@ -17,6 +17,9 @@ struct Item {
     uint64_t size = 0;     // bytes on disk
     std::string sha256;
     bool encrypted = false;  // AES-256 (core/crypt.h); the SHA-256 above is of the encrypted file
+    // Classic TWRP splits big archives into data.ext4.win000, .win001 ... - each a whole tar archive with its own
+    // .sha2: `file` / `sha256` are the first part, these the rest.
+    std::vector<std::pair<std::string, std::string>> extra;  // file, sha256
 };
 
 struct Set {

@@ -41,6 +41,8 @@ public:
     ~Extractor();
     bool feed(const void* data, size_t n);  // false: damaged archive or a write error (error())
     bool finish();                          // the end: applies the directories' own times and modes
+    // The next part of a split backup follows (each part is a whole archive with its own end blocks).
+    bool nextArchive();
     const Stats& stats() const { return st_; }
     const std::string& error() const { return err_; }
 

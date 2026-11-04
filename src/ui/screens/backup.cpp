@@ -185,7 +185,8 @@ public:
             bool on = sel_.count(it.part) > 0;
             Partition* p = Partitions::get().find(it.part);
             if (!p) p = Partitions::get().find("/" + it.part);
-            std::string sub = it.file + (it.sha256.empty() ? "" : "  \xE2\x80\xA2  sha256");
+            std::string sub = it.file + (it.extra.empty() ? "" : " +" + std::to_string(it.extra.size())) +
+                              (it.sha256.empty() ? "" : "  \xE2\x80\xA2  sha256");
             if (ui.checkRow(ui.id("ri", (int)k), Rect(x + ui.dp(4), iy, w - ui.dp(8), ui.dp(58)), p ? p->displayName : it.part, sub, on,
                             util::humanSize(it.size))) {
                 if (on) sel_.insert(it.part); else sel_.erase(it.part);

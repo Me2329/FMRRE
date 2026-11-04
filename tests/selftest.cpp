@@ -760,6 +760,28 @@ static void testAvb(const std::string& dir) {
 }
 
 // Renamed from TWRP v2: FMRRE/ is home, and backups in TWRP/BACKUPS (classic TWRP, or TWRP v2) still restore.
+// A ustar header written by hand (for archives FMRRE's own writer would never make).
+static std::string tarEntry(const std::string& name, char type, const std::string& data, const std::string& link = "") {
+    char h[512] = {0};
+    memcpy(h, name.data(), std::min<size_t>(name.size(), 100));
+    snprintf(h + 100, 8, "%07o", 0644);
+    snprintf(h + 108, 8, "%07o", 0);
+    snprintf(h + 116, 8, "%07o", 0);
+    snprintf(h + 124, 12, "%011o", unsigned(data.size()));
+    snprintf(h + 136, 12, "%011o", 1700000000u);
+    h[156] = type;
+    memcpy(h + 157, link.data(), std::min<size_t>(link.size(), 100));
+    memcpy(h + 257, "ustar", 6);
+    memcpy(h + 263, "00", 2);
+    memset(h + 148, ' ', 8);
+    unsigned sum = 0;
+    for (int i = 0; i < 512; i++) sum += (unsigned char)h[i];
+    snprintf(h + 148, 8, "%06o", sum);
+    std::string out(h, 512);
+    out += data + std::string((512 - data.size() % 512) % 512, '\0');
+    return out;
+}
+
 static void testLegacyFolders() {
     Partitions& p = Partitions::get();
     CHECK(p.appDir() == p.storagePath() + "/FMRRE" && p.legacyDir() == p.storagePath() + "/TWRP");
@@ -772,6 +794,31 @@ static void testLegacyFolders() {
         ours |= s.name == "selftest" && util::startsWith(s.path, p.appDir() + "/BACKUPS/");
     }
     CHECK(found && ours);
+    // TWRP splits big archives into parts (cache.ext4.win000, .win001 ...), each a whole tar archive with absolute
+    // names and its own .sha2: listed as one item, every part verified, all of them restored into the partition.
+    std::string part0 = tarEntry("/cache/twrp-a.txt", '0', "first part") + std::string(1024, '\0');
+    std::string part1 = tarEntry("/cache/sub/", '5', "") + tarEntry("/cache/sub/twrp-b.txt", '0', "second part") + std::string(1024, '\0');
+    CHECK(util::writeFile(old + "/cache.ext4.win000", part0) && util::writeFile(old + "/cache.ext4.win001", part1));
+    CHECK(util::writeFile(old + "/cache.ext4.win000.sha2", Sha256::hexOf(part0) + "  cache.ext4.win000\n"));
+    CHECK(util::writeFile(old + "/cache.ext4.win001.sha2", Sha256::hexOf(part1) + "  cache.ext4.win001\n"));
+    const backup::Set* set = nullptr;
+    auto sets = backup::list();
+    for (auto& s : sets)
+        if (util::basename(s.path) == "2024-05-01--10-00-00") set = &s;
+    const backup::Item* cache = nullptr;
+    if (set)
+        for (auto& i : set->items)
+            if (i.part == "cache") cache = &i;
+    CHECK(cache && cache->file == "cache.ext4.win000" && cache->extra.size() == 1 && cache->extra[0].first == "cache.ext4.win001" &&
+          cache->size == part0.size() + part1.size() && !cache->sha256.empty());
+    if (set && cache) {
+        CHECK(runTask("twrp-split-restore", [&](Task& t) { return backup::restore(*set, {"cache"}, true, t); }));
+        std::string got, root = Partitions::get().find("/cache")->contentPath();
+        CHECK(util::readFile(root + "/twrp-a.txt", got) && got == "first part" && util::readFile(root + "/sub/twrp-b.txt", got) &&
+              got == "second part");
+        CHECK(util::writeFile(old + "/cache.ext4.win001", part1 + "x"));  // a changed part: refused before anything is wiped
+        CHECK(!runTask("twrp-split-bad", [&](Task& t) { return backup::restore(*set, {"cache"}, true, t); }));
+    }
     util::removeTree(p.legacyDir());
 }
 
@@ -1533,28 +1580,6 @@ static void testZstd(const std::string& dir) {
     bad[A.size() / 2] = char(bad[A.size() / 2] ^ 4);
     CHECK(util::writeFile(img, bad));
     CHECK(!runTask("flash-zst-bad", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
-}
-
-// A ustar header written by hand (for archives FMRRE's own writer would never make).
-static std::string tarEntry(const std::string& name, char type, const std::string& data, const std::string& link = "") {
-    char h[512] = {0};
-    memcpy(h, name.data(), std::min<size_t>(name.size(), 100));
-    snprintf(h + 100, 8, "%07o", 0644);
-    snprintf(h + 108, 8, "%07o", 0);
-    snprintf(h + 116, 8, "%07o", 0);
-    snprintf(h + 124, 12, "%011o", unsigned(data.size()));
-    snprintf(h + 136, 12, "%011o", 1700000000u);
-    h[156] = type;
-    memcpy(h + 157, link.data(), std::min<size_t>(link.size(), 100));
-    memcpy(h + 257, "ustar", 6);
-    memcpy(h + 263, "00", 2);
-    memset(h + 148, ' ', 8);
-    unsigned sum = 0;
-    for (int i = 0; i < 512; i++) sum += (unsigned char)h[i];
-    snprintf(h + 148, 8, "%06o", sum);
-    std::string out(h, 512);
-    out += data + std::string((512 - data.size() % 512) % 512, '\0');
-    return out;
 }
 
 static void testTar(const std::string& dir) {
