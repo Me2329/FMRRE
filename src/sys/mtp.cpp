@@ -464,7 +464,13 @@ private:
         prevPid_ = util::readLine(g + "/idProduct");
         util::writeFile(g + "/idProduct", "0x4EE2");  // the usual product id for "MTP + adb"
         if (!util::writeFile(g + "/UDC", udc_)) {
-            err = "binding the USB gadget failed";
+            // Put the gadget back as it was, so adb isn't lost.
+            err = std::string("binding the USB gadget with MTP failed: ") + strerror(errno);
+            unlink(link_.c_str());
+            link_.clear();
+            if (!prevPid_.empty()) util::writeFile(g + "/idProduct", prevPid_);
+            prevPid_.clear();
+            util::writeFile(g + "/UDC", udc_);
             return false;
         }
         bound_ = true;
