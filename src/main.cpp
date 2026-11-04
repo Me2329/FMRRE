@@ -26,6 +26,7 @@
 #include "platform/input.h"
 #include "sim.h"
 #include "sys/autofix.h"
+#include "sys/mtp.h"
 #include "sys/ors.h"
 #include "sys/pathcheck.h"
 #include "sys/partitions.h"
@@ -138,6 +139,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "autofix") sc = makeAutoRepairScreen(arg == "--auto", arg == "--prompt");
             else if (name == "manual") sc = makeManualFlashScreen(arg);
             else if (name == "about") sc = makeAboutScreen();
+            else if (name == "mount") sc = makeMountScreen();
             else if (name == "settings") sc = makeSettingsScreen();
             else if (name == "backup") sc = makeBackupScreen();
             else if (name == "restore") sc = makeRestoreScreen();
@@ -270,11 +272,13 @@ int main(int argc, char** argv) {
             return 1;
         }
         int rc = runScript(app, script, outDir);
+        mtp::stop();
         unlink(ors::uiPidFile().c_str());
         return rc;
     }
     app.run();
     Task::get().join();
+    mtp::stop();
     unlink(ors::uiPidFile().c_str());
     return 0;
 }

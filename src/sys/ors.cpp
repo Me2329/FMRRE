@@ -19,6 +19,7 @@
 #include "sys/history.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
+#include "sys/mtp.h"
 #include "sys/partitions.h"
 #include "sys/pathcheck.h"
 #include "sys/payload.h"
@@ -286,6 +287,7 @@ std::string help() {
            "  sideload\n"
            "  lp resize <name> <MB> | lp delete <name> | lp list | lp export [--empty] <file>\n"
            "  fastboot [--tcp PORT]     fastbootd: flash from a computer (USB; TCP for emulators)\n"
+           "  mtp [--tcp PORT]          the phone's storage on a computer (USB MTP; TCP in the simulator)\n"
            "  rescue [save]             why did the last boot fail? (kernel log, boot reason, slots)\n"
            "  autofix [--dry-run] [--bootloop] [--only=id,id] [--allow-slot-switch] [--allow-restore] [--allow-format-data] [--reboot]\n"
            "                            find what stops the phone booting and fix it, safest fix first\n"
@@ -453,6 +455,12 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             }
             std::string target;
             ok = fastboot::run(o, t, target);
+        } else if (cmd == "mtp") {
+            mtp::Options o;
+            for (size_t k = 0; k < a.size(); k++)
+                if (a[k] == "--tcp" && k + 1 < a.size()) { o.tcpPort = atoi(a[++k].c_str()); o.usb = false; }
+            if (device::isSim() && !o.tcpPort) o.tcpPort = 5557;
+            ok = mtp::run(o, t);
         } else if (cmd == "history") {
             for (auto& e : history::recent(a.empty() ? 20 : (size_t)std::max(1, atoi(a[0].c_str()))))
                 t.print("%-12s %-7s %-22s %s", history::ago(e.time).c_str(), e.ok ? "OK" : "FAILED", e.action.c_str(), e.detail.c_str());

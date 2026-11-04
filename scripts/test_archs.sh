@@ -7,6 +7,7 @@
 #                                  flash (.img.xz), an A/B ROM install (payload.bin: dynamic partitions, verity, slot switch)
 #                                  and Auto repair's diagnosis
 #   4. fastbootd                   the computer's real `fastboot` client flashes it over TCP (if installed)
+#   5. MTP                         tests/mtp_test.py browses, downloads and uploads over TCP
 #
 #   scripts/test_archs.sh [arch...]     default: every architecture that has out/<arch>/recovery
 # Needs qemu-user-static (apt install qemu-user-static) and python3 (+ Pillow for the screenshot comparison);
@@ -59,7 +60,7 @@ EOF
 }
 
 FAIL=0
-printf '%-8s %-12s %-10s %-22s %-18s %s\n' arch cpu selftest UI "CLI/GSI/OTA, fb" size
+printf '%-8s %-12s %-10s %-22s %-25s %s\n' arch cpu selftest UI "CLI/GSI/OTA, fb, mtp" size
 for a in "$@"; do
   bin="out/$a/recovery"
   [ -f "$bin" ] || { printf '%-8s no build (scripts/build.sh %s)\n' "$a" "$a"; FAIL=1; continue; }
@@ -116,7 +117,13 @@ for a in "$@"; do
     fi
   fi
 
-  printf '%-8s %-12s %-10s %-22s %-18s %s\n' "$a" "${QCPU[$a]}" "$st" "$ui" "$cli" "$(du -h "$bin" | cut -f1)"
+  # MTP on this CPU, driven by an independent MTP initiator (the part a computer plays)
+  if [ "${cli%%,*}" = ok ]; then
+    if python3 tests/mtp_test.py "$q -cpu ${QCPU[$a]} $bin" > "$T/mtp-$a.log" 2>&1; then cli="$cli, mtp ok"
+    else cli="$cli, mtp FAIL"; FAIL=1; grep -E "^FAIL" "$T/mtp-$a.log" | head -5 | sed 's/^/           /'; fi
+  fi
+
+  printf '%-8s %-12s %-10s %-22s %-25s %s\n' "$a" "${QCPU[$a]}" "$st" "$ui" "$cli" "$(du -h "$bin" | cut -f1)"
   if [ "$st" = FAIL ]; then grep -E "FAIL" "$T/selftest-$a.log" | head -5 | sed 's/^/           /'; fi
   if [ "$cli" = FAIL ]; then tail -5 "$T/gsi-$a.log" "$T/ota-$a.log" 2>/dev/null | sed 's/^/           /'; fi
 done

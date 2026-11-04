@@ -10,6 +10,7 @@
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/mtp.h"
 
 namespace tw::sideload {
 
@@ -43,6 +44,10 @@ std::string findDrop(uint64_t& outSize) {
 
 // Prepare the host-visible drop directory for minadbd on a device.
 void primeDevice(Task& t) {
+    if (mtp::running()) {  // sideload needs the USB gadget to itself
+        t.print("Turning MTP off for sideload");
+        mtp::stop();
+    }
     util::mkdirs("/tmp");
     util::mkdirs("/sideload");
     // Try spawning minadbd first (preferred, speaks the real sideload protocol).

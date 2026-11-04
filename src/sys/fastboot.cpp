@@ -25,6 +25,7 @@
 #include "core/util.h"
 #include "platform/device.h"
 #include "sys/history.h"
+#include "sys/mtp.h"
 #include "sys/ors.h"
 #include "sys/partitions.h"
 #include "sys/super.h"
@@ -1000,6 +1001,10 @@ private:
 }  // namespace
 
 bool run(const Options& o, Task& t, std::string& rebootTo) {
+    if (o.usb && mtp::running()) {  // fastbootd needs the USB gadget to itself
+        t.print("Turning MTP off for fastboot mode");
+        mtp::stop();
+    }
     setState([](State& s) {
         s.transport.clear();
         s.peer.clear();

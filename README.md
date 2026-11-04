@@ -74,6 +74,7 @@ It does not need Android, a framework or a GPU.
 | **Wipe** | Factory reset (keeps internal storage), Advanced wipe checklist, **Format Data** (mkfs + metadata), ART/Dalvik wipe |
 | **Backup** | Streaming tar/raw backups with **gzip compression**, **SHA-256 digests** (written TWRP-style as `.sha2` too), optional **password encryption** (AES-256-CTR + HMAC-SHA256, key from PBKDF2-HMAC-SHA256 with 200,000 iterations; the password is asked twice), size estimate, free-space warning, storage picker (internal / MicroSD / USB OTG), throughput and ETA |
 | **Restore** | Reads FMRRE and **classic TWRP** backups (from `FMRRE/BACKUPS` and TWRP's `TWRP/BACKUPS`), per-partition selection, **verify before restore** (refuses corrupt backups; works on encrypted backups without the password), a wrong password is caught **before anything is wiped**, tampering is caught by the HMAC, verify-only and delete |
+| **MTP** | Mount → **MTP**: the phone's internal storage (and microSD / USB OTG) appears in Windows Explorer, macOS (Android File Transfer, OpenMTP) and Linux file managers, to copy ROMs and backups both ways - browse, download, upload, new folders, rename, move, copy, delete. Added to the USB configuration next to adb, so `adb` keeps working. `fmrre mtp` serves it from the command line |
 | **Mount** | Toggle each partition with live usage bars, read-only system by default (dm-verity safe), unmount all, **USB OTG auto-detect** and rescan, **exFAT / NTFS** via kernel drivers (exfat, sdfat, ntfs3) or FUSE helpers |
 | **File systems** | Check & repair (e2fsck, fsck.f2fs, fsck.fat, fsck.exfat, ntfsfix), grow to fill the partition (resize2fs, resize.f2fs), change file system, info - long-press a partition in Mount |
 | **Files** | Full file manager: sort, hidden files, quick locations, **multi-select**, copy/move/paste, rename, chmod, delete, SHA-256, text and **hex viewer**, install/flash straight from a file, "flash as GSI", "dd command for this file". Pickers show **how many files the type filter hides** and have an **All files** switch |
@@ -320,7 +321,7 @@ out/sim/fmrre --sim --headless --script tools/scripts/tour.txt --out shots/
 ```
 Script commands: `tap X Y`, `longpress X Y`, `swipe X1 Y1 X2 Y2 MS`, `wait MS`, `waittask`,
 `key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|manual|install|files|root|advanced|fastboot|rescue|autofix|settings|backup|restore [path]`,
-`open monitor`, `open about`, `open terminal [command]`.
+`open monitor`, `open about`, `open mount`, `open terminal [command]`.
 
 **Self-tests:**
 ```bash
@@ -375,7 +376,10 @@ fastboot -s tcp:127.0.0.1:5554 getvar all
 ## Known limitations (honest list)
 - **No decryption** of FBE/FDE `/data`. When data is encrypted, FMRRE detects it and keeps backups and
   settings off `/data`; **Format Data** still works.
-- **No MTP** yet. Use **ADB sideload** or `adb push` to copy files.
+- **MTP over USB hasn't met a computer yet.** The protocol is tested with an independent MTP initiator over TCP
+  (`tests/mtp_test.py`, also on every CPU under qemu); the USB side reuses fastbootd's FunctionFS code and adds MTP
+  to the gadget next to adb, which needs a ramdisk with USB gadget configfs (Android 10+). Files of 4 GiB or more
+  are only supported over USB.
 - **A/B OTAs: full packages only.** Incremental OTAs patch one exact old build (bsdiff / puffdiff) and are refused;
   use the full OTA or ROM zip. Payload signatures aren't checked (the per-block SHA-256 hashes are).
 - **Super metadata editing has only been tested on images, not on a phone.** Retrofit dynamic partitions (super

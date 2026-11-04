@@ -25,6 +25,7 @@ folosește TWRP: fstab-urile TWRP, OpenRecoveryScript, comanda `twrp` și backup
 | **Salvare din bootloop** | Explică pe înțeles de ce a eșuat ultima pornire, cu reparația potrivită lângă fiecare cauză |
 | **Backup / restaurare** | Comprimat, cu SHA-256, opțional **criptat** (AES-256); citește și backup-uri TWRP clasice |
 | **Root** | Magisk / KernelSU / APatch, cu backup automat al imaginii originale și manager de module |
+| **MTP** | Montare → **MTP**: memoria telefonului apare pe calculator (Windows, macOS, Linux) ca să copiezi ROM-uri și backup-uri în ambele sensuri; `adb` merge în continuare |
 | **Limbi** | Engleză și **română** (Setări → Limbă) |
 
 ## Pe telefon
