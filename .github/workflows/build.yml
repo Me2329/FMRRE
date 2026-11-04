@@ -54,7 +54,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest, macos-latest]
+        # macOS runners stopped starting for this repository (every run's macOS job sat in the queue until it was
+        # cancelled, which turned whole runs red): they run when the workflow is started by hand.
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-24.04", "windows-latest", "macos-latest"]' || '["ubuntu-24.04", "windows-latest"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
