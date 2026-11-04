@@ -109,6 +109,7 @@ Sources Sources::current() {
     }
     // The ramdisk's own /system/etc/security/otacerts.zip - unless the system partition is mounted over it.
     if (!systemOnSystem) s.recoveryZip = device::path("/system/etc/security/otacerts.zip");
+    s.recoveryResKeys = device::path("/res/keys");
     s.userDir = P.appDir() + "/keys";
     return s;
 }
@@ -157,7 +158,15 @@ Keys loadKeys(const Sources& s) {
     }
     if (!s.recoveryZip.empty() && util::exists(s.recoveryZip)) {
         k.recovery = x509::loadZip(s.recoveryZip);
-        k.recoveryFrom = "recovery: /system/etc/security/otacerts.zip";
+        if (!k.recovery.empty()) k.recoveryFrom = "recovery: /system/etc/security/otacerts.zip";
+    }
+    std::string rk;
+    if (!s.recoveryResKeys.empty() && util::readFile(s.recoveryResKeys, rk, 1 << 20)) {
+        auto keys = x509::loadMincrypt(rk);
+        if (!keys.empty()) {
+            k.recoveryFrom += k.recoveryFrom.empty() ? "recovery: /res/keys" : " + /res/keys";
+            for (auto& c : keys) k.recovery.push_back(std::move(c));
+        }
     }
     if (!s.userDir.empty() && util::isDir(s.userDir)) {
         for (auto& e : util::listDir(s.userDir)) {

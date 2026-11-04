@@ -1385,6 +1385,39 @@ static void testZipSig(const std::string& dir) {
     k = zipsig::loadKeys(zipsig::Sources::current());
     CHECK(k.user.size() == 1 && zipsig::verify(ze, k).trust == zipsig::Trust::User);
     unlink(saved.c_str());
+    // /res/keys of recoveries before Android 10: the same keys in mincrypt format, computed by Python - v4 (RSA), v5 (EC),
+    // v2 with negative words (old dumpkey output), v1 (e=3, SHA-1).
+    std::string kerr;
+    auto res = x509::loadMincrypt(kSigResKeys, &kerr);
+    auto e3 = x509::load(kSigE3Cert);
+    CHECK(res.size() == 4 && e3.size() == 1);
+    if (res.size() == 4 && e3.size() == 1) {
+        CHECK(res[0].sameKey(rsa[0]) && res[0].hashLen == 32 && res[0].keyId() == rsa[0].keyId());  // same SPKI bytes
+        CHECK(res[1].sameKey(ec[0]) && res[1].keyId() == ec[0].keyId());
+        CHECK(res[2].sameKey(test[0]) && res[2].hashLen == 20);
+        CHECK(res[3].sameKey(e3[0]) && res[3].rsa.e == std::vector<uint8_t>{3} && res[3].hashLen == 20);
+        CHECK(e3[0].rsa.e == std::vector<uint8_t>{3});
+        util::mkdirs(dir + "/sim/res");
+        CHECK(util::writeFile(dir + "/sim/res/keys", kSigResKeys));
+        k = zipsig::loadKeys(zipsig::Sources::current());
+        CHECK(k.recovery.size() == 4 && k.recoveryFrom.find("/res/keys") != std::string::npos);
+        r = zipsig::verify(put("e3.zip", std::string((const char*)kSigE3Zip, sizeof kSigE3Zip)), k);
+        CHECK(r.valid() && r.trust == zipsig::Trust::Recovery && r.hash == "SHA-1");  // e=3: the oldest OTA keys
+        CHECK(zipsig::verify(ze, k).trust == zipsig::Trust::Recovery);
+        CHECK(zipsig::verify(zr, k).trust == zipsig::Trust::System);  // the system's list is asked first
+        unlink((dir + "/sim/res/keys").c_str());
+    }
+    CHECK(x509::loadMincrypt("v9 {1,0x1,{1},{1}}", &kerr).empty() && kerr.find("version") != std::string::npos);
+    CHECK(x509::loadMincrypt("v2 {64,0x1,{1,2}", &kerr).empty() && kerr.find("damaged") != std::string::npos);
+    CHECK(x509::loadMincrypt("", &kerr).empty());
+    // A bare public key (update_engine's update-payload-key.pub.pem) gives the same key and id as its certificate.
+    std::vector<uint8_t> spki = x509::rsaSpki(rsa[0].rsa.n, rsa[0].rsa.e);
+    CHECK(spki == rsa[0].spki);
+    std::string pubPem = "-----BEGIN PUBLIC KEY-----\n" + x509::base64Encode(spki.data(), spki.size()) + "\n-----END PUBLIC KEY-----\n";
+    auto pubs = x509::loadPublicKeys(pubPem);
+    CHECK(pubs.size() == 1 && pubs[0].sameKey(rsa[0]) && pubs[0].keyId() == rsa[0].keyId());
+    CHECK(x509::ecSpki(ec[0].ec.x, ec[0].ec.y) == ec[0].spki);
+
     // In the background, as the screens do it.
     zipsig::Check c;
     for (int i = 0; i < 500 && !(c = zipsig::check(zr)).done; i++) usleep(10 * 1000);

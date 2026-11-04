@@ -50,6 +50,7 @@ struct Sources {
     std::string systemRoot;           // the system partition's files, when they can be read now
     std::string systemDev, systemFs;  // else this is mounted read-only to read them
     std::string recoveryZip;          // this recovery's own otacerts.zip
+    std::string recoveryResKeys;      // /res/keys: recoveries before Android 10
     std::string userDir;              // FMRRE/keys: keys the user added
     static Sources current();
 };

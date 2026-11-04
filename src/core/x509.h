@@ -38,6 +38,15 @@ Cert parse(const uint8_t* der, size_t len);
 std::vector<Cert> load(const std::string& bytes);
 // otacerts.zip: certificates (.x509.pem, .pem, .crt, .cer, .der) in a zip, Android's list of OTA keys.
 std::vector<Cert> loadZip(const std::string& path, std::string* err = nullptr);
+// /res/keys of recoveries before Android 10: AOSP's mincrypt format (DumpPublicKey), keys separated by commas -
+// "{64,0xc926ad21,{modulus words},{R^2 words}}" (v1: e=3, SHA-1), "v2 {...}" (e=65537, SHA-1), v3 (e=3, SHA-256),
+// v4 (e=65537, SHA-256), "v5 {32,{x bytes},{y bytes}}" (EC P-256, SHA-256); numbers little-endian.
+std::vector<Cert> loadMincrypt(const std::string& text, std::string* err = nullptr);
+// A key on its own (a PEM "PUBLIC KEY", or DER SubjectPublicKeyInfo), e.g. update_engine's update-payload-key.pub.pem.
+std::vector<Cert> loadPublicKeys(const std::string& bytes);
+// DER SubjectPublicKeyInfo of a key, so the same key gets the same keyId() wherever it came from.
+std::vector<uint8_t> rsaSpki(const std::vector<uint8_t>& n, const std::vector<uint8_t>& e);
+std::vector<uint8_t> ecSpki(const std::vector<uint8_t>& x, const std::vector<uint8_t>& y);
 
 // PKCS#7 / CMS SignedData, read the way Android's recovery reads it (verifier.cpp read_pkcs7): the first
 // SignerInfo, which must not have signed attributes - the signature is then over the data itself.

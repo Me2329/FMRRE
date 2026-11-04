@@ -271,6 +271,171 @@ std::vector<Cert> loadZip(const std::string& path, std::string* err) {
     return v;
 }
 
+namespace {
+
+std::vector<uint8_t> tlv(uint8_t tag, const std::vector<uint8_t>& v) {
+    std::vector<uint8_t> out{tag};
+    size_t n = v.size();
+    if (n < 0x80) {
+        out.push_back(uint8_t(n));
+    } else {
+        std::vector<uint8_t> len;
+        for (; n; n >>= 8) len.insert(len.begin(), uint8_t(n));
+        out.push_back(uint8_t(0x80 | len.size()));
+        out.insert(out.end(), len.begin(), len.end());
+    }
+    out.insert(out.end(), v.begin(), v.end());
+    return out;
+}
+
+std::vector<uint8_t> derInt(std::vector<uint8_t> v) {
+    while (v.size() > 1 && v[0] == 0) v.erase(v.begin());
+    if (v.empty()) v.push_back(0);
+    if (v[0] & 0x80) v.insert(v.begin(), 0);
+    return tlv(der::kInteger, v);
+}
+
+std::vector<uint8_t> cat(std::initializer_list<std::vector<uint8_t>> parts) {
+    std::vector<uint8_t> out;
+    for (auto& p : parts) out.insert(out.end(), p.begin(), p.end());
+    return out;
+}
+
+// A key that didn't come with a certificate: no subject; its spki gives the key id.
+Cert bareKey(Cert::Key k, int hashLen, const std::string& name) {
+    Cert c;
+    c.ok = true;
+    c.key = k;
+    c.hashLen = hashLen;
+    c.cn = name;
+    return c;
+}
+
+}  // namespace
+
+std::vector<uint8_t> rsaSpki(const std::vector<uint8_t>& n, const std::vector<uint8_t>& e) {
+    static const std::vector<uint8_t> alg = {0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00};
+    std::vector<uint8_t> key = tlv(der::kSequence, cat({derInt(n), derInt(e)}));
+    key.insert(key.begin(), 0);  // no unused bits
+    return tlv(der::kSequence, cat({alg, tlv(der::kBitString, key)}));
+}
+
+std::vector<uint8_t> ecSpki(const std::vector<uint8_t>& x, const std::vector<uint8_t>& y) {
+    static const std::vector<uint8_t> alg = {0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
+                                             0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07};
+    std::vector<uint8_t> key = cat({{0x00, 0x04}, x, y});
+    return tlv(der::kSequence, cat({alg, tlv(der::kBitString, key)}));
+}
+
+std::vector<Cert> loadMincrypt(const std::string& s, std::string* err) {
+    std::vector<Cert> out;
+    size_t i = 0;
+    auto fail = [&](const std::string& why) {
+        if (err) *err = why + " (key " + std::to_string(out.size() + 1) + ")";
+        return std::vector<Cert>{};
+    };
+    auto ws = [&]() {
+        while (i < s.size() && isspace((unsigned char)s[i])) i++;
+    };
+    auto lit = [&](char c) {
+        ws();
+        if (i < s.size() && s[i] == c) return ++i, true;
+        return false;
+    };
+    // A number like fscanf's %i / %u: decimal or 0x hex, a minus sign wraps around (old dumps have negative words).
+    auto num = [&](uint32_t& v) {
+        ws();
+        bool neg = false;
+        if (i < s.size() && (s[i] == '-' || s[i] == '+')) neg = s[i++] == '-';
+        bool hex = s.compare(i, 2, "0x") == 0 || s.compare(i, 2, "0X") == 0;
+        if (hex) i += 2;
+        size_t start = i;
+        uint64_t x = 0;
+        while (i < s.size() && (hex ? isxdigit((unsigned char)s[i]) : isdigit((unsigned char)s[i])) && x <= 0xFFFFFFFFull) {
+            char ch = (char)tolower((unsigned char)s[i++]);
+            x = x * (hex ? 16 : 10) + uint64_t(ch <= '9' ? ch - '0' : ch - 'a' + 10);
+        }
+        if (i == start || x > 0xFFFFFFFFull) return false;
+        v = neg ? uint32_t(0u - uint32_t(x)) : uint32_t(x);
+        return true;
+    };
+    auto list = [&](size_t count, uint32_t limit, std::vector<uint32_t>& vals) {  // "{a,b,c}"
+        vals.clear();
+        if (!lit('{')) return false;
+        for (size_t k = 0; k < count; k++) {
+            uint32_t v;
+            if ((k && !lit(',')) || !num(v) || v > limit) return false;
+            vals.push_back(v);
+        }
+        return lit('}');
+    };
+    for (;;) {
+        ws();
+        if (i >= s.size()) break;
+        uint32_t version = 1;
+        if (s[i] == 'v') {
+            i++;
+            if (!num(version) || version < 2 || version > 5) return fail("unknown key version");
+        }
+        if (!lit('{')) return fail("damaged key");
+        std::string name = "/res/keys #" + std::to_string(out.size() + 1);
+        if (version == 5) {
+            uint32_t len;
+            std::vector<uint32_t> xs, ys;
+            if (!num(len) || len != 32 || !lit(',') || !list(32, 255, xs) || !lit(',') || !list(32, 255, ys) || !lit('}'))
+                return fail("damaged EC key");
+            Cert c = bareKey(Cert::Key::Ec, 32, name);
+            for (int k = 31; k >= 0; k--) c.ec.x.push_back(uint8_t(xs[k])), c.ec.y.push_back(uint8_t(ys[k]));
+            if (!pk::ecOnCurve(c.ec)) return fail("an EC key that isn't on P-256");
+            c.spki = ecSpki(c.ec.x, c.ec.y);
+            out.push_back(std::move(c));
+        } else {
+            uint32_t words, n0inv;
+            std::vector<uint32_t> n, rr;
+            if (!num(words) || words == 0 || words > 8192 / 32 || !lit(',') || !num(n0inv) || !lit(',') ||
+                !list(words, 0xFFFFFFFFu, n) || !lit(',') || !list(words, 0xFFFFFFFFu, rr) || !lit('}'))
+                return fail("damaged RSA key");
+            Cert c = bareKey(Cert::Key::Rsa, version <= 2 ? 20 : 32, name);
+            for (size_t k = words; k-- > 0;)
+                for (int b = 3; b >= 0; b--) c.rsa.n.push_back(uint8_t(n[k] >> (8 * b)));
+            while (c.rsa.n.size() > 1 && c.rsa.n[0] == 0) c.rsa.n.erase(c.rsa.n.begin());
+            c.rsa.e = version == 1 || version == 3 ? std::vector<uint8_t>{3} : std::vector<uint8_t>{0x01, 0x00, 0x01};
+            c.spki = rsaSpki(c.rsa.n, c.rsa.e);
+            out.push_back(std::move(c));
+        }
+        if (!lit(',')) {
+            ws();
+            if (i < s.size()) return fail("unexpected text after a key");
+            break;
+        }
+    }
+    if (out.empty()) return fail("no keys");
+    return out;
+}
+
+std::vector<Cert> loadPublicKeys(const std::string& bytes) {
+    std::vector<Cert> v;
+    static const std::string kBegin = "-----BEGIN PUBLIC KEY-----", kEnd = "-----END PUBLIC KEY-----";
+    std::vector<std::string> ders;
+    for (size_t pos = 0; (pos = bytes.find(kBegin, pos)) != std::string::npos;) {
+        size_t st = pos + kBegin.size(), e = bytes.find(kEnd, st);
+        if (e == std::string::npos) break;
+        ders.push_back(base64Decode(bytes.substr(st, e - st)));
+        pos = e + kEnd.size();
+    }
+    if (ders.empty() && !bytes.empty() && (uint8_t)bytes[0] == der::kSequence) ders.push_back(bytes);
+    for (auto& d : ders) {
+        der::Reader r((const uint8_t*)d.data(), d.size());
+        der::Tlv spki;
+        if (!r.next(spki, der::kSequence)) continue;
+        Cert c = bareKey(Cert::Key::None, 32, "update_engine payload key");
+        if (!readKey(spki, c)) continue;
+        c.spki.assign(spki.raw, spki.raw + spki.rawLen);
+        v.push_back(std::move(c));
+    }
+    return v;
+}
+
 SignedData parseSignedData(const uint8_t* p, size_t n) {
     SignedData s;
     auto fail = [&s](const char* why) {

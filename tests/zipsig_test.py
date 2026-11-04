@@ -4,7 +4,7 @@
 Zips are signed like AOSP's signapk -w (tests/signapk.py); the simulated phone's system partition gets an
 otacerts.zip with "its" key, like a real ROM has. Checks that `fmrre verify-zip`:
   - names the key: the installed system's (RSA-4096), another ROM's (RSA-2048), an EC P-256 key, the public
-    AOSP test key (SHA-1), a key the user added to FMRRE/keys
+    AOSP test key (SHA-1), a key the user added to FMRRE/keys, a key in /res/keys (older recoveries)
   - refuses a changed byte, a changed signature, an extra end-of-zip record, signed attributes
   - does what Android's recovery does when the certificate in the block isn't the signer's: its own keys count
 and that installing prints the verdict, warns about a ROM signed with another key than the installed system
@@ -63,6 +63,18 @@ def cms(data, args):
                        check=True)
         with open(out, 'rb') as f:
             return f.read()
+
+
+def mincrypt_v4(cert):
+    """The key of a certificate as a /res/keys entry (mincrypt v4: e=65537, SHA-256), like AOSP's dumpkey."""
+    out = subprocess.run(['openssl', 'x509', '-noout', '-modulus', '-in', cert], capture_output=True, text=True,
+                         check=True).stdout
+    n = int(out.strip().split('=')[1], 16)
+    words = (n.bit_length() + 31) // 32
+    n0inv = (-pow(n, -1, 1 << 32)) % (1 << 32)
+    rr = pow(2, 64 * words, n)
+    w = lambda x: ','.join(str((x >> (32 * i)) & 0xFFFFFFFF) for i in range(words))
+    return 'v4 {%d,0x%x,{%s},{%s}}' % (words, n0inv, w(n), w(rr))
 
 
 def main():
@@ -152,6 +164,13 @@ def main():
         check(rc != 0, 'certificate mismatch, untrusted key', out)
         rc, out = cli(root, 'verify-zip', '/sdcard/Download/nope.zip')
         check(rc != 0 and 'not found' in out, 'a missing file', out)
+        # A recovery from before Android 10 keeps its keys in /res/keys (mincrypt format).
+        os.makedirs(os.path.join(root, 'res'), exist_ok=True)
+        with open(os.path.join(root, 'res/keys'), 'w') as f:
+            f.write(mincrypt_v4(oth_c) + '\n')
+        rc, out = cli(root, 'verify-zip', z_oth)
+        check(rc == 0 and 'a key this recovery trusts' in out and '/res/keys' in out, 'a key from /res/keys', out)
+        os.remove(os.path.join(root, 'res/keys'))
 
         # Installing: the verdict, the ROM-switch warning, the history.
         rc, out = cli(root, 'install', z_oth)
