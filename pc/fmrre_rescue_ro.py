@@ -28,8 +28,6 @@ RO = {
 
     # ---- bootloader lock
     "Repairs from this computer are possible.": "Reparațiile de pe acest calculator sunt posibile.",
-    "Nothing can be flashed while the bootloader is locked. To unlock (it ERASES the phone): {} Without unlocking: {}":
-        "Nu se poate instala nimic cât timp bootloader-ul este blocat. Deblocare (ȘTERGE telefonul): {} Fără deblocare: {}",
     "OEM unlocking is already allowed in Developer options. {}": "Deblocarea OEM este deja permisă în Opțiuni dezvoltator. {}",
     "OEM unlocking is OFF in Developer options. {}": "Deblocarea OEM este OPRITĂ în Opțiuni dezvoltator. {}",
     "Can't ask the phone in this mode.": "Telefonul nu poate fi întrebat în acest mod.",
@@ -324,6 +322,27 @@ RO = {
     "reinstalling the firmware": "reinstalarea firmware-ului",
     "Factory image zip for this phone": "Zip-ul cu imaginea de fabrică pentru acest telefon",
     "Reinstall firmware...": "Reinstalează firmware...",
+    "{} is not a zip - an OTA or ROM for sideload is a .zip file.": "{} nu este un zip - un OTA sau un ROM pentru sideload este un fișier .zip.",
+    "{} has neither payload.bin nor an update-binary: it isn't an OTA or a flashable zip.":
+        "{} nu are nici payload.bin, nici update-binary: nu este un OTA sau un zip instalabil.",
+    "This OTA is for {}, but the phone is {} - the recovery would refuse it.": "Acest OTA este pentru {}, dar telefonul este {} - recovery-ul l-ar refuza.",
+    "On the phone: choose 'Apply update from ADB' in the recovery that starts now (volume keys to move, power to select).":
+        "Pe telefon: alege 'Apply update from ADB' în recovery-ul care pornește acum (tastele de volum ca să te miști, pornire ca să alegi).",
+    "Can't start sideload from {}. Start the recovery, then choose 'Apply update from ADB'.":
+        "Nu se poate porni sideload din {}. Pornește recovery-ul, apoi alege 'Apply update from ADB'.",
+    "The phone isn't waiting for adb sideload. In its recovery choose 'Apply update from ADB' (FMRRE: Install > Sideload), then run this again.":
+        "Telefonul nu așteaptă adb sideload. În recovery alege 'Apply update from ADB' (FMRRE: Instalare > Sideload), apoi rulează din nou.",
+    "Install {} with adb sideload?": "Instalezi {} cu adb sideload?",
+    "Install {} with adb sideload? (On a locked phone only the maker's signed OTA is accepted.)":
+        "Instalezi {} cu adb sideload? (Pe un telefon blocat se acceptă doar OTA-ul semnat de producător.)",
+    "The phone is waiting for adb sideload: give the OTA or ROM zip - fix --ota <file>.zip (or: sideload <file>.zip).":
+        "Telefonul așteaptă adb sideload: dă zip-ul OTA sau ROM - fix --ota <fișier>.zip (sau: sideload <fișier>.zip).",
+    "Nothing can be flashed while the bootloader is locked. To unlock (it ERASES the phone): {} Without unlocking: {} This tool can do the sideload: sideload <official full OTA>.zip":
+        "Nu se poate instala nimic cât timp bootloader-ul este blocat. Deblocare (ȘTERGE telefonul): {} Fără deblocare: {} "
+        "Unealta poate face sideload-ul: sideload <OTA oficial complet>.zip",
+    "OTA or ROM zip": "Zip OTA sau ROM", "Sideload OTA...": "Instalează OTA (sideload)...",
+    "(if nothing happens: on the phone, in the recovery, choose 'Apply update from ADB')":
+        "(dacă nu se întâmplă nimic: pe telefon, în recovery, alege 'Apply update from ADB')",
     "==> done": "==> gata", "==> not done": "==> nu s-a făcut", "cancelled": "anulat",
 
     # ---- window

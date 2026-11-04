@@ -249,9 +249,12 @@ Plug the phone in, in whatever mode it is in, and it tells you:
   - Samsung Download mode doesn't tell the computer. The tool says what to read on the phone's screen
     (`OEM LOCK: OFF (U)`, `KG STATE`) and waits for you to confirm.
 
-On a **locked** phone it changes nothing: it explains how that maker's phones are unlocked (unlocking erases the
-phone), and which **official** tool restores the firmware instead (Pixel Repair, Smart Switch / Odin, sideloading the
-official OTA from the stock recovery...).
+On a **locked** phone it flashes nothing: it explains how that maker's phones are unlocked (unlocking erases the
+phone), and which **official** tool restores the firmware instead (Pixel Repair, Smart Switch / Odin...). The one repair
+it does on a locked phone is the official one: **`sideload <official full OTA>.zip`** (or `fix --ota`) restarts the
+phone into its recovery's *Apply update from ADB* (`adb reboot sideload`; from the bootloader it starts the recovery and
+says what to pick) and sends the OTA - the recovery checks the maker's signature itself, and a full OTA keeps apps and
+files. An OTA whose metadata names another phone is refused before anything starts.
 
 **Fix it for me** (`fmrre_rescue.py fix`) then works out the repair. It asks before every change (`--yes` to not
 ask; Format Data / `-w` always needs `ERASE` typed):

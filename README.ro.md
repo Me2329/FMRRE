@@ -57,8 +57,11 @@ Conectezi telefonul, în orice mod ar fi, și îți spune:
 - **dacă bootloader-ul e deblocat**. În modul Download Samsung calculatorul nu poate afla, așa că îți spune ce să
   citești pe ecranul telefonului (`OEM LOCK: OFF (U)`).
 
-**Pe un telefon blocat nu scrie nimic**: îți explică cum se deblochează la producătorul tău (deblocarea șterge
-telefonul) și ce unealtă oficială poate reinstala firmware-ul.
+**Pe un telefon blocat nu instalează nimic modificat**: îți explică cum se deblochează la producătorul tău (deblocarea
+șterge telefonul) și ce unealtă oficială poate reinstala firmware-ul. Singura reparație pe care o face pe un telefon
+blocat este cea oficială: **`fmrre_rescue.py sideload <OTA oficial complet>.zip`** repornește telefonul în *Apply update
+from ADB* și trimite OTA-ul - recovery-ul verifică singur semnătura producătorului, iar un OTA complet păstrează
+aplicațiile și fișierele.
 
 Butonul **Repară-l în locul meu** (`fmrre_rescue.py fix`) întreabă înainte de fiecare schimbare:
 - slotul curent nu mai pornește, dar celălalt a mers → trece pe celălalt slot (revenire după o actualizare proastă)

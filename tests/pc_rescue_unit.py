@@ -49,6 +49,16 @@ if tool == "fastboot":
     else:
         sys.stderr.write("OKAY [  0.1s]\n")
 elif tool == "adb":
+    if mode == "sideload":
+        if args[:1] == ["devices"]:
+            print("List of devices attached\nFAKE123   sideload product:husky model:Pixel_8_Pro device:husky\n")
+        elif args[:1] == ["get-state"]:
+            print("sideload")
+        elif args[:1] == ["sideload"]:
+            print("serving: '%s'  (~100%%)" % os.path.basename(args[1]))
+            print("Total xfer: 1.00x")
+            st["mode"] = "none"; save()
+        sys.exit(0)
     if mode != "android":
         if args[:1] == ["devices"]:
             print("List of devices attached\n")
@@ -61,6 +71,8 @@ elif tool == "adb":
     elif args[:2] == ["shell", "getprop"]:
         for k, v in st["props"].items():
             print("[%s]: [%s]" % (k, v))
+    elif args[:2] == ["reboot", "sideload"]:
+        st["mode"] = "sideload"; save()
 elif tool == "heimdall":
     if args[:1] == ["detect"]:
         sys.exit(0 if mode == "download" else 1)
@@ -160,6 +172,18 @@ def main():
     rc, out = run("status")
     check("Android: model, LOCKED, how to unlock", "Google Pixel 8 Pro" in out and "LOCKED" in out and "fastboot flashing unlock" in out
           and "OEM unlocking is already allowed" in out, out)
+
+    # A locked phone: the official OTA goes in with adb sideload (the stock recovery checks the signature).
+    import zipfile
+    ota = os.path.join(work, "husky-ota.zip")
+    with zipfile.ZipFile(ota, "w") as z:
+        z.writestr("META-INF/com/android/metadata", "ota-type=AB\npre-device=husky\n")
+        z.writestr("payload.bin", "CrAU")
+    phone("android", props={"ro.product.manufacturer": "Google", "ro.product.model": "Pixel 8 Pro", "ro.product.device": "husky",
+                            "ro.boot.flash.locked": "1", "ro.boot.verifiedbootstate": "green"})
+    rc, out = run("fix", "--yes", "--ota", ota)
+    check("locked phone: official OTA with adb sideload", rc == 0 and "reboot sideload" in calls() and "sideload " + ota in calls(),
+          out + calls())
 
     phone("download")
     boot = b"ANDROID!" + bytes(range(256)) * 40

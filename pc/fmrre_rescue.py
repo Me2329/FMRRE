@@ -29,6 +29,7 @@ it explains how to unlock it, and which official tool restores the firmware inst
   fmrre_rescue.py flash PARTITION IMAGE
   fmrre_rescue.py samsung-fmrre IMG  Download mode: FMRRE to RECOVERY + vbmeta disabled
   fmrre_rescue.py samsung-stock AP.tar.md5 [--parts boot,vbmeta,...]
+  fmrre_rescue.py sideload OTA.zip   install an OTA / ROM with adb sideload - official OTAs work on LOCKED phones
   fmrre_rescue.py factory FACTORY.zip [--wipe]   reinstall the official firmware (Pixel-style factory image),
                                      keeping apps and files; the image must name this phone
   fmrre_rescue.py wipe-data          factory reset (type ERASE to confirm)
@@ -508,7 +509,8 @@ def lock_verdict(ph):
             text = "OEM unlocking is already allowed in Developer options. " + text
         elif ph.unlock_allowed is False and ph.mode == "android":
             text = "OEM unlocking is OFF in Developer options. " + text
-        return "LOCKED", "bad", text + " Without unlocking: " + OFFICIAL_RESTORE.get(ph.maker, OFFICIAL_DEFAULT)
+        return "LOCKED", "bad", text + " Without unlocking: " + OFFICIAL_RESTORE.get(ph.maker, OFFICIAL_DEFAULT) + \
+            " This tool can do the sideload: sideload <official full OTA>.zip"
     if ph.mode == "download":
         return "CHECK THE SCREEN", "warn", (
             "Samsung Download mode doesn't tell the computer. On the phone's screen: 'OEM LOCK: OFF (U)' (or just OFF) means "
@@ -856,6 +858,22 @@ def factory_info(path):
     return {"bootloader": boot[0] if boot else "", "radio": radio[0] if radio else "", "image": image[0]}
 
 
+def ota_info(path):
+    """What an OTA / ROM zip says about itself (META-INF/com/android/metadata): {"pre-device": ..., "ota-type": ...}."""
+    if not zipfile.is_zipfile(path):
+        raise Refused("%s is not a zip - an OTA or ROM for sideload is a .zip file." % os.path.basename(path))
+    with zipfile.ZipFile(path) as z:
+        names = set(z.namelist())
+        meta = {}
+        if "META-INF/com/android/metadata" in names:
+            for line in z.read("META-INF/com/android/metadata").decode("utf-8", "replace").splitlines():
+                k, _, v = line.partition("=")
+                if k.strip():
+                    meta[k.strip()] = v.strip()
+        meta["_installable"] = "payload.bin" in names or "META-INF/com/google/android/update-binary" in names
+    return meta
+
+
 def boards_in(image_zip):
     try:
         with zipfile.ZipFile(image_zip) as z:
@@ -902,6 +920,7 @@ class Options:
         self.unlocked = False     # the user checked: bootloader unlocked (when the phone doesn't say)
         self.recovery = None      # FMRRE image
         self.ap = None            # Samsung AP tar
+        self.ota = None           # an OTA / ROM zip for adb sideload
         self.vbmeta = None        # stock vbmeta.img
         self.both_slots = False
         self.allow_wipe = False
@@ -1033,6 +1052,47 @@ class Rescue:
         if not self.ask("Flash %s to %s?" % (os.path.basename(image), part)):
             return False
         return self.r.write("fastboot", "flash", part, image)
+
+    def sideload(self, path):
+        """Install an OTA / ROM zip with adb sideload. Allowed on a LOCKED phone: the stock recovery checks that it is
+        signed by the maker (an official full OTA reinstalls the system and keeps apps and files)."""
+        if not os.path.isfile(path):
+            raise Refused("No such file: " + path)
+        meta = ota_info(path)
+        if not meta["_installable"]:
+            raise Refused("%s has neither payload.bin nor an update-binary: it isn't an OTA or a flashable zip." % os.path.basename(path))
+        devs = [d.strip().lower() for d in meta.get("pre-device", "").split(",") if d.strip()]
+        product = (self.phone.device or "").lower()
+        if devs and product and product not in devs:
+            raise Refused("This OTA is for %s, but the phone is %s - the recovery would refuse it." % (", ".join(devs), product))
+        m = self.phone.mode
+        if m == "none":
+            raise Refused(HOW_TO_CONNECT)
+        if m in ("unauthorized", "offline"):
+            raise Refused(diagnose(self.r, self.phone)[0].detail)
+        if m != "sideload":
+            if m in ("android", "recovery"):
+                # FMRRE has its own sideload mode; Android and most stock recoveries start it with `adb reboot sideload`.
+                ok = self.r.write("adb", "shell", *self.phone.cli, "sideload") if m == "recovery" and self.phone.fmrre \
+                    else self.r.write("adb", "reboot", "sideload")
+            elif m in ("fastboot", "fastbootd"):
+                self.log("On the phone: choose 'Apply update from ADB' in the recovery that starts now (volume keys to move, "
+                         "power to select).")
+                ok = self.r.write("fastboot", "reboot", "recovery")
+            else:
+                raise Refused("Can't start sideload from %s. Start the recovery, then choose 'Apply update from ADB'." % T(MODE_TEXT.get(m, m)))
+            if not ok:  # starting sideload switches USB over, so this can look like a failure - wait and see
+                self.log("   (if nothing happens: on the phone, in the recovery, choose 'Apply update from ADB')")
+            if not self.r.wait_for("sideload", max(self.r.wait_s, 180)):
+                raise Refused("The phone isn't waiting for adb sideload. In its recovery choose 'Apply update from ADB' "
+                              "(FMRRE: Install > Sideload), then run this again.")
+            self.refresh()
+        q = "Install %s with adb sideload?" if self.phone.locked is False else \
+            "Install %s with adb sideload? (On a locked phone only the maker's signed OTA is accepted.)"
+        if not self.ask(q % os.path.basename(path)):
+            return False
+        ok = self.r.write("adb", "sideload", path)
+        return ok or "Total xfer:" in self.r.last_output  # some recoveries end the connection before adb reports success
 
     def factory(self, path, wipe=False):
         """Reinstall the official firmware from a factory image zip - like its flash-all script, without -w data stays."""
@@ -1231,7 +1291,11 @@ class Rescue:
         m = ph.mode
         if m == "none":
             raise Refused(HOW_TO_CONNECT)
-        if m in ("unauthorized", "offline", "sideload", "rescue"):
+        if self.o.ota and m not in ("unauthorized", "offline"):
+            return self.sideload(self.o.ota)  # works on a locked phone too: the recovery checks the signature
+        if m == "sideload":
+            raise Refused("The phone is waiting for adb sideload: give the OTA or ROM zip - fix --ota <file>.zip (or: sideload <file>.zip).")
+        if m in ("unauthorized", "offline", "rescue"):
             raise Refused(diagnose(self.r, ph)[0].detail if m in ("unauthorized", "offline") else
                           "The phone is waiting in %s - cancel it on the phone first." % MODE_TEXT[m])
         self.need_unlocked("repairing")
@@ -1350,6 +1414,7 @@ def main(argv=None):
     p = sub.add_parser("fix")
     p.add_argument("--recovery", help="FMRRE image for this phone (started from RAM, or installed in Download mode)")
     p.add_argument("--ap", help="Samsung: the firmware's AP .tar.md5 (stock boot / vbmeta / recovery are flashed from it)")
+    p.add_argument("--ota", help="an official full OTA (or a ROM zip) to install with adb sideload - works on a locked phone")
     p.add_argument("--allow-wipe", action="store_true", help="let Auto repair Format Data when it finds that it is needed")
     p.add_argument("--no-reboot", action="store_true")
     sub.add_parser("boot-fmrre").add_argument("image")
@@ -1370,6 +1435,7 @@ def main(argv=None):
     p = sub.add_parser("samsung-stock")
     p.add_argument("ap")
     p.add_argument("--parts", default=",".join(SAMSUNG_STOCK_PARTS))
+    sub.add_parser("sideload", help="install an OTA / ROM zip with adb sideload (official OTAs work on locked phones)").add_argument("zip")
     p = sub.add_parser("factory", help="reinstall the official firmware from a factory image zip (keeps data)")
     p.add_argument("zip")
     p.add_argument("--wipe", action="store_true", help="also factory reset (type ERASE to confirm)")
@@ -1398,7 +1464,7 @@ def main(argv=None):
 
     r = Runner(dry=a.dry_run, serial=a.serial)
     o = Options(yes=a.yes, unlocked=a.unlocked, workdir=a.workdir)
-    for k in ("recovery", "ap", "vbmeta", "both_slots", "allow_wipe"):
+    for k in ("recovery", "ap", "ota", "vbmeta", "both_slots", "allow_wipe"):
         if getattr(a, k, None):
             setattr(o, k, getattr(a, k))
     if getattr(a, "no_reboot", False):
@@ -1438,6 +1504,8 @@ def main(argv=None):
             ok = rs.samsung_fmrre(a.image)
         elif a.cmd == "samsung-stock":
             ok = rs.samsung_stock(a.ap)
+        elif a.cmd == "sideload":
+            ok = rs.sideload(a.zip)
         elif a.cmd == "factory":
             ok = rs.factory(a.zip, a.wipe)
         elif a.cmd == "wipe-data":
@@ -1587,6 +1655,14 @@ def run_gui(a):
     btn(row1, "Fix it for me", rs.fix, big=True).pack(side="left")
     btn(row1, "Start FMRRE", lambda: rs.boot_fmrre(img_var.get().strip()) and rs.autofix()).pack(side="left", padx=(10, 0))
     btn(row1, "Auto repair (FMRRE)", rs.autofix).pack(side="left", padx=4)
+
+    def sideload_dialog():
+        f = filedialog.askopenfilename(title=T("OTA or ROM zip"), filetypes=[("Zip", "*.zip"), ("All files", "*")])
+        if f:
+            job(rs.sideload, f)
+    sb = ttk.Button(row1, text=T("Sideload OTA..."), command=sideload_dialog)
+    sb.pack(side="left", padx=4)
+    buttons.append(sb)
     row2 = ttk.Frame(act)
     row2.pack(fill="x", pady=4)
     btn(row2, "Other slot", rs.switch_slot).pack(side="left")

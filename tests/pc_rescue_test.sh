@@ -134,6 +134,12 @@ def factory(name, board):
         z.writestr(d + "image-%s-bp1a.250505.005.zip" % board, inner.getvalue())
         z.writestr(d + "flash-all.sh", "#!/bin/sh\n")
 factory("husky-factory.zip", "husky")
+def ota(name, device):
+    with zipfile.ZipFile(T + "/" + name, "w") as z:
+        z.writestr("META-INF/com/android/metadata", "ota-type=AB\npre-device=%s\npost-build=google/%s/%s:16/BP1A/1:user/release-keys\n" % (device, device, device))
+        z.writestr("payload.bin", "CrAU")
+ota("husky-ota.zip", "husky")
+ota("shiba-ota.zip", "shiba")
 factory("shiba-factory.zip", "shiba")
 open(T + "/AP_TEST.tar.md5", "wb").write(body + ("%s  AP_TEST.tar\n" % hashlib.md5(body).hexdigest()).encode())
 EOF
@@ -161,7 +167,8 @@ case "$1" in
   reboot)
     rm -f "$T/fastboot_on"
     [ "${2:-}" = bootloader ] && touch "$T/fastboot_on"
-    if [ "${2:-}" = recovery ] && [ -f "$T/installed_twrp" ]; then touch "$T/adb_on"; echo twrp > "$T/adb_mode"; fi ;;
+    if [ "${2:-}" = recovery ] && [ -f "$T/installed_twrp" ]; then touch "$T/adb_on"; echo twrp > "$T/adb_mode"; fi
+    if [ "${2:-}" = recovery ] && [ -f "$T/user_picks_sideload" ]; then touch "$T/adb_on"; echo sideload > "$T/adb_mode"; fi ;;
   *) echo "OKAY [  0.1s]" >&2 ;;
 esac
 exit 0
@@ -174,7 +181,7 @@ mode="$(cat "$T/adb_mode" 2>/dev/null)"
 if [ ! -f "$T/adb_on" ]; then
   case "$1" in devices) printf 'List of devices attached\n\n'; exit 0 ;; *) echo "error: no devices/emulators found" >&2; exit 1 ;; esac
 fi
-case "$mode" in twrp|old|stock_recovery) state=recovery ;; unauthorized) state=unauthorized ;; *) state=device ;; esac
+case "$mode" in twrp|old|stock_recovery) state=recovery ;; unauthorized|sideload) state="$mode" ;; *) state=device ;; esac
 case "$1" in
   devices) printf 'List of devices attached\nFAKE123                %s usb:1-1 product:husky model:Pixel_8_Pro device:husky transport_id:3\n\n' "$state" ;;
   get-state) echo "$state" ;;
@@ -195,10 +202,13 @@ case "$1" in
     rm -f "$T/adb_on"
     case "${2:-}" in
       bootloader) touch "$T/fastboot_on" ;;
+      sideload) touch "$T/adb_on"; echo sideload > "$T/adb_mode" ;;
       recovery) [ -f "$T/installed_twrp" ] && { touch "$T/adb_on"; echo twrp > "$T/adb_mode"; } ;;
       download) touch "$T/download_on" ;;
     esac ;;
   pull) mkdir -p "$3/$(basename "$2")"; echo "$2: 1 file pulled" ;;
+  sideload) [ "$mode" = sideload ] || { echo "adb: sideload connection failed: closed"; exit 1; }
+    echo "serving: '$(basename "$2")'  (~47%)"; echo "Total xfer: 1.00x"; rm -f "$T/adb_on" ;;
   logcat) echo "11-03 19:00:00.000 E AndroidRuntime: FATAL EXCEPTION" ;;
 esac
 exit 0
@@ -425,6 +435,33 @@ echo nope > "$T/answer"; STDIN="$T/answer" run factory "$T/husky-factory.zip" --
 rc_is "--wipe needs ERASE typed" 2
 echo ERASE > "$T/answer"; STDIN="$T/answer" run factory "$T/husky-factory.zip" --wipe --yes --workdir "$T/wf2"
 called "--wipe after ERASE" "fastboot -s FAKE123 -w update $T/wf2/image-husky-bp1a.250505.005.zip"
+
+scenario "locked phone: the official OTA with adb sideload (no unlock needed)"
+touch "$T/adb_on"; echo android > "$T/adb_mode"
+pixel_props ro.boot.flash.locked=1 ro.boot.verifiedbootstate=green
+run status
+has_out "the locked verdict points to it" "This tool can do the sideload: sideload <official full OTA>.zip"
+run fix --yes --ota "$T/husky-ota.zip"
+rc_is "exit 0 on a LOCKED phone" 0
+called "Android restarts straight into sideload" "adb -s FAKE123 reboot sideload"
+called "the OTA is sent" "adb -s FAKE123 sideload $T/husky-ota.zip"
+: > "$T/log"; touch "$T/adb_on"; echo android > "$T/adb_mode"
+run sideload "$T/shiba-ota.zip" --yes
+rc_is "another phone's OTA: refused" 2
+has_out "says why" "This OTA is for shiba, but the phone is husky"
+not_called "nothing sent" "adb .*sideload /"
+run sideload "$T/junk.img" --yes
+rc_is "not a zip: refused" 2
+
+scenario "sideload from the bootloader: the user picks 'Apply update from ADB'"
+touch "$T/fastboot_on" "$T/user_picks_sideload"
+getvar_all product:husky unlocked:no current-slot:a
+run sideload "$T/husky-ota.zip" --yes
+rc_is "exit 0" 0
+has_out "tells the user what to pick" "Apply update from ADB"
+called "recovery started" "fastboot -s FAKE123 reboot recovery"
+called "the OTA is sent" "adb -s FAKE123 sideload $T/husky-ota.zip"
+rm -f "$T/user_picks_sideload"
 
 scenario "Samsung Download mode: lock state is on the screen"
 touch "$T/download_on"
