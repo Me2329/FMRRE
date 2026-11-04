@@ -116,17 +116,31 @@ Sources Sources::current() {
 
 Keys loadKeys(const Sources& s) {
     Keys k;
+    auto payloadKey = [&](const std::string& root, std::vector<x509::Cert>& into) {  // update_engine's key for A/B OTAs
+        for (auto rel : {"/system/etc/update_engine/update-payload-key.pub.pem", "/etc/update_engine/update-payload-key.pub.pem"}) {
+            std::string b;
+            if (!util::readFile(root + rel, b, 1 << 16)) continue;
+            for (auto& c : x509::loadPublicKeys(b)) {
+                bool dup = false;
+                for (auto& have : into) dup |= have.sameKey(c);
+                if (!dup) into.push_back(std::move(c));
+            }
+            return;
+        }
+    };
     auto fromRoot = [&](const std::string& root) {
+        payloadKey(root, k.system);
         for (auto rel : {"/system/etc/security/otacerts.zip", "/etc/security/otacerts.zip"}) {  // system-as-root, older
             std::string p = root + rel;
             if (!util::exists(p)) continue;
             std::string e;
-            k.system = x509::loadZip(p, &e);
+            for (auto& c : x509::loadZip(p, &e)) k.system.push_back(std::move(c));
             k.systemFrom = "system: " + std::string(rel);
             if (k.system.empty()) k.systemNote = "the installed system's otacerts.zip has no usable key (" + e + ")";
             return;
         }
-        k.systemNote = "the installed system has no otacerts.zip";
+        if (!k.system.empty()) k.systemFrom = "system: update_engine's payload key";
+        else k.systemNote = "the installed system has no otacerts.zip";
     };
     if (!s.systemRoot.empty()) {
         fromRoot(s.systemRoot);
@@ -159,6 +173,11 @@ Keys loadKeys(const Sources& s) {
     if (!s.recoveryZip.empty() && util::exists(s.recoveryZip)) {
         k.recovery = x509::loadZip(s.recoveryZip);
         if (!k.recovery.empty()) k.recoveryFrom = "recovery: /system/etc/security/otacerts.zip";
+    }
+    if (!s.recoveryResKeys.empty()) {  // recovery's own update_engine key (its ramdisk's /etc)
+        size_t before = k.recovery.size();
+        payloadKey(util::dirname(util::dirname(s.recoveryResKeys)), k.recovery);
+        if (k.recovery.size() > before && k.recoveryFrom.empty()) k.recoveryFrom = "recovery: update_engine's payload key";
     }
     std::string rk;
     if (!s.recoveryResKeys.empty() && util::readFile(s.recoveryResKeys, rk, 1 << 20)) {
@@ -300,6 +319,193 @@ std::vector<std::string> report(const Result& r) {
     }
     if (!r.systemKeysKnown && !r.systemNote.empty()) v.push_back("  (not compared with the installed system: " + r.systemNote + ")");
     return v;
+}
+
+// ---- payload.bin signatures --------------------------------------------------------------------------
+
+namespace {
+
+struct RawSig {
+    std::string data;
+    uint32_t unpadded = 0;
+};
+
+// update_engine's Signatures message: repeated Signature { uint32 version = 1; bytes data = 2;
+// fixed32 unpadded_signature_size = 3; }
+bool parseSignatures(const std::string& blob, std::vector<RawSig>& out) {
+    struct Pb {
+        const uint8_t *p, *e;
+        bool varint(uint64_t& v) {
+            v = 0;
+            for (int sh = 0; sh < 64; sh += 7) {
+                if (p >= e) return false;
+                uint8_t b = *p++;
+                v |= uint64_t(b & 0x7F) << sh;
+                if (!(b & 0x80)) return true;
+            }
+            return false;
+        }
+        bool skip(uint32_t wire) {
+            uint64_t v;
+            if (wire == 0) return varint(v);
+            if (wire == 1) return e - p >= 8 ? (p += 8, true) : false;
+            if (wire == 5) return e - p >= 4 ? (p += 4, true) : false;
+            if (wire == 2) return varint(v) && uint64_t(e - p) >= v ? (p += v, true) : false;
+            return false;
+        }
+    };
+    Pb top{(const uint8_t*)blob.data(), (const uint8_t*)blob.data() + blob.size()};
+    while (top.p < top.e) {
+        uint64_t key, len;
+        if (!top.varint(key)) return false;
+        if ((key >> 3) != 1 || (key & 7) != 2) {
+            if (!top.skip(uint32_t(key & 7))) return false;
+            continue;
+        }
+        if (!top.varint(len) || uint64_t(top.e - top.p) < len) return false;
+        Pb s{top.p, top.p + len};
+        top.p += len;
+        RawSig rs;
+        while (s.p < s.e) {
+            uint64_t k, n;
+            if (!s.varint(k)) return false;
+            if ((k >> 3) == 2 && (k & 7) == 2) {
+                if (!s.varint(n) || uint64_t(s.e - s.p) < n) return false;
+                rs.data.assign((const char*)s.p, n);
+                s.p += n;
+            } else if ((k >> 3) == 3 && (k & 7) == 5) {
+                if (s.e - s.p < 4) return false;
+                rs.unpadded = uint32_t(s.p[0]) | uint32_t(s.p[1]) << 8 | uint32_t(s.p[2]) << 16 | uint32_t(s.p[3]) << 24;
+                s.p += 4;
+            } else if (!s.skip(uint32_t(k & 7))) {
+                return false;
+            }
+        }
+        out.push_back(rs);
+    }
+    return true;
+}
+
+}  // namespace
+
+std::string PayloadSig::line() const {
+    auto whose = [&]() -> std::string {
+        if (trust == Trust::System) return "the installed system's key";
+        if (trust == Trust::Recovery) return "a key this recovery trusts";
+        if (trust == Trust::User) return "a key you trusted";
+        return zipKey ? "the key that signed the zip" : "an unknown key";
+    };
+    std::string s;
+    switch (metadata) {
+        case PState::None: s = "the payload has no metadata signature"; break;
+        case PState::Valid: s = "payload metadata signed with " + whose(); break;
+        case PState::UnknownKey: s = "the payload is signed with a key FMRRE doesn't know, so it can't be checked"; break;
+        case PState::Bad: s = "the payload's metadata signature is damaged (" + reason + ")"; break;
+        case PState::Error: s = "the payload's signature couldn't be checked (" + reason + ")"; break;
+    }
+    if (payload == PState::Valid) s += "; payload signature valid";
+    else if (payload == PState::UnknownKey && metadata == PState::Valid)
+        s += "; the payload signature DOESN'T match - the payload was changed after signing";
+    else if (payload == PState::Bad) s += "; the payload signature is damaged";
+    return s;
+}
+
+PayloadSig verifyPayload(const PayloadRef& p, const Keys& keys, const x509::Cert* zipCert, bool full, const Progress& progress) {
+    PayloadSig r;
+    int fd = open(p.path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        r.metadata = PState::Error;
+        r.reason = "the file can't be opened";
+        return r;
+    }
+    struct Closer {
+        int fd;
+        ~Closer() { close(fd); }
+    } closer{fd};
+    auto readAt = [&](void* buf, size_t n, uint64_t off) {
+        size_t got = 0;
+        while (got < n) {
+            ssize_t k = pread(fd, (uint8_t*)buf + got, n - got, off_t(off + got));
+            if (k <= 0) return false;
+            got += size_t(k);
+        }
+        return true;
+    };
+    // Hash [base, base + len) in pieces.
+    auto hashRange = [&](uint64_t len, std::string& digest) {
+        Sha256 h;
+        std::vector<uint8_t> buf(1 << 20);
+        for (uint64_t done = 0; done < len;) {
+            size_t n = size_t(std::min<uint64_t>(buf.size(), len - done));
+            if (!readAt(buf.data(), n, p.base + done)) return false;
+            h.update(buf.data(), n);
+            done += n;
+            if (progress && !progress(done, len)) return false;
+        }
+        digest = h.digest();
+        return true;
+    };
+    // Which known key made one of these signatures over this hash?
+    auto match = [&](const std::string& digest, const std::vector<RawSig>& sigs, bool record) {
+        struct Cand {
+            const x509::Cert* c;
+            Trust t;
+            const std::string* from;
+        };
+        std::vector<Cand> cands;
+        for (auto& c : keys.system) cands.push_back({&c, Trust::System, &keys.systemFrom});
+        for (auto& c : keys.recovery) cands.push_back({&c, Trust::Recovery, &keys.recoveryFrom});
+        for (auto& c : keys.user) cands.push_back({&c, Trust::User, &keys.userFrom});
+        if (zipCert) cands.push_back({zipCert, Trust::Unknown, nullptr});
+        for (auto& sg : sigs)
+            for (auto& cd : cands) {
+                bool ok = false;
+                if (cd.c->key == x509::Cert::Key::Rsa) {
+                    ok = pk::rsaVerify(cd.c->rsa, pk::Hash::Sha256, digest, (const uint8_t*)sg.data.data(), sg.data.size());
+                } else if (cd.c->key == x509::Cert::Key::Ec) {
+                    size_t n = sg.unpadded && sg.unpadded <= sg.data.size() ? sg.unpadded : sg.data.size();
+                    ok = pk::ecdsaVerify(cd.c->ec, digest, (const uint8_t*)sg.data.data(), n);
+                }
+                if (!ok) continue;
+                if (record) {
+                    r.cert = *cd.c;
+                    r.trust = cd.t;
+                    r.trustedBy = cd.from ? *cd.from : "";
+                    r.zipKey = zipCert && cd.c->sameKey(*zipCert);
+                    if (r.trust == Trust::Unknown && zipCert && !zipCert->sameKey(*cd.c)) r.zipKey = false;
+                }
+                return true;
+            }
+        return false;
+    };
+    auto readSigs = [&](uint64_t off, uint64_t size, std::vector<RawSig>& sigs) {
+        if (size > (1u << 20)) return false;
+        std::string blob(size_t(size), '\0');
+        return readAt(&blob[0], blob.size(), p.base + off) && parseSignatures(blob, sigs) && !sigs.empty();
+    };
+
+    const uint64_t metaLen = 24 + p.manifestSize;
+    if (p.metadataSigSize) {
+        std::string digest;
+        std::vector<RawSig> sigs;
+        if (!hashRange(metaLen, digest)) {
+            r.metadata = PState::Error;
+            r.reason = "the payload can't be read";
+        } else if (!readSigs(metaLen, p.metadataSigSize, sigs)) {
+            r.metadata = PState::Bad;
+            r.reason = "its signature block can't be read";
+        } else {
+            r.metadata = match(digest, sigs, true) ? PState::Valid : PState::UnknownKey;
+        }
+    }
+    if (full && p.sigSize) {
+        std::string digest;
+        std::vector<RawSig> sigs;
+        if (!hashRange(p.dataStart + p.sigOffset, digest)) r.payload = PState::Error;
+        else if (!readSigs(p.dataStart + p.sigOffset, p.sigSize, sigs)) r.payload = PState::Bad;
+        else r.payload = match(digest, sigs, r.metadata != PState::Valid) ? PState::Valid : PState::UnknownKey;
+    }
+    return r;
 }
 
 // ---- background checks -------------------------------------------------------------------------------

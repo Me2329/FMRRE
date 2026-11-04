@@ -61,6 +61,29 @@ Result verify(const std::string& zip, const Keys& keys, const Progress& progress
 // The verdict as log lines: what it is, who signed it with which key, which list trusts it.
 std::vector<std::string> report(const Result& r);
 
+// The signatures update_engine checks inside payload.bin (A/B OTAs). The metadata signature covers the header and
+// the manifest - and the manifest holds the SHA-256 of every operation, which installing checks - so it vouches for
+// the whole payload and is cheap. The payload signature covers everything before it; full = true checks it too (the
+// whole payload is read). Payload signatures carry no certificate: only known keys can check them - the trusted
+// lists, update_engine's update-payload-key.pub.pem, and the zip's own signing key.
+enum class PState { None, Valid, UnknownKey, Bad, Error };
+struct PayloadSig {
+    PState metadata = PState::None, payload = PState::None;
+    Trust trust = Trust::Unknown;  // whose key made the metadata signature
+    bool zipKey = false;           // the key that signed the zip
+    x509::Cert cert;
+    std::string trustedBy, reason;
+    bool trusted() const { return metadata == PState::Valid && trust != Trust::Unknown; }
+    std::string line() const;      // "metadata signed with the installed system's key; payload signature valid"
+};
+struct PayloadRef {  // where payload.bin is (see payload::Payload)
+    std::string path;
+    uint64_t base = 0, manifestSize = 0, dataStart = 0, sigOffset = 0, sigSize = 0;
+    uint32_t metadataSigSize = 0;
+};
+PayloadSig verifyPayload(const PayloadRef& p, const Keys& keys, const x509::Cert* zipCert, bool full,
+                         const Progress& progress = {});
+
 // The same, in the background, for the screens: one check at a time, the result kept per file (path, size,
 // modification time). check() starts it when needed; call it every frame.
 struct Check {

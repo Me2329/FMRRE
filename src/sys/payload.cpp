@@ -1,4 +1,5 @@
 #include "sys/payload.h"
+#include "sys/zipsig.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -202,6 +203,8 @@ bool parseManifest(const uint8_t* d, size_t n, Payload& p) {
     uint32_t f, w;
     while (s.more() && s.key(f, w)) {
         if (f == 3 && w == 0) p.blockSize = (uint32_t)s.varint();
+        else if (f == 4 && w == 0) p.sigOffset = s.varint();
+        else if (f == 5 && w == 0) p.sigSize = s.varint();
         else if (f == 12 && w == 0) p.minorVersion = (uint32_t)s.varint();
         else if (f == 13 && w == 2) {
             PartitionUpdate pu;
@@ -640,6 +643,19 @@ bool open(const std::string& path, Payload& p, std::string& err) {
             if (e->count && (e->start > blocks || e->count > blocks - e->start)) { err = pu.name + ": verity data outside the partition"; return false; }
     }
     return true;
+}
+
+zipsig::PayloadRef signatureRef(const Payload& p) {
+    zipsig::PayloadRef r;
+    r.path = p.path;
+    r.base = p.base;
+    r.manifestSize = p.manifestSize;
+    r.metadataSigSize = p.metadataSigSize;
+    r.dataStart = p.dataStart;
+    r.sigOffset = p.sigOffset;
+    r.sigSize = p.sigSize;
+    if (p.sigSize && (p.sigOffset > p.size - p.dataStart || p.sigSize > p.size - p.dataStart - p.sigOffset)) r.sigSize = 0;
+    return r;
 }
 
 // ---- extract ------------------------------------------------------------------------

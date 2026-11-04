@@ -6,6 +6,8 @@
 
 namespace tw {
 
+namespace zipsig { struct PayloadRef; }
+
 class Task;
 
 // A/B OTA packages: the payload.bin inside ROM zips (LineageOS & co. on A/B phones) and full
@@ -63,6 +65,7 @@ struct Payload {
     uint64_t version = 0, manifestSize = 0;
     uint32_t metadataSigSize = 0;
     uint64_t dataStart = 0;     // blobs, relative to base
+    uint64_t sigOffset = 0, sigSize = 0;  // the payload signature blob (relative to dataStart); sigSize 0 = none
     uint32_t blockSize = 4096;
     uint32_t minorVersion = 0;
     bool partial = false;
@@ -82,6 +85,9 @@ struct Payload {
     std::string device() const;            // pre-device from the zip metadata
     std::string describe() const;          // "LineageOS 22.1 · full OTA · 14 partitions · 1.2 GB"
 };
+
+// Where its signatures are, for zipsig::verifyPayload.
+zipsig::PayloadRef signatureRef(const Payload& p);
 
 // Accepts an OTA .zip (payload.bin must be stored uncompressed, as ota_from_target_files
 // writes it) or a bare payload.bin. Parses and sanity-checks the manifest.

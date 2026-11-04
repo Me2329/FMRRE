@@ -164,8 +164,33 @@ public:
                                 ck.done ? ck.result.badge() : std::to_string(int(ck.progress * 100)) + "%",
                                 ck.done ? signatureTint(th, ck.result) : th.accent, true);
             if (f & Clicked) app.push(makeSignatureScreen(path_));
-            y += sr.h + ui.dp(12);
+            y += sr.h + ui.dp(8);
             romSwitch = ck.done && ck.result.otherThanSystem();
+            // update_engine's own signature inside payload.bin - checked once the zip's is known (its key is a candidate)
+            if (ck.done && !psigDone_) {
+                zipsig::Keys keys = zipsig::loadKeys(zipsig::Sources::current());
+                psig_ = zipsig::verifyPayload(payload::signatureRef(p_), keys, ck.result.valid() ? &ck.result.cert : nullptr, false);
+                psigDone_ = true;
+            }
+            if (psigDone_) {
+                using zipsig::PState;
+                using zipsig::Trust;
+                std::string sub = psig_.metadata == PState::None         ? "Not signed"
+                                  : psig_.metadata == PState::UnknownKey ? "Signed with a key FMRRE doesn't know"
+                                  : psig_.metadata != PState::Valid      ? "Its signature is damaged"
+                                  : psig_.trust == Trust::System         ? "Signed with the installed system's key"
+                                  : psig_.trust == Trust::Recovery       ? "Signed with a key this recovery trusts"
+                                  : psig_.trust == Trust::User           ? "Signed with a key you trusted"
+                                  : psig_.zipKey                         ? "Signed with the key that signed the zip"
+                                                                         : "Signed with a key FMRRE doesn't know";
+                Color tint = psig_.trusted() ? th.ok : psig_.metadata == PState::Bad ? th.danger
+                             : psig_.metadata == PState::Valid ? th.info : th.textDim;
+                Rect pr(x, y, w, ui.dp(70));
+                ui.card(pr);
+                ui.listItem(ui.id("pl_psig"), pr.inset(ui.dp(2)), psig_.trusted() ? Icon::Check : Icon::Shield, "Payload signature",
+                            sub, "", tint, false);
+                y += pr.h + ui.dp(12);
+            }
         }
         const bool enc = romSwitch && Partitions::get().dataEncrypted();
         if (!romSwitch) reset_ = false;
@@ -298,7 +323,8 @@ public:
 
 private:
     std::string path_, err_;
-    bool ok_ = false, reboot_ = false, reset_ = false;
+    bool ok_ = false, reboot_ = false, reset_ = false, psigDone_ = false;
+    zipsig::PayloadSig psig_;
     payload::Payload p_;
     payload::InstallOptions opts_;
     payload::Plan plan_;

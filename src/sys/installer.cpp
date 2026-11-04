@@ -170,9 +170,9 @@ bool checkSignature(const std::string& path, const InstallOptions& o, bool isRom
     note.clear();
     if (!o.checkSignature && !o.requireSignature) return true;
     zipsig::Result r;
+    zipsig::Keys keys = zipsig::loadKeys(zipsig::Sources::current());
     if (!zipsig::cached(path, r)) {  // the Install screen has usually checked it already
         t.setStatus("Checking the signature of " + util::basename(path));
-        zipsig::Keys keys = zipsig::loadKeys(zipsig::Sources::current());
         r = zipsig::verify(path, keys, [&](uint64_t d, uint64_t n) {
             t.setSubProgress(n ? float(double(d) / double(n)) : 1.0f);
             return !t.cancelled();
@@ -181,13 +181,23 @@ bool checkSignature(const std::string& path, const InstallOptions& o, bool isRom
     }
     for (auto& l : zipsig::report(r)) t.print("%s", l.c_str());
     note = r.brief();
+    // A/B OTAs: update_engine's own signature inside payload.bin (its metadata vouches for every block's hash).
+    bool payloadTrusted = false;
+    payload::Payload pl;
+    std::string perr;
+    if (payload::isOtaZip(path) && payload::open(path, pl, perr)) {
+        zipsig::PayloadSig ps = zipsig::verifyPayload(payload::signatureRef(pl), keys, r.valid() ? &r.cert : nullptr, false);
+        t.print("  payload.bin: %s", ps.line().c_str());
+        payloadTrusted = ps.trusted();
+        if (!r.trusted() && payloadTrusted) note += "; payload signed with a trusted key";
+    }
     if (isRom && r.otherThanSystem()) {
         note += std::string("; ") + kRomSwitchNote;
         t.print("  This ROM is signed with another key than the system on the phone now. If it is a different ROM, "
                 "wipe data after installing it (Wipe -> Factory reset) - a ROM started on another ROM's data "
                 "usually doesn't get past the boot animation.");
     }
-    if (o.requireSignature && !r.trusted()) {
+    if (o.requireSignature && !r.trusted() && !payloadTrusted) {
         t.print("Not installed: only zips signed with a trusted key are installed (Settings). Trusted: the installed "
                 "system's keys, this recovery's, and keys you added to FMRRE/keys.");
         return false;

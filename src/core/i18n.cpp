@@ -476,6 +476,8 @@ const Entry kRo[] = {
     {"Another ROM was installed without wiping data, and Android can't start on the old ROM's apps and settings. Erases apps and settings; photos, downloads and other files in internal storage stay.",
      "Un alt ROM a fost instalat fără ștergerea datelor, iar Android nu poate porni pe aplicațiile și setările ROM-ului vechi. Șterge aplicațiile și setările; pozele, descărcările și celelalte fișiere din memoria internă rămân."},
     {"Last ROM install", "Ultima instalare de ROM"}, {"another ROM - data not wiped since", "alt ROM - datele nu au fost șterse de atunci"},
+    {"Payload signature", "Semnătura payload-ului"}, {"Its signature is damaged", "Semnătura lui este deteriorată"},
+    {"Signed with the key that signed the zip", "Semnat cu cheia care a semnat zip-ul"},
     {"Only install zips signed with a trusted key", "Instalează doar zip-uri semnate cu o cheie de încredere"},
     {"The installed system's keys, this recovery's and FMRRE/keys - like a stock recovery",
      "Cheile sistemului instalat, ale acestui recovery și din FMRRE/keys - ca un recovery original"},

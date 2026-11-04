@@ -131,7 +131,24 @@ class Part:
             self.ops_spec = ops + [(ZERO, len(self.image) // BS - 1, 1, None)]
 
 
-def build_payload(parts, group='qti_dynamic_partitions', group_size=8 << 30, delta=False):
+def sig_blob(data):
+    """update_engine's Signatures message with one signature (data, unpadded_signature_size)."""
+    return fld(1, 2, fld(2, 2, data) + bytes([3 << 3 | 5]) + struct.pack('<I', len(data)))
+
+
+def sign_digest(digest, key):
+    """RSASSA-PKCS1-v1_5 over a SHA-256 the caller computed - what update_engine's payload signer makes."""
+    with tempfile.TemporaryDirectory() as d:
+        src, out = os.path.join(d, 'h'), os.path.join(d, 's')
+        with open(src, 'wb') as f:
+            f.write(digest)
+        subprocess.run(['openssl', 'pkeyutl', '-sign', '-inkey', key, '-pkeyopt', 'digest:sha256', '-in', src,
+                        '-out', out], check=True)
+        with open(out, 'rb') as f:
+            return f.read()
+
+
+def build_payload(parts, group='qti_dynamic_partitions', group_size=8 << 30, delta=False, sign_key=None):
     blobs = bytearray()
     man = fld(3, 0, BS) + fld(12, 0, 7 if delta else 0)
     for p in parts:
@@ -164,6 +181,12 @@ def build_payload(parts, group='qti_dynamic_partitions', group_size=8 << 30, del
         g = fld(1, 2, group.encode()) + fld(2, 0, group_size) + b''.join(fld(3, 2, n.encode()) for n in dyn)
         man += fld(15, 2, fld(1, 2, g) + fld(2, 0, 1))
     man += fld(18, 2, b'2026-11-05')
+    if sign_key:  # like ota_from_target_files: the signature sizes are fixed before anything is hashed
+        size = len(sig_blob(bytes(256)))  # RSA-2048
+        man += fld(4, 0, len(blobs)) + fld(5, 0, size)
+        header = b'CrAU' + struct.pack('>QQI', 2, len(man), size)
+        body = header + man + sig_blob(sign_digest(hashlib.sha256(header + man).digest(), sign_key)) + bytes(blobs)
+        return body + sig_blob(sign_digest(hashlib.sha256(body).digest(), sign_key))
     return b'CrAU' + struct.pack('>QQI', 2, len(man), 0) + man + bytes(blobs)
 
 
@@ -250,6 +273,42 @@ def main():
             f.truncate(os.path.getsize(trunc) // 2)
         rc, out = cli(root, 'payload', 'info', '/sdcard/Download/rom-truncated.zip')
         check(rc != 0, 'a truncated download is refused')
+
+        # update_engine's signatures inside payload.bin, made with an openssl key the "installed system" trusts.
+        key, cert = os.path.join(work, 'ota.key'), os.path.join(work, 'ota.pem')
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-days', '3650', '-subj',
+                        '/CN=OTA test key', '-keyout', key, '-out', cert], check=True, capture_output=True)
+        sec = os.path.join(root, 'system_root/system/etc/security')
+        os.makedirs(sec, exist_ok=True)
+        with zipfile.ZipFile(os.path.join(sec, 'otacerts.zip'), 'w') as z:
+            z.write(cert, 'releasekey.x509.pem')
+        signed = build_payload(parts, sign_key=key)
+        write_zip(os.path.join(dl, 'rom-signed.zip'), signed)
+        rc, out = cli(root, 'payload', 'info', '/sdcard/Download/rom-signed.zip')
+        check(rc == 0 and "payload metadata signed with the installed system's key" in out, 'payload info: metadata signature')
+        rc, out = cli(root, 'payload', 'verify', '/sdcard/Download/rom-signed.zip')
+        check(rc == 0 and 'payload signature valid' in out, 'payload verify: metadata and payload signatures')
+        rc, out = cli(root, 'payload', 'verify', '/sdcard/Download/rom-ok.zip')
+        check(rc != 0 and 'no metadata signature' in out, 'payload verify: an unsigned payload')
+        t = bytearray(signed)
+        t[-600] ^= 1  # in the last data blob: the manifest (and its signature) still match, the payload signature not
+        write_zip(os.path.join(dl, 'rom-signed-changed.zip'), bytes(t))
+        rc, out = cli(root, 'payload', 'verify', '/sdcard/Download/rom-signed-changed.zip')
+        check(rc != 0 and "DOESN'T match" in out, 'payload verify: a changed data byte breaks the payload signature')
+        i = signed.find(b'2026-11-05')
+        t = bytearray(signed)
+        t[i + 9] ^= 1  # inside the manifest
+        write_zip(os.path.join(dl, 'rom-signed-manifest.zip'), bytes(t))
+        rc, out = cli(root, 'payload', 'verify', '/sdcard/Download/rom-signed-manifest.zip')
+        check(rc != 0 and "key FMRRE doesn't know" in out, 'payload verify: a changed manifest fails the metadata signature')
+        # "Only zips signed with a trusted key": an A/B OTA counts when its payload is (update_engine's own rule).
+        with open(os.path.join(root, 'data/media/0/FMRRE/.fmrre.conf'), 'w') as f:
+            f.write('zip_sig_require=1\n')
+        rc, out = cli(root, 'install', '/sdcard/Download/rom-ok.zip')
+        check(rc != 0 and 'only zips signed with a trusted key' in out, 'required: an unsigned OTA is refused')
+        rc, out = cli(root, 'payload', 'install', '/sdcard/Download/rom-signed.zip')
+        check(rc == 0 and "payload metadata signed with the installed system's key" in out,
+              'required: an OTA whose payload is signed with the system\'s key installs')
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print(f'{"All payload tests passed" if not fails else str(len(fails)) + " payload test(s) FAILED"}')

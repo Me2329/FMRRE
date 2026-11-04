@@ -142,12 +142,28 @@ std::string payloadOutDir(const std::string& zip) {
 }
 
 bool doPayload(const std::vector<std::string>& a, Task& t) {
-    if (a.size() < 2) { t.print("usage: payload info|extract|install <ota.zip> ..."); return false; }
+    if (a.size() < 2) { t.print("usage: payload info|verify|extract|install <ota.zip> ..."); return false; }
     std::string path = pathcheck::resolve(a[1]), err;
     payload::Payload p;
     if (!payload::open(path, p, err)) { t.print("%s: %s", a[1].c_str(), err.c_str()); return false; }
-    if (a[0] == "info") {
+    if (a[0] == "verify" || a[0] == "info") {  // info: the metadata signature only (fast); verify: both signatures
+        zipsig::Keys keys = zipsig::loadKeys(zipsig::Sources::current());
+        zipsig::Result zr;
+        if (p.inZip) zr = zipsig::verify(path, keys);
+        zipsig::PayloadSig ps = zipsig::verifyPayload(payload::signatureRef(p), keys, zr.valid() ? &zr.cert : nullptr,
+                                                      a[0] == "verify", [&](uint64_t d, uint64_t n) {
+                                                          t.setSubProgress(n ? float(double(d) / double(n)) : 1.0f);
+                                                          return !t.cancelled();
+                                                      });
+        if (a[0] == "verify") {
+            if (p.inZip) t.print("zip: %s", zr.brief().c_str());
+            t.print("payload.bin: %s", ps.line().c_str());
+            if (!ps.trustedBy.empty()) t.print("  trusted by %s", ps.trustedBy.c_str());
+            return ps.metadata == zipsig::PState::Valid && ps.payload != zipsig::PState::UnknownKey &&
+                   ps.payload != zipsig::PState::Bad && ps.payload != zipsig::PState::Error;
+        }
         t.print("%s", p.describe().c_str());
+        t.print("signature: %s", ps.line().c_str());
         for (auto& kv : p.metadata)
             if (kv.first == "pre-device" || kv.first == "post-build" || kv.first == "ota-type" || kv.first == "post-timestamp")
                 t.print("  %s: %s", kv.first.c_str(), kv.second.c_str());
@@ -185,7 +201,7 @@ bool doPayload(const std::vector<std::string>& a, Task& t) {
         t.setRange(0.05f, 0.95f);
         return payload::install(p, o, t);
     }
-    t.print("usage: payload info|extract|install <ota.zip> ...");
+    t.print("usage: payload info|verify|extract|install <ota.zip> ...");
     return false;
 }
 
@@ -299,6 +315,7 @@ std::string help() {
            "  payload info <ota.zip|payload.bin>\n"
            "  payload extract <ota.zip> [partition...] [--out DIR]   e.g. boot init_boot for Magisk\n"
            "  payload install <ota.zip> [--slot a|b] [--no-switch] [--no-verify] [--force]\n"
+           "  payload verify <ota.zip>  update_engine's signatures in payload.bin (metadata + whole payload)\n"
            "  vbmeta disable|enable|status\n"
            "  root status|backup|modules-off   modules-off fixes module bootloops\n"
            "  verify-zip <zip>          whose signature is on it (the installed system's key, another ROM's...)\n"
@@ -590,7 +607,7 @@ int cliMain(const std::vector<std::string>& args) {
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
     bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
                     (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
-                    (args[0] == "payload" && args.size() > 1 && args[1] == "info") || (args[0] == "rescue" && args.size() == 1) || args[0] == "history" ||
+                    (args[0] == "payload" && args.size() > 1 && (args[1] == "info" || args[1] == "verify")) || (args[0] == "rescue" && args.size() == 1) || args[0] == "history" ||
                     (args[0] == "autofix" && std::find(args.begin(), args.end(), "--dry-run") != args.end());
     if (uiAlive && !readOnly) {
         util::mkdirs(queueDir());
