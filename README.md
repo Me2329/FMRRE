@@ -15,7 +15,7 @@ It does not need Android, a framework or a GPU.
 ![Overview](docs/screenshots/overview.png)
 ![Tools](docs/screenshots/tools.png)
 ![Themes](docs/screenshots/themes.png)
-![GSI wizard, Find & flash, dd command, Root](docs/screenshots/gsi_root.png)
+![GSI wizard, Find & flash (a mistyped path explained, the file found), Root](docs/screenshots/gsi_root.png)
 ![A/B ROM / OTA install, built-in fastbootd, Bootloop rescue, Romanian UI](docs/screenshots/ota_fastboot_rescue.png)
 ![Auto repair: the home card after a failed boot, the diagnosis and plan, the repair, in Romanian](docs/screenshots/autofix.png)
 
