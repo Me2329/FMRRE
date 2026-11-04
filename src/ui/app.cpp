@@ -717,8 +717,7 @@ void App::drawSplash() {
     canvas.shadow(logo, s * 0.28f, ui.dp(30), withAlpha(th.accent, 0.5f), ui.dp(6));
     canvas.fillRoundRect(logo, s * 0.28f, th.accent);
     canvas.radialGlowRR(logo.r(), logo.b(), s, withAlpha(th.accent2, 0.9f), logo, s * 0.28f);
-    font::drawIn(canvas, Face::Bold, s * 0.36f, logo.offset(0, -s * 0.06f), "FM", th.onAccent, AlignCenter);
-    font::drawIn(canvas, Face::SemiBold, s * 0.16f, Rect(logo.x, logo.y + s * 0.62f, logo.w, s * 0.2f), "RE", th.onAccent, AlignCenter);
+    drawLogoText(canvas, logo, s * 0.36f, th.onAccent);
     float sweep = 6.283f * easeInOutCubic(std::min(1.f, t * 1.4f));
     canvas.strokeArc(logo.cx(), logo.cy(), s * 0.78f, ui.dp(3), 0, sweep, withAlpha(th.accent, 0.8f));
     font::drawIn(canvas, Face::Bold, ui.dp(26), Rect(0, logo.b() + ui.dp(40), (float)W, ui.dp(34)), "FMRRE", th.text, AlignCenter);

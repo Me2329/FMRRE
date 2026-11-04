@@ -160,6 +160,10 @@ private:
     uint64_t bgKey_ = 0;
 };
 
+// The FMR logo: its letters on the accent square `r`, centred, as large as `maxPx` allows while they fit.
+constexpr const char kLogoText[] = "FMR";
+void drawLogoText(Canvas& c, const Rect& r, float maxPx, Color col);
+
 // Easing helpers
 float easeOutCubic(float t);
 float easeInOutCubic(float t);

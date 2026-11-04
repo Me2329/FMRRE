@@ -40,7 +40,7 @@ public:
         Rect logo(top.x + pad, top.cy() - ui.dp(22), ui.dp(44), ui.dp(44));
         c.fillRoundRect(logo, ui.dp(14), th.accent);
         c.radialGlowRR(logo.r(), logo.b(), ui.dp(50), withAlpha(th.accent2, 0.9f), logo, ui.dp(14));
-        font::drawIn(c, Face::Bold, ui.dp(17), logo.offset(0, -ui.dp(1)), "FM", th.onAccent, AlignCenter);
+        drawLogoText(c, logo.offset(0, -ui.dp(1)), ui.dp(17), th.onAccent);
         float tx = logo.r() + ui.dp(12);
         font::drawIn(c, Face::Bold, ui.dp(24), Rect(tx, top.cy() - ui.dp(23), ui.dp(200), ui.dp(30)), "FMRRE", th.text);
         font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(tx, top.cy() + ui.dp(5), ui.dp(200), ui.dp(18)),

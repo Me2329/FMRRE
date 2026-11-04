@@ -251,7 +251,7 @@ public:
         c.radialGlowRR(hero.cx(), hero.y, hero.w * 0.7f, withAlpha(th.accent, 0.25f), hero, ui.dp(24));
         Rect logo(hero.cx() - ui.dp(30), hero.y + ui.dp(20), ui.dp(60), ui.dp(60));
         c.fillRoundRect(logo, ui.dp(18), th.accent);
-        font::drawIn(c, Face::Bold, ui.dp(22), logo, "FM", th.onAccent, AlignCenter);
+        drawLogoText(c, logo, ui.dp(22), th.onAccent);
         font::drawIn(c, Face::Bold, ui.dp(20), Rect(hero.x, hero.y + ui.dp(88), hero.w, ui.dp(26)), "FMRRE  2.0.0", th.text, AlignCenter);
         font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(hero.x, hero.y + ui.dp(116), hero.w, ui.dp(20)),
                      std::string("FMR Recovery Environment  \xE2\x80\xA2  built ") + TW_BUILD_DATE, th.textDim, AlignCenter);

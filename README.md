@@ -317,7 +317,7 @@ out/sim/fmrre --sim --headless --script tools/scripts/tour.txt --out shots/
 ```
 Script commands: `tap X Y`, `longpress X Y`, `swipe X1 Y1 X2 Y2 MS`, `wait MS`, `waittask`,
 `key back|home|volup|voldown|power`, `text ...`, `shot file.png`, `open payload|gsi|super|flash|manual|install|files|root|advanced|fastboot|rescue|autofix|settings|backup|restore [path]`,
-`open monitor`, `open terminal [command]`.
+`open monitor`, `open about`, `open terminal [command]`.
 
 **Self-tests:**
 ```bash

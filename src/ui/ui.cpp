@@ -798,4 +798,10 @@ bool Ui::keyboard(Id kid, const Rect& r, std::string& text) {
     return enter;
 }
 
+void drawLogoText(Canvas& c, const Rect& r, float maxPx, Color col) {
+    float px = maxPx, w = font::measure(Face::Bold, px, kLogoText);
+    if (w > r.w * 0.72f) px *= r.w * 0.72f / w;  // keep a margin inside the square
+    font::drawIn(c, Face::Bold, px, r, kLogoText, col, AlignCenter);
+}
+
 }  // namespace tw

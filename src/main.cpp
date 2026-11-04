@@ -137,6 +137,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "rescue") sc = makeRescueScreen();
             else if (name == "autofix") sc = makeAutoRepairScreen(arg == "--auto", arg == "--prompt");
             else if (name == "manual") sc = makeManualFlashScreen(arg);
+            else if (name == "about") sc = makeAboutScreen();
             else if (name == "settings") sc = makeSettingsScreen();
             else if (name == "backup") sc = makeBackupScreen();
             else if (name == "restore") sc = makeRestoreScreen();
