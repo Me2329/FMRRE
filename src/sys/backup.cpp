@@ -333,6 +333,12 @@ public:
         if (fd_ < 0) { err = strerror(errno); return false; }
         total_ = util::fileSize(file);
         left_ = total_;
+        char magic[4] = {0};
+        if (::pread(fd_, magic, 4, 0) == 4 && !memcmp(magic, "OAES", 4)) {  // TWRP's own encryption (OpenAES)
+            err = "encrypted by TWRP (its OpenAES format), which FMRRE can't decrypt - restore it with TWRP, or back up "
+                  "again with FMRRE (its encryption works with a password)";
+            return false;
+        }
         if (crypt::isEncrypted(file)) {
             uint8_t h[crypt::kHeaderSize];
             if (total_ < crypt::kHeaderSize + crypt::kTagSize || ::read(fd_, h, sizeof(h)) != (ssize_t)sizeof(h)) { err = "truncated"; return false; }

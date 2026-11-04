@@ -818,6 +818,16 @@ static void testLegacyFolders() {
               got == "second part");
         CHECK(util::writeFile(old + "/cache.ext4.win001", part1 + "x"));  // a changed part: refused before anything is wiped
         CHECK(!runTask("twrp-split-bad", [&](Task& t) { return backup::restore(*set, {"cache"}, true, t); }));
+        // TWRP's own encryption (OpenAES) is named for what it is, not reported as a damaged archive.
+        CHECK(util::writeFile(old + "/cache.ext4.win001", "OAES\x01\x02" + std::string(600, '\x5a')));
+        unlink((old + "/cache.ext4.win001.sha2").c_str());
+        std::string log;
+        CHECK(!runTask("twrp-oaes", [&](Task& t) {
+            bool r = backup::restore(*set, {"cache"}, false, t);
+            size_t cursor = 0;
+            for (auto& l : t.linesSince(cursor)) log += l + "\n";
+            return r;
+        }) && log.find("OpenAES") != std::string::npos);
     }
     util::removeTree(p.legacyDir());
 }
