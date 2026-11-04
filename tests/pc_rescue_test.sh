@@ -204,7 +204,7 @@ esac
 exit 0
 EOF
 chmod +x "$T/bin/"*
-export T HOME="$T/home" PATH="$T/bin:$PATH" TWRPV2_WAIT=3 NO_COLOR=1
+export T HOME="$T/home" PATH="$T/bin:$PATH" TWRPV2_WAIT=3 NO_COLOR=1 TWRPV2_LANG=en
 unset ANDROID_SERIAL
 PC="python3 $ROOT/pc/twrpv2_rescue.py"
 IMG="$T/twrpv2-recovery.img"
@@ -411,6 +411,64 @@ cmp -s "$T/flashed_RECOVERY" "$T/recovery_orig.img" && pass "recovery.img.lz4 un
 not_called "super left alone" "super"
 run samsung-stock "$T/AP_TEST.tar.md5" --yes --unlocked --parts boot
 called "--parts" "heimdall flash --BOOT"
+
+scenario "Romanian (--lang ro)"
+touch "$T/fastboot_on"
+getvar_all product:husky unlocked:yes current-slot:a slot-unbootable:a:yes slot-successful:a:no slot-retry-count:a:0 \
+  slot-unbootable:b:no slot-successful:b:yes slot-retry-count:b:3
+run diagnose --lang ro
+has_out "status" "Bootloader  DEBLOCAT"
+has_out "slot health" "A: nu pornește, nu a pornit niciodată complet, 0 încercări rămase"
+has_out "finding" "Slotul A este marcat că nu pornește; slotul B a pornit bine înainte"
+TWRPV2_LANG=ro run fix --yes
+has_out "chosen from the environment" "Activezi slotul B (celălalt sistem, se poate schimba înapoi)? da (--yes)"
+has_out "done" "==> gata"
+touch "$T/fastboot_on"
+getvar_all product:husky unlocked:no current-slot:a
+run fix --yes --lang ro
+has_out "refusal translated, maker advice too" "Nu se face repararea: bootloader-ul este BLOCAT."
+has_out "unlock help" "Setări > Despre telefon"
+python3 - "$ROOT/pc" > "$T/out" 2>&1 <<'PYEOF'
+# Every message in the tool has a Romanian translation: walk the source for the texts it shows.
+import ast, re, sys
+sys.path.insert(0, sys.argv[1])
+import twrpv2_rescue as tr
+tr.set_language("ro")
+src = open(sys.argv[1] + "/twrpv2_rescue.py", encoding="utf-8").read()
+def tmpl(n):
+    if isinstance(n, ast.Constant) and isinstance(n.value, str):
+        return n.value
+    if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Mod) and isinstance(n.left, ast.Constant) and isinstance(n.left.value, str):
+        return re.sub(r"%[sdr]", "Q", n.left.value)
+want = set()
+for n in ast.walk(ast.parse(src)):
+    if isinstance(n, ast.Call):
+        name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+        if name in ("Finding", "Refused", "ask", "log", "T", "btn"):
+            for a in (n.args[1:3] if name in ("Finding", "btn") else n.args[:1]):
+                t = tmpl(a)
+                if t:
+                    want.add(t)
+    if isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple) and len(n.value.elts) == 3:  # lock_verdict
+        for e in (n.value.elts[0], n.value.elts[2]):
+            t = tmpl(e)
+            if t:
+                want.add(t)
+for d in (tr.MODE_TEXT, tr.UNLOCK_HELP, tr.OFFICIAL_RESTORE, tr.INSTALL_HINT):
+    want.update(d.values())
+want.update([tr.UNLOCK_DEFAULT, tr.OFFICIAL_DEFAULT, tr.HOW_TO_CONNECT])
+same = {"recovery (adb)", "bootloader (fastboot)", "-", "Recovery", "Bootloader", "Fastboot", "Download", "Android", "Samsung:", "slot"}
+missing = sorted(w for w in want if re.search("[A-Za-z]{3}", w) and not w.strip().startswith(("$", "Q")) and w.strip() not in same
+                 and tr.T(w.replace("Q", "X")) == w.replace("Q", "X"))
+for k, v in tr.RO.items():  # same placeholders on both sides
+    if k.count("{}") + k.count("{w}") != v.count("{}"):
+        missing.append("placeholders differ: " + k)
+print("checked %d messages" % len(want))
+for m in missing:
+    print("MISSING: " + m)
+sys.exit(1 if missing else 0)
+PYEOF
+[ $? = 0 ] && pass "every message has a Romanian translation ($(head -1 "$T/out"))" || { fail "Romanian dictionary"; cat "$T/out"; }
 
 # ---- the window: click "Fix it for me" on a bootlooping phone (needs tkinter and Xvfb; skipped otherwise)
 TKPY=""

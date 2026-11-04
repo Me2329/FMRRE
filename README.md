@@ -226,8 +226,9 @@ a real phone**. `install.ps1` hasn't been run on Windows yet either. Please repo
 
 `pc/twrpv2_rescue.py` (Windows: double-click `pc\twrpv2_rescue.bat`) is the same idea as Auto repair, run from a
 computer, for phones that bootloop, stop at a vbmeta / "verification failed" error or **can't get into recovery
-any more**. It is one Python 3 file, standard library only: a window (tkinter) or commands. It uses `adb` and
-`fastboot` (Android platform-tools) and, for Samsung, Heimdall.
+any more**. It is one Python 3 file (plus `twrpv2_rescue_ro.py` for **Romanian**, picked automatically on a Romanian
+system or with `--lang ro`), standard library only: a window (tkinter) or commands. It uses `adb` and `fastboot`
+(Android platform-tools) and, for Samsung, Heimdall.
 
 ![PC rescue window: a Pixel in the bootloader whose slot A no longer boots](docs/screenshots/pc_rescue.png)
 
@@ -267,7 +268,7 @@ header is checked first), `samsung-twrp IMG`, `samsung-stock AP.tar.md5 [--parts
 change the phone and runs none. Flashing and wiping are refused while a Virtual A/B update is still merging.
 
 Tested against fake `adb` / `fastboot` / `heimdall` that answer like phones in each mode (`tests/pc_rescue_test.sh`:
-92 checks, including the window driven under Xvfb and the LZ4 unpacker on compressed data), **not yet with a real
+including the window driven under Xvfb, the LZ4 unpacker on compressed data, and a check that every message has a Romanian translation), **not yet with a real
 phone**, and not yet on Windows or macOS (it only uses `subprocess` and tkinter, but that is untested there).
 
 ### fstab

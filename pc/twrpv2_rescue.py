@@ -33,7 +33,8 @@ it explains how to unlock it, and which official tool restores the firmware inst
   twrpv2_rescue.py reboot [system|recovery|bootloader|fastboot|download]
   twrpv2_rescue.py logs [DIR]         save the phone's logs for a bug report
 
-Common options: --serial SERIAL, --dry-run (show the commands, change nothing), --yes,
+Common options: --lang en|ro (default: the computer's language), --serial SERIAL, --dry-run (show the commands,
+change nothing), --yes,
 --unlocked (you checked on the phone that the bootloader is unlocked - needed when the phone
 doesn't say, e.g. Samsung Download mode), --workdir DIR.
 
@@ -130,6 +131,65 @@ MODE_TEXT = {
 
 SAMSUNG_STOCK_PARTS = ("boot", "init_boot", "vendor_boot", "recovery", "vbmeta", "dtbo")
 
+# ---------------------------------------------------------------------------------------------------
+# Languages: English in the code, Romanian from twrpv2_rescue_ro.py (next to this file). Whole messages are
+# looked up when they are shown; "{}" in a key matches a changing part, which is itself translated if known.
+
+LANG = "en"
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from twrpv2_rescue_ro import RO
+except ImportError:  # the dictionary wasn't copied along: English only
+    RO = {}
+finally:
+    sys.path.pop(0)
+_PATTERNS = []
+
+
+def detect_language():
+    for v in (os.environ.get("TWRPV2_LANG"), os.environ.get("LC_ALL"), os.environ.get("LC_MESSAGES"), os.environ.get("LANG")):
+        if v:
+            return "ro" if v.lower().startswith("ro") else "en"
+    try:
+        import locale
+        loc = (locale.getlocale()[0] or "").lower()
+    except (ValueError, ImportError):
+        loc = ""
+    return "ro" if loc.startswith(("ro", "romanian")) else "en"
+
+
+def set_language(code):
+    global LANG, _PATTERNS
+    LANG = code if code == "en" or (code == "ro" and RO) else "en"
+    _PATTERNS = []
+    for k, v in RO.items():
+        if "{}" in k or "{w}" in k:
+            rx = re.escape(k).replace(re.escape("{w}"), r"(\S+)").replace(re.escape("{}"), r"(.+?)")
+            _PATTERNS.append((len(k.replace("{}", "").replace("{w}", "")), re.compile("^" + rx + "$", re.S), v))
+    _PATTERNS.sort(key=lambda p: -p[0])  # the most specific pattern wins
+
+
+def T(s, depth=0):
+    """The text in the current language (unchanged when there is no translation)."""
+    if LANG == "en" or not s or depth > 5:
+        return s
+    body = s.strip()
+    lead, trail = s[:len(s) - len(s.lstrip())], s[len(s.rstrip()):]
+    if body in RO:
+        return lead + RO[body] + trail
+    for _, rx, v in _PATTERNS:
+        m = rx.match(body)
+        if m:
+            parts = v.split("{}")
+            groups = [T(g, depth + 1) for g in m.groups()]
+            out = parts[0]
+            for i, part in enumerate(parts[1:]):
+                out += (groups[i] if i < len(groups) else "") + part
+            return lead + out + trail
+    if "\n" in body:
+        return lead + "\n".join(T(line, depth + 1) for line in body.split("\n")) + trail
+    return s
+
 
 def quote(a):
     a = str(a)
@@ -162,7 +222,7 @@ class Runner:
     """Runs adb / fastboot / heimdall. Commands that change the phone are shown first and skipped with --dry-run."""
 
     def __init__(self, log=None, dry=False, serial=None, wait=None):
-        self.log = log or (lambda s: print(s, flush=True))
+        self.log = log or (lambda s: print(T(s), flush=True))
         self.dry = dry
         self.serial = serial or os.environ.get("ANDROID_SERIAL") or None
         self.wait_s = float(os.environ.get("TWRPV2_WAIT", "120")) if wait is None else wait
@@ -268,7 +328,7 @@ class Phone:
     def name(self):
         parts = [p for p in (self.manufacturer if self.manufacturer and not self.model.lower().startswith(self.maker) else "",
                              self.model) if p]
-        n = " ".join(parts) or "Unknown phone"
+        n = " ".join(parts) or T("Unknown phone")
         if self.device and self.device.lower() not in n.lower():
             n += " (%s)" % self.device
         return n
@@ -477,14 +537,14 @@ def slot_health(ph):
     for s in ("a", "b"):
         st = []
         if v.get("slot-unbootable:" + s) == "yes":
-            st.append("unbootable")
+            st.append(T("unbootable"))
         if v.get("slot-successful:" + s) == "yes":
-            st.append("booted fine")
+            st.append(T("booted fine"))
         elif v.get("slot-successful:" + s) == "no":
-            st.append("never booted fully")
+            st.append(T("never booted fully"))
         rc = v.get("slot-retry-count:" + s)
         if rc not in (None, ""):
-            st.append("%s %s left" % (rc, "try" if rc == "1" else "tries"))
+            st.append(T("%s %s left" % (rc, "try" if rc == "1" else "tries")))
         if st:
             out.append("%s: %s" % (s.upper(), ", ".join(st)))
     return ("  -  " + "; ".join(out)) if out else ""
@@ -798,17 +858,18 @@ class Rescue:
     # ---- confirmations
     def _ask_tty(self, q):
         try:
-            return input(q + " [y/N] ").strip().lower() in ("y", "yes", "d", "da")
+            return input(q + (" [d/N] " if LANG == "ro" else " [y/N] ")).strip().lower() in ("y", "yes", "d", "da")
         except EOFError:
             return False
 
     def _typed_tty(self, word, q):
         try:
-            return input("%s\nType %s to continue: " % (q, word)).strip() == word
+            return input("%s\n%s " % (T(q), T("Type %s to continue:" % word))).strip() == word
         except EOFError:
             return False
 
     def ask(self, q):
+        q = T(q)
         if self.o.yes:
             self.log("   " + q + " yes (--yes)")
             return True
@@ -835,7 +896,7 @@ class Rescue:
     def need_mode(self, *modes):
         if self.phone.mode not in modes:
             raise Refused("This needs the phone in %s mode - it is in: %s." %
-                          (" or ".join(MODE_TEXT.get(m, m) for m in modes), MODE_TEXT.get(self.phone.mode, self.phone.mode)))
+                          ((" %s " % T("or")).join(T(MODE_TEXT.get(m, m)) for m in modes), T(MODE_TEXT.get(self.phone.mode, self.phone.mode))))
 
     def need_not_merging(self):
         if self.phone.vars.get("snapshot-update-status") == "merging":
@@ -976,7 +1037,7 @@ class Rescue:
             return False
         if self.o.reboot:
             args.append("--reboot")
-        if not self.ask("Run these repairs on the phone%s?" % (" and restart it" if self.o.reboot else "")):
+        if not self.ask("Run these repairs on the phone and restart it?" if self.o.reboot else "Run these repairs on the phone?"):
             return False
         ok = self.r.write("adb", "shell", *TWRP_CLI, *args)
         return ok or "Repairs done" in self.r.last_output  # the reboot at the end drops the connection
@@ -1056,7 +1117,7 @@ class Rescue:
     # ---- "fix it for me"
     def fix(self):
         ph = self.refresh()
-        self.log("%s - %s" % (ph.name, MODE_TEXT.get(ph.mode, ph.mode)))
+        self.log("%s - %s" % (ph.name, T(MODE_TEXT.get(ph.mode, ph.mode))))
         m = ph.mode
         if m == "none":
             raise Refused(HOW_TO_CONNECT)
@@ -1137,19 +1198,21 @@ def print_status(ph):
     word, tone, why = lock_verdict(ph)
     for k, v in describe(ph):
         if k == "Bootloader":
-            v = color(word, tone) + v[len(word):]
-        print("  %-11s %s" % (k, v))
+            v = color(T(word), tone) + v[len(word):]
+        elif k != "Serial":
+            v = T(v)
+        print("  %-11s %s" % (T(k), v))
     if ph.mode == "none":
-        print(HOW_TO_CONNECT)
+        print(T(HOW_TO_CONNECT))
     elif why:
-        print("  " + why)
+        print("  " + T(why))
 
 
 def print_findings(fs):
     for f in fs:
         tag = {2: color("[!!]", "bad"), 1: color("[! ]", "warn")}.get(f.level, "[i ]")
-        print("%s %s" % (tag, f.title))
-        for line in f.detail.splitlines():
+        print("%s %s" % (tag, T(f.title)))
+        for line in T(f.detail).splitlines():
             print("     " + line)
 
 
@@ -1162,6 +1225,7 @@ def main(argv=None):
         p.add_argument("-y", "--yes", action="store_true", help="don't ask before each change (ERASE must still be typed)", **d)
         p.add_argument("--unlocked", action="store_true", help="I checked: the bootloader is unlocked (when the phone doesn't say)", **d)
         p.add_argument("--workdir", help="where generated / unpacked images go (default: a temporary folder)", **d)
+        p.add_argument("--lang", choices=["en", "ro"], help="language (default: the computer's; ro = Romanian)", **d)
         return p
 
     ap = common(argparse.ArgumentParser(prog="twrpv2_rescue.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter),
@@ -1202,6 +1266,11 @@ def main(argv=None):
     sub.add_parser("logs").add_argument("dir", nargs="?", default="")
     sub.add_parser("gui")
     a = ap.parse_args(argv)
+    set_language(a.lang or detect_language())
+    try:
+        sys.stdout.reconfigure(errors="replace")  # diacritics on a console that can't show them
+    except (AttributeError, ValueError):
+        pass
 
     if a.cmd in (None, "gui"):
         try:
@@ -1266,12 +1335,12 @@ def main(argv=None):
             ap.print_help()
             return 2
     except Refused as e:
-        print(color("xx  ", "bad") + str(e))
+        print(color("xx  ", "bad") + T(str(e)))
         return 3 if ph.mode == "none" else 2
     except KeyboardInterrupt:
-        print("\ncancelled")
+        print("\n" + T("cancelled"))
         return 130
-    print(color("==> done" if ok else "==> not done", "ok" if ok else "warn"))
+    print(color(T("==> done" if ok else "==> not done"), "ok" if ok else "warn"))
     return 0 if ok else 1
 
 
@@ -1290,7 +1359,7 @@ def run_gui(a):
     busy = threading.Event()
 
     def log(s):
-        logq.put(str(s))
+        logq.put(T(str(s)))
 
     def ask(q):
         ev, box = threading.Event(), {}
@@ -1306,7 +1375,8 @@ def run_gui(a):
         ev, box = threading.Event(), {}
 
         def show():
-            box["a"] = simpledialog.askstring("TWRP v2 PC rescue", "%s\n\nType %s to continue:" % (q, word), parent=root) == word
+            box["a"] = simpledialog.askstring("TWRP v2 PC rescue", "%s\n\n%s" % (T(q), T("Type %s to continue:" % word)),
+                                              parent=root) == word
             ev.set()
         root.after(0, show)
         ev.wait()
@@ -1326,18 +1396,18 @@ def run_gui(a):
 
     top = ttk.Frame(root, padding=12)
     top.pack(fill="x")
-    name_var, mode_var, lock_var, why_var = tk.StringVar(value="Looking for a phone..."), tk.StringVar(), tk.StringVar(), tk.StringVar()
+    name_var, mode_var, lock_var, why_var = tk.StringVar(value=T("Looking for a phone...")), tk.StringVar(), tk.StringVar(), tk.StringVar()
     ttk.Label(top, textvariable=name_var, style="Head.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
-    ttk.Label(top, textvariable=mode_var).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 6))
+    ttk.Label(top, textvariable=mode_var, wraplength=820, justify="left").grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 6))
     lock_lbl = tk.Label(top, textvariable=lock_var, font=("TkDefaultFont", 12, "bold"), padx=10, pady=3, fg="white", bg="#64748b")
     lock_lbl.grid(row=2, column=0, sticky="w")
     ttk.Label(top, textvariable=why_var, wraplength=640, justify="left").grid(row=2, column=1, columnspan=2, sticky="w", padx=10)
     unl_var = tk.BooleanVar(value=a.unlocked)
-    unl = ttk.Checkbutton(top, text="I checked on the phone: the bootloader is unlocked (Samsung: OEM LOCK: OFF)", variable=unl_var,
+    unl = ttk.Checkbutton(top, text=T("I checked on the phone: the bootloader is unlocked (Samsung: OEM LOCK: OFF)"), variable=unl_var,
                           command=lambda: setattr(o, "unlocked", unl_var.get()))
     top.columnconfigure(2, weight=1)
 
-    mid = ttk.LabelFrame(root, text="What was found", padding=8)
+    mid = ttk.LabelFrame(root, text=T("What was found"), padding=8)
     mid.pack(fill="x", padx=12)
     found = tk.Text(mid, height=8, wrap="word", relief="flat", font=("TkDefaultFont", 10))
     found.pack(fill="x")
@@ -1351,16 +1421,16 @@ def run_gui(a):
     img_var, ap_var = tk.StringVar(), tk.StringVar()
     row0 = ttk.Frame(act)
     row0.pack(fill="x")
-    ttk.Label(row0, text="TWRP v2 image:").pack(side="left")
+    ttk.Label(row0, text=T("TWRP v2 image:")).pack(side="left")
     ttk.Entry(row0, textvariable=img_var).pack(side="left", fill="x", expand=True, padx=6)
-    ttk.Button(row0, text="Browse...", command=lambda: img_var.set(filedialog.askopenfilename(
-        title="TWRP v2 image for this phone", filetypes=[("Images", "*.img"), ("All files", "*")]) or img_var.get())).pack(side="left")
+    ttk.Button(row0, text=T("Browse..."), command=lambda: img_var.set(filedialog.askopenfilename(
+        title=T("TWRP v2 image for this phone"), filetypes=[("Images", "*.img"), ("All files", "*")]) or img_var.get())).pack(side="left")
     row0b = ttk.Frame(act)
     row0b.pack(fill="x", pady=(4, 0))
-    ttk.Label(row0b, text="Samsung AP file:").pack(side="left")
+    ttk.Label(row0b, text=T("Samsung AP file:")).pack(side="left")
     ttk.Entry(row0b, textvariable=ap_var).pack(side="left", fill="x", expand=True, padx=6)
-    ttk.Button(row0b, text="Browse...", command=lambda: ap_var.set(filedialog.askopenfilename(
-        title="Samsung firmware AP file", filetypes=[("Odin AP", "*.tar.md5 *.tar"), ("All files", "*")]) or ap_var.get())).pack(side="left")
+    ttk.Button(row0b, text=T("Browse..."), command=lambda: ap_var.set(filedialog.askopenfilename(
+        title=T("Samsung firmware AP file"), filetypes=[("Odin AP", "*.tar.md5 *.tar"), ("All files", "*")]) or ap_var.get())).pack(side="left")
 
     buttons = []
 
@@ -1378,7 +1448,7 @@ def run_gui(a):
                 ok = fn(*args)
                 log("==> done" if ok else "==> not done")
             except Refused as e:
-                log("xx  " + str(e))
+                log("xx  " + T(str(e)))
             except Exception as e:  # keep the window alive, show what happened
                 log("xx  %s: %s" % (type(e).__name__, e))
             finally:
@@ -1388,7 +1458,7 @@ def run_gui(a):
         threading.Thread(target=work, daemon=True).start()
 
     def btn(parent, text, fn, *args, big=False):
-        b = ttk.Button(parent, text=text, command=lambda: job(fn, *args), style="Big.TButton" if big else "TButton")
+        b = ttk.Button(parent, text=T(text), command=lambda: job(fn, *args), style="Big.TButton" if big else "TButton")
         buttons.append(b)
         return b
 
@@ -1404,32 +1474,33 @@ def run_gui(a):
     btn(row2, "Cancel update", rs.cancel_update).pack(side="left")
 
     def flash_dialog():
-        part = simpledialog.askstring("Flash an image", "Partition (boot, init_boot, vendor_boot, recovery, vbmeta, dtbo...):", parent=root)
+        part = simpledialog.askstring(T("Flash an image"), T("Partition (boot, init_boot, vendor_boot, recovery, vbmeta, dtbo...):"),
+                                      parent=root)
         if not part:
             return
-        f = filedialog.askopenfilename(title="Image for " + part, filetypes=[("Images", "*.img"), ("All files", "*")])
+        f = filedialog.askopenfilename(title=T("Image for " + part), filetypes=[("Images", "*.img"), ("All files", "*")])
         if f:
             job(rs.flash, part.strip(), f)
-    fb = ttk.Button(row2, text="Flash image...", command=flash_dialog)
+    fb = ttk.Button(row2, text=T("Flash image..."), command=flash_dialog)
     fb.pack(side="left", padx=4)
     buttons.append(fb)
     btn(row2, "Wipe data...", rs.wipe_data).pack(side="left")
     row2b = ttk.Frame(act)
     row2b.pack(fill="x", pady=4)
-    ttk.Label(row2b, text="Samsung:").pack(side="left")
+    ttk.Label(row2b, text=T("Samsung:")).pack(side="left")
     btn(row2b, "Install TWRP v2", lambda: rs.samsung_twrp(img_var.get().strip())).pack(side="left", padx=2)
     btn(row2b, "Stock boot / vbmeta / recovery from AP", lambda: rs.samsung_stock(ap_var.get().strip())).pack(side="left", padx=2)
     row3 = ttk.Frame(act)
     row3.pack(fill="x", pady=4)
-    ttk.Label(row3, text="Restart to:").pack(side="left")
+    ttk.Label(row3, text=T("Restart to:")).pack(side="left")
     for t in ("system", "recovery", "bootloader", "fastboot", "download"):
-        btn(row3, t.capitalize(), rs.reboot, t).pack(side="left", padx=2)
+        btn(row3, t.capitalize(), rs.reboot, t).pack(side="left", padx=2)  # btn() translates the label
 
     def logs_dialog():
-        d = filedialog.askdirectory(title="Save the phone's logs to")
+        d = filedialog.askdirectory(title=T("Save the phone's logs to"))
         if d:
             job(rs.save_logs, os.path.join(d, "twrpv2-logs-" + time.strftime("%Y%m%d-%H%M%S")))
-    lb = ttk.Button(row3, text="Save logs...", command=logs_dialog)
+    lb = ttk.Button(row3, text=T("Save logs..."), command=logs_dialog)
     lb.pack(side="right")
     buttons.append(lb)
 
@@ -1440,19 +1511,19 @@ def run_gui(a):
     state = {"sig": None}
 
     def show(ph, fs):
-        name_var.set(ph.name if ph.mode != "none" else "No phone found")
-        bits = [MODE_TEXT.get(ph.mode, ph.mode)]
+        name_var.set(ph.name if ph.mode != "none" else T("No phone found"))
+        bits = [T(MODE_TEXT.get(ph.mode, ph.mode))]
         if ph.serial:
-            bits.append("serial " + ph.serial)
+            bits.append(T("serial") + " " + ph.serial)
         if ph.android:
             bits.append("Android " + ph.android)
         if ph.slot:
-            bits.append("slot " + ph.slot.upper() + slot_health(ph))
+            bits.append(T("slot") + " " + ph.slot.upper() + slot_health(ph))
         mode_var.set("   ".join(bits))
         word, tone, why = lock_verdict(ph)
-        lock_var.set("Bootloader: " + word if ph.mode != "none" else "Plug the phone in")
+        lock_var.set(T("Bootloader: " + word) if ph.mode != "none" else T("Plug the phone in"))
         lock_lbl.configure(bg={"ok": "#16a34a", "bad": "#dc2626"}.get(tone, "#d97706"))
-        why_var.set(why if ph.mode != "none" else "")
+        why_var.set(T(why) if ph.mode != "none" else "")
         if ph.locked is None and ph.mode not in ("none", "unauthorized", "offline"):
             unl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
         else:
@@ -1461,8 +1532,8 @@ def run_gui(a):
         found.delete("1.0", "end")
         for f in fs:
             tag = {2: "bad", 1: "warn"}.get(f.level, "info")
-            found.insert("end", {2: "\u25cf ", 1: "\u25b2 "}.get(f.level, "\u2139 ") + f.title + "\n", tag)
-            found.insert("end", f.detail + "\n", "detail")
+            found.insert("end", {2: "\u25cf ", 1: "\u25b2 "}.get(f.level, "\u2139 ") + T(f.title) + "\n", tag)
+            found.insert("end", T(f.detail) + "\n", "detail")
         found.configure(state="disabled")
 
     def refresh():
@@ -1493,7 +1564,7 @@ def run_gui(a):
         refresh()
         root.after(4000, poll)
 
-    ttk.Button(top, text="Refresh", command=lambda: (state.update(sig=None), refresh())).grid(row=0, column=2, sticky="e")
+    ttk.Button(top, text=T("Refresh"), command=lambda: (state.update(sig=None), refresh())).grid(row=0, column=2, sticky="e")
     log("TWRP v2 PC rescue %s - tools: %s" % (VERSION, ", ".join("%s %s" % (k, "ok" if v else "MISSING") for k, v in r.tools.items())))
     for k, v in r.tools.items():
         if not v:
