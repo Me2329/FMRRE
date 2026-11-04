@@ -267,9 +267,10 @@ header is checked first), `samsung-twrp IMG`, `samsung-stock AP.tar.md5 [--parts
 `getvar all` or logcat, for a bug report). `status --json` is for scripts; `--dry-run` shows every command that would
 change the phone and runs none. Flashing and wiping are refused while a Virtual A/B update is still merging.
 
-Tested against fake `adb` / `fastboot` / `heimdall` that answer like phones in each mode (`tests/pc_rescue_test.sh`:
-including the window driven under Xvfb, the LZ4 unpacker on compressed data, and a check that every message has a Romanian translation), **not yet with a real
-phone**, and not yet on Windows or macOS (it only uses `subprocess` and tkinter, but that is untested there).
+Tested against fake `adb` / `fastboot` / `heimdall` that answer like phones in each mode (`tests/pc_rescue_test.sh`),
+including the window driven under Xvfb, the LZ4 unpacker on compressed data, and a check that every message has a
+Romanian translation. **Not yet tested with a real phone**, and not yet on Windows or macOS (it only uses `subprocess`
+and tkinter, but that is untested there).
 
 ### fstab
 TWRP v2 looks for `/etc/twrp.fstab`, `/etc/recovery.fstab`, `/system/etc/recovery.fstab` and finally
