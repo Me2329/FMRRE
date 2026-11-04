@@ -1219,6 +1219,21 @@ static void testAutofix(const std::string& dir) {
     device::setProp("ro.boot.verifiedbootstate", "orange");
     device::setProp("ro.boot.vbmeta.device_state", "unlocked");
     unlink(ps.c_str());
+
+    // Another ROM flashed over the old one's data (the zip was signed with another key than the system it replaced):
+    // a factory reset that keeps internal storage is planned - not preselected, it erases apps - until data is wiped.
+    CHECK(rescue::romSwitchWithoutWipe().empty() && !find(autofix::diagnose(), "factory_reset"));
+    history::record("Install zip", std::string("crDroid-11.zip - signed: crDroid (another key than the installed system's); ") +
+                                       installer::kRomSwitchNote, true);
+    CHECK(rescue::romSwitchWithoutWipe().find("crDroid-11.zip") == 0);
+    p = autofix::diagnose(true);
+    const autofix::Step* fr = find(p, "factory_reset");
+    CHECK(fr && fr->risk == autofix::Risk::ErasesData && fr->recommended);
+    bool named = false;
+    for (auto& f : p.report.findings) named |= f.fix == rescue::Fix::FactoryReset && f.evidence.find("crDroid") != std::string::npos;
+    CHECK(named);
+    history::record("Wipe", "Data", true);
+    CHECK(rescue::romSwitchWithoutWipe().empty() && !find(autofix::diagnose(true), "factory_reset"));
 }
 
 static void testI18n() {

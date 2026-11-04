@@ -28,7 +28,8 @@ struct Check {
 
 struct Step {
     std::string id;      // disable_modules wipe_caches disable_verity restore_vbmeta restore_super restore_boot
-                         // restore_init_boot restore_vendor_boot switch_slot repair_data_fs format_data
+                         // restore_init_boot restore_vendor_boot switch_slot repair_data_fs restore_backup
+                         // factory_reset format_data
     std::string title, why;
     Risk risk = Risk::Safe;
     bool recommended = false;  // planned for this run

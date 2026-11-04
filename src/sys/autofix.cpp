@@ -299,11 +299,20 @@ Plan diagnose(bool userSaysBootFails) {
             break;  // the newest one
         }
     }
-    if (data && (dataProblem || hasFinding(r, rescue::Fix::FormatData) || escalate))
+    // Another ROM was flashed over the old one's data (its signing key says so): a factory reset finishes the switch.
+    // On encrypted data that isn't enough - the old ROM's keys stay - so Format Data is the fix there.
+    const bool romSwitch = !rescue::romSwitchWithoutWipe().empty(), enc = parts.dataEncrypted();
+    if (romSwitch) check("Last ROM install", "another ROM - data not wiped since", 2);
+    if (data && romSwitch && !enc)
+        add("factory_reset", "Factory reset (keeps internal storage)",
+            "Another ROM was installed without wiping data, and Android can't start on the old ROM's apps and settings. Erases apps "
+            "and settings; photos, downloads and other files in internal storage stay.",
+            Risk::ErasesData, p.bootFailed);
+    if (data && (dataProblem || hasFinding(r, rescue::Fix::FormatData) || escalate || (romSwitch && enc)))
         add("format_data", "Format Data (factory reset)",
             "Fixes encryption errors and leftovers from another ROM - the last resort. Erases apps, settings and internal storage: copy your "
             "files to a computer or SD card first.",
-            Risk::ErasesData, dataProblem && escalate);
+            Risk::ErasesData, (dataProblem && escalate) || (romSwitch && enc && p.bootFailed));
 
     // ---- what only the user can do
     if (hasFinding(r, rescue::Fix::ReflashSystem))
@@ -419,6 +428,11 @@ bool apply(const Plan& p, const Options& o, Task& t) {
             Partition* d = parts.find("/data");
             ok = d && parts.repair(*d, t);
             if (d) parts.mount(*d);
+        } else if (s.id == "factory_reset") {
+            Partition* d = parts.find("/data");
+            ok = d && parts.wipe(*d, t);  // keeps /data/media
+            if (Partition* c = parts.find("/cache")) parts.wipe(*c, t);
+            parts.wipeDalvik(t);
         } else if (s.id == "format_data") {
             Partition* d = parts.find("/data");
             ok = d && parts.format(*d, t);

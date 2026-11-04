@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <sys/mount.h>
 
 #include "core/log.h"
@@ -9,6 +10,7 @@
 #include "platform/device.h"
 #include "sys/bootimg.h"
 #include "sys/history.h"
+#include "sys/installer.h"
 #include "sys/partitions.h"
 
 namespace tw::rescue {
@@ -21,6 +23,7 @@ const char* fixLabel(Fix f) {
         case Fix::FormatData: return "Format Data";
         case Fix::ReflashSystem: return "Flash a system image";
         case Fix::RestoreBoot: return "Restore stock boot";
+        case Fix::FactoryReset: return "Factory reset";
         default: return "";
     }
 }
@@ -225,6 +228,21 @@ void setAndroidReason(const std::string& reason) {
 
 std::string androidReason() { return util::readLine(reasonFile()); }
 
+std::string romSwitchWithoutWipe() {
+    int64_t now = (int64_t)time(nullptr);
+    for (auto& e : history::recent(80)) {  // newest first
+        if (now - e.time > 7 * 86400) break;
+        if (!e.ok) continue;
+        bool dataWiped = ((e.action == "Wipe" || e.action == "Format") && util::startsWith(e.detail, "Data")) ||
+                         (e.action == "fastboot erase" && util::startsWith(e.detail, "userdata"));
+        if (dataWiped) return "";
+        if ((e.action == "Install zip" || e.action == "Install zip (simulated)" || e.action == "A/B OTA") &&
+            e.detail.find(installer::kRomSwitchNote) != std::string::npos)
+            return e.detail;
+    }
+    return "";
+}
+
 Report analyze() {
     Report r;
     r.bootReason = device::prop("ro.boot.bootreason");
@@ -256,6 +274,17 @@ Report analyze() {
         std::string d = e.detail;  // auto repair entries end with " [step id]" - not for people
         if (!d.empty() && d.back() == ']' && d.rfind(" [") != std::string::npos) d.erase(d.rfind(" ["));
         r.changes.push_back(e.action + ": " + d + (e.ok ? "" : " (failed)") + "  \xE2\x80\xA2  " + history::ago(e.time));
+    }
+    std::string sw = romSwitchWithoutWipe();
+    if (!sw.empty()) {
+        bool enc = Partitions::get().dataEncrypted();
+        r.findings.push_back({1, "A different ROM was installed without wiping data",
+                              enc ? "The last ROM is signed with another key than the system it replaced, and data wasn't wiped since. "
+                                    "With encrypted data only Format Data reliably helps - it erases internal storage too."
+                                  : "The last ROM is signed with another key than the system it replaced, and data wasn't wiped since. "
+                                    "Android usually can't start on another ROM's apps and settings: a factory reset fixes it "
+                                    "(internal storage stays).",
+                              sw, enc ? Fix::FormatData : Fix::FactoryReset});
     }
     for (auto& m : bootimg::modules()) r.magiskModules |= !m.disabled;
     // Modules are the first thing to try for framework crashes when there are any.

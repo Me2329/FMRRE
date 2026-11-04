@@ -16,6 +16,7 @@ enum class Fix {
     FormatData,      // encryption / different ROM
     ReflashSystem,   // GSI / ROM image problem
     RestoreBoot,     // stock boot / init_boot backup
+    FactoryReset,    // wipe /data but keep internal storage (after a ROM switch)
 };
 
 struct Finding {
@@ -51,6 +52,10 @@ std::string decodePmsg(const std::string& raw);
 // /data that won't decrypt or mount). The reason is kept in /tmp until the next reboot.
 void setAndroidReason(const std::string& reason);
 std::string androidReason();
+// The newest install (last 7 days) of a ROM signed with another key than the system it replaced, when data
+// hasn't been wiped since - its flash history detail; empty when there is none. A ROM started on another
+// ROM's data is one of the most common bootloops.
+std::string romSwitchWithoutWipe();
 // Copy the logs to <storage>/FMRRE/logs/<date>/; returns the folder ("" on failure).
 std::string saveLogs(const Report& r);
 

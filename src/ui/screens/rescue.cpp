@@ -176,6 +176,7 @@ private:
             case rescue::Fix::FormatData: app.push(makeFormatDataScreen()); break;
             case rescue::Fix::ReflashSystem: app.push(makeGsiScreen()); break;
             case rescue::Fix::RestoreBoot: app.push(makeRootScreen()); break;
+            case rescue::Fix::FactoryReset: app.push(makeWipeScreen()); break;
             default: break;
         }
     }
