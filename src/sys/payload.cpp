@@ -850,7 +850,8 @@ static bool installImpl(const Payload& p, const InstallOptions& o, Task& t) {
 bool install(const Payload& p, const InstallOptions& o, Task& t) {
     bool ok = installImpl(p, o, t);
     std::string slot = o.slot.empty() ? (device::info().slot == "_b" ? "A" : "B") : o.slot.substr(1);
-    history::record("A/B OTA", util::basename(p.path) + " -> slot " + util::toLower(slot) , ok);
+    history::record("A/B OTA", util::basename(p.path) + " -> slot " + util::toLower(slot) +
+                                   (o.historyNote.empty() ? "" : " - " + o.historyNote), ok);
     return ok;
 }
 

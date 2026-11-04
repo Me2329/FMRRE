@@ -7,6 +7,7 @@
 #include "core/settings.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/installer.h"
 #include "sys/partitions.h"
 #include "sys/pathcheck.h"
 #include "sys/payload.h"
@@ -243,7 +244,11 @@ public:
             payload::InstallOptions o = opts_;
             bool rb = reboot_;
             app.runTask("Installing " + util::basename(path_), Icon::Install, [p, o, rb](Task& t) {
-                bool ok = payload::install(p, o, t);
+                payload::InstallOptions po = o;
+                t.setRange(0, 0.05f);
+                if (!installer::checkSignature(p.path, installer::optionsFromSettings(), true, t, po.historyNote)) return false;
+                t.setRange(0.05f, 0.95f);
+                bool ok = payload::install(p, po, t);
                 if (ok) {
                     t.print("Flashing GApps / Magisk too? Reboot to recovery first, so they go to the new slot.");
                     if (rb) {

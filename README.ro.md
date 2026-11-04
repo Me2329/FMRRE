@@ -25,6 +25,7 @@ folosește TWRP: fstab-urile TWRP, OpenRecoveryScript, comanda `twrp` și backup
 | **Salvare din bootloop** | Explică pe înțeles de ce a eșuat ultima pornire, cu reparația potrivită lângă fiecare cauză |
 | **Backup / restaurare** | Comprimat, cu SHA-256, opțional **criptat** (AES-256); citește și backup-uri TWRP clasice |
 | **Root** | Magisk / KernelSU / APatch, cu backup automat al imaginii originale și manager de module |
+| **Semnături zip** | Verifică **semnătura întregului fișier** la ROM-uri și OTA-uri exact ca recovery-ul Android (formatul signapk: RSA SHA-1 / SHA-256 și ECDSA P-256, incluse în program) și spune **a cui cheie** l-a semnat: a **sistemului instalat** (o actualizare a ROM-ului tău), una în care ai încredere (`FMRRE/keys`), **cheia publică de test AOSP** sau una necunoscută. Un **ROM semnat cu altă cheie decât sistemul instalat** înseamnă schimbare de ROM: FMRRE te avertizează să ștergi datele - un ROM pornit pe datele altui ROM rămâne de obicei blocat la animația de pornire - și scrie semnătura în istoricul de flash. Un zip modificat după semnare este depistat. Opțional: **instalează doar zip-uri semnate cu o cheie de încredere**. `fmrre verify-zip <zip>` |
 | **MTP** | Montare → **MTP**: memoria telefonului apare pe calculator (Windows, macOS, Linux) ca să copiezi ROM-uri și backup-uri în ambele sensuri; `adb` merge în continuare |
 | **Limbi** | Engleză și **română** (Setări → Limbă) |
 

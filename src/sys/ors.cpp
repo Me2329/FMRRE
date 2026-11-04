@@ -26,6 +26,7 @@
 #include "sys/rescue.h"
 #include "sys/sideload.h"
 #include "sys/super.h"
+#include "sys/zipsig.h"
 
 namespace tw::ors {
 
@@ -179,6 +180,9 @@ bool doPayload(const std::vector<std::string>& a, Task& t) {
             else if (a[i] == "--force") o.force = true;
             else if (a[i] == "--keep-source") o.freeSourceIfNeeded = false;
         }
+        t.setRange(0, 0.05f);
+        if (!installer::checkSignature(path, installer::optionsFromSettings(), true, t, o.historyNote)) return false;
+        t.setRange(0.05f, 0.95f);
         return payload::install(p, o, t);
     }
     t.print("usage: payload info|extract|install <ota.zip> ...");
@@ -297,6 +301,7 @@ std::string help() {
            "  payload install <ota.zip> [--slot a|b] [--no-switch] [--no-verify] [--force]\n"
            "  vbmeta disable|enable|status\n"
            "  root status|backup|modules-off   modules-off fixes module bootloops\n"
+           "  verify-zip <zip>          whose signature is on it (the installed system's key, another ROM's...)\n"
            "  check <path>              why can't I see this file?\n"
            "  dd <image> <partition>    print the equivalent dd command\n"
            "  print <text>, sleep <seconds>\n"
@@ -353,8 +358,7 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 t.print("'%s' is an image: use 'flash <image> <partition>'", rest.c_str());
                 ok = false;
             } else {
-                installer::InstallOptions o;
-                ok = installer::installZip(p, o, t);
+                ok = installer::installZip(p, installer::optionsFromSettings(), t);
             }
         } else if (cmd == "flash") {
             if (a.size() < 2) { t.print("usage: flash <image> <partition>"); ok = false; }
@@ -504,6 +508,21 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 t.print("ramdisk target: %s%s", tg.name.c_str(), device::info().slot.c_str());
                 for (auto& m : bootimg::modules()) t.print("  module %-24s %s%s", m.id.c_str(), m.disabled ? "disabled" : "enabled", m.removing ? ", removing" : "");
             }
+        } else if (cmd == "verify-zip") {
+            std::string p = pathcheck::resolve(rest);
+            if (rest.empty() || !util::exists(p)) {
+                t.print("verify-zip: %s not found (try: check %s)", rest.c_str(), rest.c_str());
+                ok = false;
+            } else {
+                t.setStatus("Checking the signature of " + util::basename(p));
+                zipsig::Keys keys = zipsig::loadKeys(zipsig::Sources::current());
+                zipsig::Result r = zipsig::verify(p, keys, [&](uint64_t d, uint64_t n) {
+                    t.setSubProgress(n ? float(double(d) / double(n)) : 1.0f);
+                    return !t.cancelled();
+                });
+                for (auto& l : zipsig::report(r)) t.print("%s", l.c_str());
+                ok = r.valid();
+            }
         } else if (cmd == "check") {
             auto r = pathcheck::check(rest);
             t.print("%s -> %s", r.input.c_str(), r.resolved.c_str());
@@ -569,7 +588,7 @@ int cliMain(const std::vector<std::string>& args) {
     for (auto& a : args) line += (line.empty() ? "" : " ") + a;
     std::string pid = util::readLine(uiPidFile());
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
-    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
+    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
                     (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
                     (args[0] == "payload" && args.size() > 1 && args[1] == "info") || (args[0] == "rescue" && args.size() == 1) || args[0] == "history" ||
                     (args[0] == "autofix" && std::find(args.begin(), args.end(), "--dry-run") != args.end());

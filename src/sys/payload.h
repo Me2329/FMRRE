@@ -98,6 +98,7 @@ struct InstallOptions {
     bool verify = true;        // check each partition's hash after writing it
     bool force = false;        // ignore a device-name mismatch
     bool freeSourceIfNeeded = true;  // Virtual A/B: drop the current slot's partitions if super is too small
+    std::string historyNote;   // added to the flash history entry (the zip's signature)
 };
 // What install() would do, for the confirmation screen.
 struct Plan {

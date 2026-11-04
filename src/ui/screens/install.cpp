@@ -170,8 +170,7 @@ public:
             ui.endScroll(y);
             Rect sb = bottom.inset(pad, ui.dp(14));
             if (ui.slideToConfirm(ui.id("sl_go"), sb, "Swipe to start sideload", th.info)) {
-                installer::InstallOptions o;
-                o.verifyZip = s.flag("zip_verify", true);
+                installer::InstallOptions o = installer::optionsFromSettings();
                 bool rb = s.flag("zip_reboot", false);
                 app.runTask("ADB sideload", Icon::Usb, [o, rb](Task& t) {
                     t.setRange(0, 0.7f);
@@ -339,9 +338,7 @@ public:
         } else if (ui.slideToConfirm(ui.id("flash"), sb, g_queue.size() > 1 ? "Swipe to flash all" : "Swipe to flash", th.accent)) {
             auto queue = g_queue;
             g_queue.clear();
-            installer::InstallOptions o;
-            o.verifyZip = s.flag("zip_verify", true);
-            o.wipeCacheAfter = s.flag("zip_wipe_cache", false);
+            installer::InstallOptions o = installer::optionsFromSettings();
             bool rb = s.flag("zip_reboot", false);
             app.runTask(queue.size() > 1 ? "Flashing " + std::to_string(queue.size()) + " zips" : "Flashing " + util::basename(queue[0]),
                         Icon::Install, [queue, o, rb](Task& t) {

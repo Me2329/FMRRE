@@ -17,8 +17,11 @@
 #include "core/i18n.h"
 #include "core/log.h"
 #include "core/lz4.h"
+#include "core/pubkey.h"
 #include "core/settings.h"
+#include "core/sha1.h"
 #include "core/sha256.h"
+#include "core/x509.h"
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
@@ -37,7 +40,9 @@
 #include "sys/payload.h"
 #include "sys/super.h"
 #include "sys/verity.h"
+#include "sys/zipsig.h"
 #include "miniz.h"
+#include "sig_fixtures.h"
 
 #include <fcntl.h>
 #include <vector>
@@ -1248,6 +1253,131 @@ static void testI18n() {
     CHECK(i18n::longDate(2, 3, 10) == "Tuesday, 03 November");
 }
 
+static void testZipSig(const std::string& dir) {
+    auto sha1hex = [](const std::string& s) {
+        Sha1 h;
+        h.update(s.data(), s.size());
+        return Sha256::toHex(h.digest());
+    };
+    // SHA-1 reference values (FIPS 180-2)
+    CHECK(sha1hex("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d");
+    CHECK(sha1hex("") == "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+    CHECK(sha1hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") == "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
+    {
+        Sha1 h;
+        std::string a(1000, 'a');
+        for (int i = 0; i < 1000; i++) {  // a million 'a', partly in odd pieces
+            if (i % 7) h.update(a.data(), a.size());
+            else h.update(a.data(), 999), h.update("a", 1);
+        }
+        CHECK(Sha256::toHex(h.digest()) == "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
+    }
+    CHECK(pk::p256SelfTest());
+    CHECK(x509::base64Decode(x509::base64Encode((const uint8_t*)"hello!?", 7)) == "hello!?");
+
+    // Certificates made by openssl: RSA-2048 / sha256WithRSA, EC P-256, AOSP's test key subject / sha1WithRSA.
+    auto rsa = x509::load(kSigRsaCert), ec = x509::load(kSigEcCert), test = x509::load(kSigTestCert);
+    CHECK(rsa.size() == 1 && ec.size() == 1 && test.size() == 1);
+    if (rsa.size() != 1 || ec.size() != 1 || test.size() != 1) return;
+    CHECK(rsa[0].key == x509::Cert::Key::Rsa && rsa[0].rsa.bits() == 2048 && rsa[0].hashLen == 32 &&
+          rsa[0].cn == "FMR RSA test key" && rsa[0].o == "FMR Test");
+    CHECK(ec[0].key == x509::Cert::Key::Ec && pk::ecOnCurve(ec[0].ec) && ec[0].hashLen == 32 && ec[0].keyDesc() == "EC P-256");
+    CHECK(test[0].isAospTestKey() && test[0].hashLen == 20 && !rsa[0].isAospTestKey());
+    CHECK(x509::load(rsa[0].pem()).size() == 1 && x509::load(rsa[0].pem())[0].sameKey(rsa[0]) && !rsa[0].sameKey(test[0]));
+    CHECK(x509::load(std::string(rsa[0].der.begin(), rsa[0].der.end())).size() == 1);  // a DER file
+    CHECK(rsa[0].keyId().size() == 64 && rsa[0].keyId() != test[0].keyId());
+    pk::EcKey off = ec[0].ec;
+    off.y[31] ^= 1;
+    CHECK(!pk::ecOnCurve(off));
+
+    std::string d = dir + "/zipsig";
+    util::mkdirs(d);
+    auto put = [&](const std::string& name, const std::string& data) {
+        std::string p = d + "/" + name;
+        util::writeFile(p, data);
+        return p;
+    };
+    const std::string rsaZip((const char*)kSigRsaZip, sizeof kSigRsaZip);
+    std::string zr = put("rsa.zip", rsaZip), ze = put("ec.zip", std::string((const char*)kSigEcZip, sizeof kSigEcZip)),
+                zt = put("test.zip", std::string((const char*)kSigTestZip, sizeof kSigTestZip)),
+                zu = put("plain.zip", std::string((const char*)kSigZip, sizeof kSigZip));
+    zipsig::Keys none;
+    zipsig::Result r = zipsig::verify(zr, none);
+    CHECK(r.valid() && r.trust == zipsig::Trust::Unknown && r.hash == "SHA-256" && r.cert.cn == "FMR RSA test key" &&
+          !r.otherThanSystem() && r.badge() == "Other key");
+    r = zipsig::verify(ze, none);
+    CHECK(r.valid() && r.cert.key == x509::Cert::Key::Ec && r.hash == "SHA-256");
+    r = zipsig::verify(zt, none);
+    CHECK(r.valid() && r.testKey && r.hash == "SHA-1" && r.badge() == "Test key");
+    CHECK(zipsig::verify(zu, none).state == zipsig::State::Unsigned);
+    CHECK(zipsig::verify(d + "/missing.zip", none).state == zipsig::State::Error);
+    // Whose key: the installed system's, another ROM's, one the user trusted.
+    zipsig::Keys sys;
+    sys.system = rsa;
+    r = zipsig::verify(zr, sys);
+    CHECK(r.valid() && r.trust == zipsig::Trust::System && r.trusted() && !r.otherThanSystem());
+    r = zipsig::verify(ze, sys);
+    CHECK(r.valid() && !r.trusted() && r.otherThanSystem() && r.brief().find("another key") != std::string::npos);
+    zipsig::Keys user;
+    user.user = ec;
+    r = zipsig::verify(ze, user);
+    CHECK(r.trust == zipsig::Trust::User && !r.otherThanSystem());  // the system's keys aren't known: no claim
+
+    // Tampering. A byte of the signed zip, a byte of the signature value:
+    std::string t = rsaZip;
+    t[40] ^= 1;
+    CHECK(zipsig::verify(put("t1.zip", t), none).state == zipsig::State::Bad);
+    CHECK(zipsig::verify(put("t1.zip", t), sys).state == zipsig::State::Bad);
+    t = rsaZip;
+    t[t.size() - 10] ^= 1;
+    CHECK(zipsig::verify(put("t2.zip", t), none).state == zipsig::State::Bad);
+    // An end-of-zip marker hidden in the unsigned comment (zip readers would use it) is refused, like Android does:
+    size_t comment = rsaZip.size() - ((uint8_t)rsaZip[rsaZip.size() - 2] | (uint8_t)rsaZip[rsaZip.size() - 1] << 8);
+    t = rsaZip;
+    t.replace(comment, 4, "PK\x05\x06");
+    r = zipsig::verify(put("t3.zip", t), none);
+    CHECK(r.state == zipsig::State::Bad && r.reason.find("added after") != std::string::npos);
+    t = rsaZip;
+    t[t.size() - 3] = 0;  // the footer's FF FF
+    CHECK(zipsig::verify(put("t4.zip", t), none).state == zipsig::State::Unsigned);
+    CHECK(!zipsig::verify(put("t5.zip", rsaZip.substr(0, rsaZip.size() - 100)), none).valid());  // cut off
+    CHECK(!zipsig::verify(put("t6.zip", rsaZip + "appended"), none).valid());
+    t = rsaZip;
+    t[t.size() - 6] = char(0xFF);  // signature start past the comment
+    CHECK(zipsig::verify(put("t7.zip", t), none).state == zipsig::State::Bad);
+    int calls = 0;
+    r = zipsig::verify(zr, none, [&](uint64_t, uint64_t) { return ++calls < 0; });  // cancelled
+    CHECK(r.state == zipsig::State::Error && calls == 1);
+
+    // Keys from otacerts.zip, where Android keeps them - here the simulated system's.
+    std::string ota = dir + "/sim/system_root/system/etc/security/otacerts.zip";
+    util::mkdirs(util::dirname(ota));
+    mz_zip_archive z{};
+    CHECK(mz_zip_writer_init_file(&z, ota.c_str(), 0));
+    CHECK(mz_zip_writer_add_mem(&z, "releasekey.x509.pem", kSigRsaCert, strlen(kSigRsaCert), MZ_DEFAULT_COMPRESSION));
+    CHECK(mz_zip_writer_add_mem(&z, "README.txt", "not a key", 9, MZ_DEFAULT_COMPRESSION));
+    mz_zip_writer_finalize_archive(&z);
+    mz_zip_writer_end(&z);
+    CHECK(x509::loadZip(ota).size() == 1);
+    zipsig::Keys k = zipsig::loadKeys(zipsig::Sources::current());
+    CHECK(k.system.size() == 1 && k.systemNote.empty());
+    CHECK(zipsig::verify(zr, k).trust == zipsig::Trust::System);
+    r = zipsig::verify(ze, k);
+    CHECK(r.otherThanSystem());
+    // "Trust this key": saved to FMRRE/keys, then it counts as the user's.
+    std::string err, saved;
+    CHECK(zipsig::trust(r, err, &saved) && util::exists(saved));
+    k = zipsig::loadKeys(zipsig::Sources::current());
+    CHECK(k.user.size() == 1 && zipsig::verify(ze, k).trust == zipsig::Trust::User);
+    unlink(saved.c_str());
+    // In the background, as the screens do it.
+    zipsig::Check c;
+    for (int i = 0; i < 500 && !(c = zipsig::check(zr)).done; i++) usleep(10 * 1000);
+    CHECK(c.done && c.result.trust == zipsig::Trust::System);
+    CHECK(zipsig::cached(zr, r) && r.valid());
+    unlink(ota.c_str());
+}
+
 int main() {
     char tmpl[] = "/tmp/fmrre-selftest-XXXXXX";
     std::string dir = mkdtemp(tmpl);
@@ -1265,6 +1395,7 @@ int main() {
     testFrozenFormats();
     testDecoders(dir);
     testLz4(dir);
+    testZipSig(dir);
     testPayload(dir);
     testRescue();
     testAutofix(dir);

@@ -8,6 +8,8 @@
 #include "sys/imagesrc.h"
 #include "sys/partitions.h"
 #include "sys/payload.h"
+#include "sys/zipsig.h"
+#include "core/settings.h"
 #include "miniz.h"
 
 #include <cerrno>
@@ -41,6 +43,9 @@ ZipInfo inspectZip(const std::string& path) {
         if (n == kUpdaterScript) zi.hasUpdaterScript = true;
         if (n == "module.prop") zi.isMagiskModule = true;
         if (n == "payload.bin") zi.hasPayload = true;
+        if (n == "payload.bin" || n == "system.new.dat" || n == "system.new.dat.br" || n == "system.transfer.list" ||
+            n == "system.img" || n == "super.img" || n == "system.img.lz4" || n == "super.img.lz4")
+            zi.isRom = true;
         if (zi.names.size() < 200) zi.names.push_back(n);
     }
     mz_zip_reader_end(&z);
@@ -149,7 +154,49 @@ static bool simulateInstall(const std::string& path, const ZipInfo& zi, Task& t)
     return true;
 }
 
-static bool installZipImpl(const std::string& path, const InstallOptions& o, Task& t) {
+const char kRomSwitchNote[] = "a different ROM than the one installed";
+
+InstallOptions optionsFromSettings() {
+    InstallOptions o;
+    Settings& s = Settings::get();
+    o.verifyZip = s.flag("zip_verify", true);
+    o.wipeCacheAfter = s.flag("zip_wipe_cache", false);
+    o.checkSignature = s.flag("zip_sig", true);
+    o.requireSignature = s.flag("zip_sig_require", false);
+    return o;
+}
+
+bool checkSignature(const std::string& path, const InstallOptions& o, bool isRom, Task& t, std::string& note) {
+    note.clear();
+    if (!o.checkSignature && !o.requireSignature) return true;
+    zipsig::Result r;
+    if (!zipsig::cached(path, r)) {  // the Install screen has usually checked it already
+        t.setStatus("Checking the signature of " + util::basename(path));
+        zipsig::Keys keys = zipsig::loadKeys(zipsig::Sources::current());
+        r = zipsig::verify(path, keys, [&](uint64_t d, uint64_t n) {
+            t.setSubProgress(n ? float(double(d) / double(n)) : 1.0f);
+            return !t.cancelled();
+        });
+        if (t.cancelled()) return false;
+    }
+    for (auto& l : zipsig::report(r)) t.print("%s", l.c_str());
+    note = r.brief();
+    if (isRom && r.otherThanSystem()) {
+        note += std::string("; ") + kRomSwitchNote;
+        t.print("  This ROM is signed with another key than the system on the phone now. If it is a different ROM, "
+                "wipe data after installing it (Wipe -> Factory reset) - a ROM started on another ROM's data "
+                "usually doesn't get past the boot animation.");
+    }
+    if (o.requireSignature && !r.trusted()) {
+        t.print("Not installed: only zips signed with a trusted key are installed (Settings). Trusted: the installed "
+                "system's keys, this recovery's, and keys you added to FMRRE/keys.");
+        return false;
+    }
+    if (r.state == zipsig::State::Bad) t.print("  Installing anyway: the CRC check still catches damaged files.");
+    return true;
+}
+
+static bool installZipImpl(const std::string& path, const InstallOptions& o, Task& t, std::string& sigNote) {
     t.setStatus("Inspecting " + util::basename(path));
     t.print("Installing zip: %s", path.c_str());
     ZipInfo zi = inspectZip(path);
@@ -158,17 +205,25 @@ static bool installZipImpl(const std::string& path, const InstallOptions& o, Tas
         return false;
     }
     t.print("Type: %s, %d entries, %s", zi.kind.c_str(), zi.entries, util::humanSize(zi.uncompressed).c_str());
+    const float rbase = t.rangeStart(), rlen = t.rangeLen();
+    float myBase = rbase;
+    if (o.checkSignature || o.requireSignature) {
+        t.setRange(rbase, rlen * 0.05f);
+        if (!checkSignature(path, o, zi.isRom, t, sigNote)) return false;
+        myBase += rlen * 0.05f;
+        t.setRange(myBase, rbase + rlen - myBase);
+    }
     if (zi.hasPayload && !zi.hasUpdateBinary) {
         // A/B ROM or OTA: write payload.bin to the inactive slot (each block is checked against its SHA-256).
         payload::Payload p;
         std::string err;
         if (!payload::open(path, p, err)) { t.print("payload.bin: %s", err.c_str()); return false; }
-        return payload::install(p, payload::InstallOptions(), t);
+        payload::InstallOptions po;
+        po.historyNote = sigNote;
+        return payload::install(p, po, t);
     }
-    const float rbase = t.rangeStart(), rlen = t.rangeLen();
-    float myBase = rbase;
     if (o.verifyZip) {
-        t.setRange(rbase, rlen * 0.1f);
+        t.setRange(myBase, rlen * 0.1f);
         if (!testZip(path, t)) return false;
         myBase += rlen * 0.1f;
     }
@@ -269,9 +324,11 @@ static bool installZipImpl(const std::string& path, const InstallOptions& o, Tas
 
 bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
     bool ota = payload::isOtaZip(path);  // A/B OTAs are recorded by payload::install
-    bool ok = installZipImpl(path, o, t);
-    if (!ota && !device::isSim()) history::record("Install zip", util::basename(path), ok);
-    else if (!ota) history::record("Install zip (simulated)", util::basename(path), ok);
+    std::string sigNote;
+    bool ok = installZipImpl(path, o, t, sigNote);
+    std::string detail = util::basename(path) + (sigNote.empty() ? "" : " - " + sigNote);
+    if (!ota && !device::isSim()) history::record("Install zip", detail, ok);
+    else if (!ota) history::record("Install zip (simulated)", detail, ok);
     return ok;
 }
 
