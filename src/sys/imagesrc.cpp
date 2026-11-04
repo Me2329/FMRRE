@@ -1,5 +1,6 @@
 #include "sys/imagesrc.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -12,6 +13,7 @@
 
 #include "sys/history.h"
 #include "core/log.h"
+#include "core/lz4.h"
 #include "core/sha256.h"
 #include "core/task.h"
 #include "core/util.h"
@@ -283,6 +285,38 @@ private:
     bool done_ = false;
 };
 
+// LZ4 frames (Samsung firmware images, `lz4` tool output), decoded here - no lz4 binary needed in the ramdisk.
+class Lz4Source : public Source {
+public:
+    Lz4Source(int fd, uint64_t size) : dec_([this](uint8_t* p, size_t n) { return pull(p, n); }) {
+        in_.fd = fd;
+        in_.size = size;
+    }
+    ~Lz4Source() override { close(in_.fd); }
+    float progress() const override { return in_.progress(); }
+
+    ssize_t read(void* out, size_t n) override {
+        ssize_t r = dec_.read(out, n);
+        if (r < 0) {
+            error = dec_.error();
+            return -1;
+        }
+        produced += r;
+        return r;
+    }
+
+private:
+    size_t pull(uint8_t* p, size_t n) {
+        if (in_.off >= in_.len && !in_.fill()) return 0;
+        size_t k = std::min(n, in_.len - in_.off);
+        memcpy(p, in_.buf.data() + in_.off, k);
+        in_.off += k;
+        return k;
+    }
+    InBuf in_;
+    Lz4Frame dec_;
+};
+
 class ZipSource : public Source {
 public:
     ~ZipSource() override {
@@ -454,7 +488,7 @@ std::unique_ptr<Source> open(const std::string& path, const std::string& zipEntr
         case Compression::Gzip: return std::make_unique<GzipSource>(fd, size);
         case Compression::Xz: return std::make_unique<XzSource>(fd, size);
         case Compression::Zstd: return std::make_unique<ProcSource>(fd, size, "zstd -dc 2>/dev/null || toybox zstd -dc");
-        case Compression::Lz4: return std::make_unique<ProcSource>(fd, size, "lz4 -dc");
+        case Compression::Lz4: return std::make_unique<Lz4Source>(fd, size);
         case Compression::Zip: {
             close(fd);
             auto z = std::make_unique<ZipSource>();
