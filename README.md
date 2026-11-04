@@ -5,6 +5,8 @@
 *Formerly "TWRP v2". It is its own project, not affiliated with TeamWin's TWRP, but it speaks TWRP's languages:
 TWRP fstabs, OpenRecoveryScript, the `twrp` command and classic TWRP backups all keep working.*
 
+[Citește în română](README.ro.md)
+
 FMRRE is a real recovery environment: a single static binary that `init` starts from the recovery
 ramdisk. It draws directly to the display (DRM/KMS or fbdev), reads the touchscreen and buttons from
 `/dev/input`, and does the work itself: it flashes zips and images, makes backups, wipes, mounts and more.
