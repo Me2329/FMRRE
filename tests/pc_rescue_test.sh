@@ -120,6 +120,21 @@ with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as t:
         ti = tarfile.TarInfo(name); ti.size = len(data)
         t.addfile(ti, io.BytesIO(data))
 body = buf.getvalue()
+# Pixel-style factory images: bootloader, radio and image-*.zip naming the board it is for
+import zipfile
+def factory(name, board):
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as z:
+        z.writestr("android-info.txt", "require board=%s\nrequire version-bootloader=ripcurrent-16.0\n" % board)
+        z.writestr("boot.img", "ANDROID!" + "x" * 100)
+    with zipfile.ZipFile(T + "/" + name, "w") as z:
+        d = "%s-bp1a.250505.005/" % board
+        z.writestr(d + "bootloader-%s-ripcurrent-16.0.img" % board, "BOOTLDR!")
+        z.writestr(d + "radio-%s-g5300q.img" % board, "RADIO")
+        z.writestr(d + "image-%s-bp1a.250505.005.zip" % board, inner.getvalue())
+        z.writestr(d + "flash-all.sh", "#!/bin/sh\n")
+factory("husky-factory.zip", "husky")
+factory("shiba-factory.zip", "shiba")
 open(T + "/AP_TEST.tar.md5", "wb").write(body + ("%s  AP_TEST.tar\n" % hashlib.md5(body).hexdigest()).encode())
 EOF
 [ "$(cat "$T/lz4_fails" 2>/dev/null)" = 0 ] || fail "lz4 decoder"
@@ -391,6 +406,25 @@ rc_is "wipe needs ERASE typed, even with --yes" 2
 not_called "not wiped" "fastboot .* -w"
 echo ERASE > "$T/answer"; STDIN="$T/answer" run wipe-data
 called "wiped after ERASE" "fastboot -s FAKE123 -w"
+
+scenario "factory image: official firmware back, data kept"
+touch "$T/fastboot_on"
+getvar_all product:husky unlocked:yes current-slot:a
+run factory "$T/shiba-factory.zip" --yes --workdir "$T/wf0"
+rc_is "another phone's image: refused" 2
+has_out "says why" "is for shiba, but the phone is husky"
+not_called "nothing flashed" "fastboot -s FAKE123 (-w )?(flash|update) "
+run factory "$T/husky-factory.zip" --yes --workdir "$T/wf"
+rc_is "exit 0" 0
+called "bootloader first" "fastboot -s FAKE123 flash bootloader $T/wf/bootloader-husky-ripcurrent-16.0.img"
+called "then the radio" "fastboot -s FAKE123 flash radio $T/wf/radio-husky-g5300q.img"
+called "restarts the bootloader in between" "fastboot -s FAKE123 reboot-bootloader"
+called "then the system images (fastboot update)" "fastboot -s FAKE123 update $T/wf/image-husky-bp1a.250505.005.zip"
+not_called "data kept (no -w)" "fastboot .*-w"
+echo nope > "$T/answer"; STDIN="$T/answer" run factory "$T/husky-factory.zip" --wipe --yes
+rc_is "--wipe needs ERASE typed" 2
+echo ERASE > "$T/answer"; STDIN="$T/answer" run factory "$T/husky-factory.zip" --wipe --yes --workdir "$T/wf2"
+called "--wipe after ERASE" "fastboot -s FAKE123 -w update $T/wf2/image-husky-bp1a.250505.005.zip"
 
 scenario "Samsung Download mode: lock state is on the screen"
 touch "$T/download_on"

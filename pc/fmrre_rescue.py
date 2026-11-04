@@ -29,6 +29,8 @@ it explains how to unlock it, and which official tool restores the firmware inst
   fmrre_rescue.py flash PARTITION IMAGE
   fmrre_rescue.py samsung-fmrre IMG  Download mode: FMRRE to RECOVERY + vbmeta disabled
   fmrre_rescue.py samsung-stock AP.tar.md5 [--parts boot,vbmeta,...]
+  fmrre_rescue.py factory FACTORY.zip [--wipe]   reinstall the official firmware (Pixel-style factory image),
+                                     keeping apps and files; the image must name this phone
   fmrre_rescue.py wipe-data          factory reset (type ERASE to confirm)
   fmrre_rescue.py reboot [system|recovery|bootloader|fastboot|download]
   fmrre_rescue.py logs [DIR]         save the phone's logs for a bug report
@@ -52,6 +54,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import zipfile
 import tempfile
 import threading
 import time
@@ -836,6 +839,36 @@ def ap_images(ap, parts, workdir, log):
     return sorted(out, key=lambda x: order.get(x[0], 99))
 
 
+def factory_info(path):
+    """A factory image zip (Pixel and other fastboot phones): its bootloader / radio images, the image-*.zip
+    and the boards it is for (android-info.txt: 'require board=husky')."""
+    try:
+        z = zipfile.ZipFile(path)
+    except (OSError, zipfile.BadZipFile) as e:
+        raise Refused("%s is not a factory image zip: %s" % (os.path.basename(path), e))
+    with z:
+        names = [n for n in z.namelist() if not n.endswith("/")]
+        pick = lambda pre, ext: sorted(n for n in names if os.path.basename(n).startswith(pre) and n.endswith(ext))
+        boot, radio, image = pick("bootloader-", ".img"), pick("radio-", ".img"), pick("image-", ".zip")
+    if not image:
+        raise Refused("%s has no image-*.zip inside: not a factory image (flash an OTA zip with adb sideload instead)."
+                      % os.path.basename(path))
+    return {"bootloader": boot[0] if boot else "", "radio": radio[0] if radio else "", "image": image[0]}
+
+
+def boards_in(image_zip):
+    try:
+        with zipfile.ZipFile(image_zip) as z:
+            text = z.read("android-info.txt").decode("utf-8", "replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return []
+    for line in text.splitlines():
+        m = re.match(r"\s*require\s+(?:board|product)\s*=\s*(\S+)", line)
+        if m:
+            return [b.strip().lower() for b in m.group(1).split("|") if b.strip()]
+    return []
+
+
 def check_magic(part, path):
     with open(path, "rb") as f:
         m = f.read(8)
@@ -1000,6 +1033,46 @@ class Rescue:
         if not self.ask("Flash %s to %s?" % (os.path.basename(image), part)):
             return False
         return self.r.write("fastboot", "flash", part, image)
+
+    def factory(self, path, wipe=False):
+        """Reinstall the official firmware from a factory image zip - like its flash-all script, without -w data stays."""
+        if not os.path.isfile(path):
+            raise Refused("No such file: " + path)
+        self.need_mode("fastboot", "fastbootd")
+        self.need_unlocked("reinstalling the firmware")
+        info = factory_info(path)
+        self.to_bootloader()
+        wd = self.workdir()
+        files = {}
+        with zipfile.ZipFile(path) as z:
+            for k in ("bootloader", "radio", "image"):
+                if info[k]:
+                    self.log("   unpacking %s" % os.path.basename(info[k]))
+                    files[k] = os.path.join(wd, os.path.basename(info[k]))
+                    with z.open(info[k]) as src, open(files[k], "wb") as dst:
+                        shutil.copyfileobj(src, dst, 1 << 20)
+        boards, product = boards_in(files["image"]), (self.phone.device or "").lower()
+        if boards and product and product not in boards:
+            raise Refused("This factory image is for %s, but the phone is %s: not flashing it (the wrong bootloader can make a "
+                          "phone unusable)." % (", ".join(boards), product))
+        if not boards:
+            self.log("   (the image doesn't name its phone - check it is the one for %s)" % (product or "this phone"))
+        if wipe and not self.typed_fn("ERASE", "Reinstall and factory reset: ERASES apps, settings, photos and every file on the "
+                                               "phone's internal storage."):
+            raise Refused("Not wiped (ERASE wasn't typed).")
+        q = "Reinstall the official firmware from %s and ERASE the phone?" if wipe else \
+            "Reinstall the official firmware from %s (apps and files are kept)?"
+        if not self.ask(q % os.path.basename(path)):
+            return False
+        for k in ("bootloader", "radio"):
+            if k in files:
+                if not self.r.write("fastboot", "flash", k, files[k]):
+                    raise Refused("Flashing the %s failed - see above. Don't restart the phone: try again, or use the maker's "
+                                  "official tool." % k)
+                self.r.write("fastboot", "reboot-bootloader")
+                if not self.r.wait_for("fastboot"):
+                    raise Refused("The phone didn't come back in the bootloader after flashing the %s." % k)
+        return self.r.write("fastboot", *(["-w"] if wipe else []), "update", files["image"])
 
     def wipe_data(self):
         self.need_mode("fastboot", "fastbootd")
@@ -1218,7 +1291,7 @@ class Rescue:
             raise Refused("The phone's recovery didn't start (or this bootloader can't 'reboot recovery'). Give an FMRRE image: "
                           "fix --recovery fmrre-recovery.img")
         raise Refused("Nothing is clearly broken as far as the bootloader can tell. Give an FMRRE image (--recovery) so it can look "
-                      "inside, or choose a repair: switch-slot, disable-vbmeta, cancel-update, flash, wipe-data.")
+                      "inside, or choose a repair: switch-slot, disable-vbmeta, cancel-update, flash, factory, wipe-data.")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -1297,6 +1370,9 @@ def main(argv=None):
     p = sub.add_parser("samsung-stock")
     p.add_argument("ap")
     p.add_argument("--parts", default=",".join(SAMSUNG_STOCK_PARTS))
+    p = sub.add_parser("factory", help="reinstall the official firmware from a factory image zip (keeps data)")
+    p.add_argument("zip")
+    p.add_argument("--wipe", action="store_true", help="also factory reset (type ERASE to confirm)")
     sub.add_parser("wipe-data")
     sub.add_parser("reboot").add_argument("target", nargs="?", default="system",
                                           choices=["system", "recovery", "bootloader", "fastboot", "download"])
@@ -1362,6 +1438,8 @@ def main(argv=None):
             ok = rs.samsung_fmrre(a.image)
         elif a.cmd == "samsung-stock":
             ok = rs.samsung_stock(a.ap)
+        elif a.cmd == "factory":
+            ok = rs.factory(a.zip, a.wipe)
         elif a.cmd == "wipe-data":
             ok = rs.wipe_data()
         elif a.cmd == "reboot":
@@ -1527,6 +1605,14 @@ def run_gui(a):
     fb.pack(side="left", padx=4)
     buttons.append(fb)
     btn(row2, "Wipe data...", rs.wipe_data).pack(side="left")
+
+    def factory_dialog():
+        f = filedialog.askopenfilename(title=T("Factory image zip for this phone"), filetypes=[("Factory image", "*.zip"), ("All files", "*")])
+        if f:
+            job(rs.factory, f)
+    fa = ttk.Button(row2, text=T("Reinstall firmware..."), command=factory_dialog)
+    fa.pack(side="left", padx=4)
+    buttons.append(fa)
     row2b = ttk.Frame(act)
     row2b.pack(fill="x", pady=4)
     ttk.Label(row2b, text=T("Samsung:")).pack(side="left")

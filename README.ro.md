@@ -66,6 +66,11 @@ Butonul **Repară-l în locul meu** (`fmrre_rescue.py fix`) întreabă înainte 
 - Samsung → instalează FMRRE (recovery + vbmeta cu verificarea oprită) sau pune la loc boot / vbmeta / recovery
   originale din fișierul AP al firmware-ului (verifică întâi MD5-ul fișierului, ca Odin)
 
+**Reinstalarea firmware-ului oficial** (`fmrre_rescue.py factory <imagine-de-fabrică>.zip` sau butonul
+*Reinstalează firmware...*): o imagine de fabrică (ca la Pixel) se instalează ca scriptul ei `flash-all`, dar **fără
+`-w`, deci aplicațiile și fișierele rămân**. Imaginea trebuie să fie pentru telefonul tău - altfel nu se instalează
+nimic.
+
 Ștergerea datelor cere mereu să tastezi `ERASE`.
 
 ## Linia de comandă

@@ -293,9 +293,9 @@ RO = {
         "Recovery-ul telefonului nu a pornit (sau acest bootloader nu poate face 'reboot recovery'). Dă o imagine FMRRE: fix "
         "--recovery fmrre-recovery.img",
     "Nothing is clearly broken as far as the bootloader can tell. Give an FMRRE image (--recovery) so it can look inside, or "
-    "choose a repair: switch-slot, disable-vbmeta, cancel-update, flash, wipe-data.":
+    "choose a repair: switch-slot, disable-vbmeta, cancel-update, flash, factory, wipe-data.":
         "Din ce vede bootloader-ul, nimic nu este clar stricat. Dă o imagine FMRRE (--recovery) ca să se uite în interior, "
-        "sau alege o reparație: switch-slot, disable-vbmeta, cancel-update, flash, wipe-data.",
+        "sau alege o reparație: switch-slot, disable-vbmeta, cancel-update, flash, factory, wipe-data.",
     "not a vbmeta image (no AVB0 header)": "nu este o imagine vbmeta (lipsește antetul AVB0)",
     "{} in {} is damaged ({}) - download the firmware again.": "{} din {} este deteriorat ({}) - descarcă din nou firmware-ul.",
     "{} is damaged: its MD5 doesn't match - download the firmware again.": "{} este deteriorat: MD5-ul nu se potrivește - descarcă din nou firmware-ul.",
@@ -305,6 +305,25 @@ RO = {
     "{} is not a firmware tar: {}": "{} nu este un tar de firmware: {}",
     "{} doesn't look like a {w} image (header {}) - not flashing it": "{} nu pare o imagine {} (antet {}) - nu se instalează",
     "unpacking {} ({} MB)": "se despachetează {} ({} MB)",
+    "{} is not a factory image zip: {}": "{} nu este un zip cu imagine de fabrică: {}",
+    "{} has no image-*.zip inside: not a factory image (flash an OTA zip with adb sideload instead).":
+        "{} nu conține image-*.zip: nu este o imagine de fabrică (un zip OTA se instalează cu adb sideload).",
+    "This factory image is for {}, but the phone is {}: not flashing it (the wrong bootloader can make a phone unusable).":
+        "Această imagine de fabrică este pentru {}, dar telefonul este {}: nu se instalează (un bootloader greșit poate face "
+        "telefonul inutilizabil).",
+    "(the image doesn't name its phone - check it is the one for {})": "(imaginea nu își numește telefonul - verifică dacă e cea pentru {})",
+    "this phone": "acest telefon",
+    "Reinstall and factory reset: ERASES apps, settings, photos and every file on the phone's internal storage.":
+        "Reinstalare și resetare din fabrică: ȘTERGE aplicațiile, setările, fotografiile și toate fișierele din memoria internă.",
+    "Reinstall the official firmware from {} and ERASE the phone?": "Reinstalezi firmware-ul oficial din {} și ȘTERGI telefonul?",
+    "Reinstall the official firmware from {} (apps and files are kept)?": "Reinstalezi firmware-ul oficial din {} (aplicațiile și fișierele rămân)?",
+    "Flashing the {w} failed - see above. Don't restart the phone: try again, or use the maker's official tool.":
+        "Instalarea {} a eșuat - vezi mai sus. Nu reporni telefonul: încearcă din nou sau folosește unealta oficială a producătorului.",
+    "The phone didn't come back in the bootloader after flashing the {w}.": "Telefonul nu a revenit în bootloader după instalarea {}.",
+    "unpacking {}": "se despachetează {}",
+    "reinstalling the firmware": "reinstalarea firmware-ului",
+    "Factory image zip for this phone": "Zip-ul cu imaginea de fabrică pentru acest telefon",
+    "Reinstall firmware...": "Reinstalează firmware...",
     "==> done": "==> gata", "==> not done": "==> nu s-a făcut", "cancelled": "anulat",
 
     # ---- window

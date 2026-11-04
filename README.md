@@ -265,6 +265,11 @@ ask; Format Data / `-w` always needs `ERASE` typed):
 | FMRRE | Shows Auto repair's diagnosis (`autofix --dry-run`), then repairs |
 | Samsung Download mode | `--recovery`: flashes FMRRE to RECOVERY + a vbmeta with verification disabled (Heimdall), you start recovery with the keys, Auto repair runs. `--ap AP_....tar.md5`: flashes the **stock** boot / init_boot / vendor_boot / recovery / vbmeta / dtbo from your firmware - the `.lz4` images inside are unpacked by the tool (pure Python LZ4), partition names come from the phone's PIT |
 
+**Reinstall the official firmware** (`factory husky-....-factory.zip`, or the window's *Reinstall firmware...*): a
+Pixel-style factory image is flashed like its `flash-all` script - bootloader, radio, then `fastboot update` - but
+**without `-w`, so apps and files are kept** (`--wipe` resets too, after `ERASE` is typed). The board named in the image's
+`android-info.txt` must be this phone's, or nothing is flashed: another phone's bootloader can make it unusable.
+
 Single repairs: `boot-fmrre IMG`, `autofix`, `switch-slot`, `cancel-update`, `disable-vbmeta [--vbmeta stock.img]
 [--both-slots]` (the GSI fix: stock vbmeta with flags set, or a generated empty one), `flash PART IMG` (the image
 header is checked first), `samsung-fmrre IMG`, `samsung-stock AP.tar.md5 [--parts boot,vbmeta]`, `wipe-data`,
