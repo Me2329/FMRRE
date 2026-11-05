@@ -147,6 +147,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "deviceinfo") sc = makeDeviceInfoScreen();
             else if (name == "displaytest") sc = makeDisplayTestScreen();
             else if (name == "samsungap") sc = makeSamsungApScreen(arg);
+            else if (name == "inputtest") sc = makeInputTestScreen();
             else if (name == "backup") sc = makeBackupScreen();
             else if (name == "restore") sc = makeRestoreScreen();
             if (sc) app.push(std::move(sc));

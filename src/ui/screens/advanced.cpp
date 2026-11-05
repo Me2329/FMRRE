@@ -5,6 +5,7 @@
 
 #include "core/log.h"
 #include "core/util.h"
+#include "core/settings.h"
 #include "platform/device.h"
 #include "sys/partitions.h"
 
@@ -318,7 +319,7 @@ public:
     std::string title() const override { return "Input test"; }
     std::string subtitle() const override { return "Press keys, draw on the screen"; }
 
-    void draw(Ui& ui, App&, Rect area) override {
+    void draw(Ui& ui, App& app, Rect area) override {
         Theme& th = ui.th;
         Canvas& c = *ui.c;
         for (auto& e : ui.events()) {
@@ -349,6 +350,25 @@ public:
         for (auto& k : keys_) {
             font::drawIn(c, Face::Mono, ui.dp(13), Rect(info.x + ui.dp(16), ky, info.w, ui.dp(20)), k, th.accent);
             ky += ui.dp(22);
+        }
+        // Touch calibration: if taps land in the wrong place or axis (common on an odd panel), toggle these and the
+        // transform updates live - the drawing pad below shows the effect at once.
+        Rect cal = pad.cutTop(ui.dp(66));
+        ui.card(cal, ui.dp(18));
+        font::drawIn(c, Face::Regular, ui.dp(12), Rect(cal.x + ui.dp(16), cal.y + ui.dp(10), cal.w - ui.dp(32), ui.dp(16)),
+                     "Touch calibration (if taps land in the wrong place)", th.textDim);
+        Settings& st = Settings::get();
+        struct Cal { const char* lbl; const char* key; };
+        Cal cals[] = {{"Swap X/Y", "touch_swap"}, {"Flip X", "touch_flipx"}, {"Flip Y", "touch_flipy"}};
+        float cgap = ui.dp(8), ccw = (cal.w - ui.dp(32) - 2 * cgap) / 3;
+        for (int i = 0; i < 3; i++) {
+            bool on = st.flag(cals[i].key);
+            if (ui.chip(ui.id("cal", i), Rect(cal.x + ui.dp(16) + i * (ccw + cgap), cal.y + ui.dp(30), ccw, ui.dp(30)), cals[i].lbl, on)) {
+                st.setFlag(cals[i].key, !on);
+                st.save();
+                app.applySettings();
+                app.vibrate();
+            }
         }
         pad.cutTop(ui.dp(10));
         ui.card(pad, ui.dp(20), th.surface, false);
