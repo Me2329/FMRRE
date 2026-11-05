@@ -41,7 +41,8 @@ public:
               {Icon::Phone, "Device info", "Model, Android, slot, encryption, CPU", th.accent, 12},
               {Icon::Chart, "System monitor", "Live CPU, memory, battery & thermals", th.accent, 1},
               {Icon::Storage, "Partition info", "Block devices, sizes and flags", th.info, 2},
-              {Icon::Touch, "Input & touch test", "Check keys and touch calibration", th.ok, 3}}},
+              {Icon::Touch, "Input & touch test", "Check keys and touch calibration", th.ok, 3},
+              {Icon::Image, "Display test", "Dead pixels, burn-in, colour uniformity", th.accent2, 13}}},
             {"Tools",
              {{Icon::Folder, "File manager", "Browse, copy, move, chmod", th.warn, 4},
               {Icon::Terminal, "Terminal", "Run shell commands as root", rgb(0x94A3B8), 5},
@@ -89,6 +90,7 @@ public:
             case 2: app.push(makePartInfoScreen()); break;
             case 3: app.push(makeInputTestScreen()); break;
             case 12: app.push(makeDeviceInfoScreen()); break;
+            case 13: app.push(makeDisplayTestScreen()); break;
             case 4: app.push(makeFilesScreen()); break;
             case 5: app.push(makeTerminalScreen()); break;
             case 6: {

@@ -499,6 +499,8 @@ const Entry kRo[] = {
     {"Android", "Android"}, {"Security patch", "Patch de securitate"}, {"Data", "Date"},
     {"Chipset", "Chipset"}, {"CPU", "CPU"}, {"Screen", "Ecran"}, {"FMRRE build", "Versiune FMRRE"},
     {"Fingerprint", "Amprentă build"},
+    {"Display test", "Test ecran"}, {"Dead pixels, burn-in, colour uniformity", "Pixeli morți, burn-in, uniformitatea culorii"},
+    {"Tap to change, Back to leave", "Atinge pentru a schimba, Înapoi pentru a ieși"},
     {"All partitions", "Toate partițiile"}, {"A/B (seamless)", "A/B (fără întreruperi)"},
     {"A-only (dedicated recovery)", "doar A (recovery dedicat)"}, {"encrypted", "criptat"}, {"not encrypted", "necriptat"},
     {"What was flashed, wiped, restored and repaired", "Ce s-a instalat, șters, restaurat și reparat"}, {"Nothing yet", "Nimic încă"},
