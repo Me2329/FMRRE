@@ -173,6 +173,33 @@ def main():
     check("Android: model, LOCKED, how to unlock", "Google Pixel 8 Pro" in out and "LOCKED" in out and "fastboot flashing unlock" in out
           and "OEM unlocking is already allowed" in out, out)
 
+    # ---- OEM-unlock diagnosis (helping the owner of the phone) ----
+    sam = {"ro.product.manufacturer": "Samsung", "ro.product.model": "SM-S938B", "ro.product.device": "pa3q",
+           "ro.build.version.release": "16", "ro.boot.flash.locked": "1", "ro.boot.verifiedbootstate": "green",
+           "sys.oem_unlock_allowed": "0"}
+    phone("android", props=sam)
+    rc, out = run("check-unlock")
+    check("check-unlock: Samsung international, toggle hidden by VaultKeeper (only hidden, not gone)",
+          rc == 0 and "VaultKeeper" in out and "international" in out and "7-day" in out, out)
+
+    phone("android", props=dict(sam, **{"ro.product.model": "SM-S938U"}))
+    rc, out = run("check-unlock")
+    check("check-unlock: Samsung US (SM-...U) can't be unlocked, no bypass offered",
+          "can't be unlocked" in out and "US carrier" in out and "bypass" in out, out)
+
+    phone("android", props=dict(sam, **{"sys.oem_unlock_allowed": "1"}))
+    rc, out = run("check-unlock")
+    check("check-unlock: toggle already on -> you can unlock", "you can unlock" in out, out)
+
+    phone("download")
+    rc, out = run("check-unlock")
+    check("check-unlock: Samsung Download mode -> read OEM LOCK / KG STATE on the screen",
+          "OEM LOCK" in out and "KG STATE" in out, out)
+
+    phone("android", props=sam)
+    rc, out = run("--lang", "ro", "check-unlock")
+    check("check-unlock: Romanian", "VaultKeeper" in out and ("debloc" in out.lower()), out)
+
     # A locked phone: the official OTA goes in with adb sideload (the stock recovery checks the signature).
     import zipfile
     ota = os.path.join(work, "husky-ota.zip")

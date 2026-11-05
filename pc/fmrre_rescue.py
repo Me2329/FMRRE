@@ -21,6 +21,7 @@ it explains how to unlock it, and which official tool restores the firmware inst
   fmrre_rescue.py                    a window (or the status, on a computer without tkinter)
   fmrre_rescue.py status [--json]    which phone, which mode, bootloader locked or not
   fmrre_rescue.py diagnose           the status and what is wrong
+  fmrre_rescue.py check-unlock       can the bootloader be unlocked, and if not now, why (your own phone)
   fmrre_rescue.py fix [--recovery fmrre-recovery.img] [--ap AP.tar.md5] [--yes]
                                       "fix it for me" (asks before every change)
   fmrre_rescue.py boot-fmrre IMG     start FMRRE from RAM (fastboot boot)
@@ -496,6 +497,125 @@ def detect(r):
     return ph
 
 
+# Samsung model-number suffix -> (region, can the bootloader ever be unlocked?). The suffix is the letters right
+# after the digits in SM-xxxx<suffix> (e.g. SM-S938B -> "B"). US (U / U1), Canada (W), South Korea (N) and the
+# Japanese carrier models have the bootloader locked for good - no OEM-unlock toggle ever appears, by design, and
+# there is no legitimate way around that. The international/global "B" (and China "0") models are unlockable.
+SAMSUNG_REGION = {
+    "U": ("US carrier", False), "U1": ("US unlocked", False), "W": ("Canada", False), "N": ("South Korea", False),
+    "B": ("international / Europe", True), "0": ("China", True), "E": ("Latin America / Asia", True),
+    "F": ("global", True), "M": ("Latin America / Asia", True), "G": ("global", True),
+}
+
+
+def samsung_region(model):
+    """(suffix, region, unlockable True/False/None) from a Samsung model like 'SM-S938B'; None if not recognisable."""
+    m = re.match(r"^SM-[A-Z]\d{3,4}([A-Z0-9]*)", (model or "").upper().replace(" ", ""))
+    if not m:
+        if re.match(r"^(SC-|SCG|SCV)", (model or "").upper()):  # Japanese carrier models (docomo / au): locked
+            return ("", "Japan carrier", False)
+        return None
+    suf = m.group(1)
+    for key in (suf[:2], suf[:1]):  # "U1" before "U"
+        if key in SAMSUNG_REGION:
+            region, ok = SAMSUNG_REGION[key]
+            return (key, region, ok)
+    return (suf, "", None) if suf else ("", "", None)
+
+
+def get_unlock_ability(r, ph):
+    """fastboot: 1 = OEM unlocking allowed, 0 = not, None = the bootloader doesn't say."""
+    for args in (("flashing", "get_unlock_ability"), ("oem", "get_unlock_ability")):
+        rc, out = r.call("fastboot", *args, timeout=15)
+        mo = re.search(r"get_unlock_ability:\s*(\d)", out) or re.search(r"unlock_ability:\s*(\d)", out)
+        if mo:
+            return mo.group(1) == "1"
+    return None
+
+
+def unlock_diagnosis(r, ph):
+    """A Finding: can this phone's bootloader be unlocked, and if not now, why - for the owner. No bypass."""
+    maker = ph.maker
+    sr = samsung_region(ph.model) if maker == "samsung" or (ph.model or "").upper().startswith(("SM-", "SC-", "SCG", "SCV")) else None
+    samsung = maker == "samsung" or sr is not None
+
+    if ph.mode in ("none", "unauthorized", "offline"):
+        return Finding(1, "Connect the phone to read the unlock state",
+                       "Plug it in with Android running (USB debugging on) or in the bootloader, so the tool can read the OEM-unlock "
+                       "state. In Samsung Download mode the state is only on the phone's screen.")
+
+    # Already unlocked: nothing to do.
+    if ph.locked is False or (ph.mode in ("fastboot", "fastbootd") and ph.vars.get("unlocked", "").lower() in ("yes", "true")):
+        lines = ["The bootloader is already unlocked - FMRRE and other images can be flashed."]
+        if ph.props.get("ro.boot.warranty_bit") == "1" or ph.props.get("ro.warranty_bit") == "1":
+            lines.append("Samsung Knox is already tripped, as unlocking does.")
+        return Finding(0, "The bootloader is unlocked", "\n".join(lines))
+
+    # The permanently-locked models: say so plainly, with the official-firmware route (no bypass).
+    if sr and sr[2] is False:
+        return Finding(2, "This model's bootloader can't be unlocked", "\n".join([
+            "The model number {} is a {} unit (suffix {}), with the bootloader locked for good.".format(ph.model, sr[1], sr[0] or "?"),
+            "The OEM-unlock toggle never appears, and there is no legitimate way around it - this tool won't bypass it.",
+            "You can still reinstall the official firmware (Smart Switch Emergency Recovery, or Odin with BL/AP/CP/CSC), and the "
+            "stock recovery can 'Apply update from ADB' with an official OTA."]))
+
+    # fastboot: ask the bootloader directly.
+    if ph.mode in ("fastboot", "fastbootd"):
+        ua = ph.unlock_allowed if ph.unlock_allowed is not None else get_unlock_ability(r, ph)
+        if ua is True:
+            return Finding(0, "OEM unlocking is allowed - you can unlock now", "\n".join([
+                "'fastboot flashing unlock' (some makers: 'fastboot oem unlock') unlocks it. It ERASES the phone.",
+                UNLOCK_HELP.get(maker, UNLOCK_DEFAULT)]))
+        if ua is False:
+            return Finding(2, "OEM unlocking is turned OFF", "\n".join([
+                "The bootloader reports unlocking is not allowed. Boot Android, turn ON 'OEM unlocking' in Developer options, then "
+                "try again.", UNLOCK_HELP.get(maker, UNLOCK_DEFAULT)]))
+        return Finding(1, "This bootloader doesn't report the unlock state", "\n".join([
+            "Boot Android and check Developer options > OEM unlocking.", UNLOCK_HELP.get(maker, UNLOCK_DEFAULT)]))
+
+    # Download mode: the tool can't read it - tell the owner exactly what to read on the phone.
+    if ph.mode == "download":
+        lines = ["Download mode shows the state on the phone's screen, not to the computer. Read these lines:",
+                 "  OEM LOCK: OFF (U) -> unlockable or unlocked; ON (L) -> locked.",
+                 "  KG STATE / RMM STATE: Checking or Prenormal -> Knox Guard / RMM hasn't released it yet (be online and signed in, "
+                 "wait the period); Normal or Removed -> clear; a KG lock -> a carrier or finance lock is holding it.",
+                 "  Carrier: a carrier name here means a carrier or MDM lock may apply."]
+        if sr and sr[2]:
+            lines.append("Model {} is the {} version, unlockable once the toggle is released.".format(ph.model, sr[1]))
+        elif sr and sr[2] is False:
+            lines.append("Model {} is a {} unit - permanently locked, no custom flashing.".format(ph.model, sr[1]))
+        return Finding(1, "Samsung Download mode: check the screen", "\n".join(lines))
+
+    # Android / recovery: sys.oem_unlock_allowed plus the Samsung VaultKeeper reasons.
+    a = ph.props.get("sys.oem_unlock_allowed", "")
+    if a == "1":
+        return Finding(0, "OEM unlocking is allowed - you can unlock", "\n".join([
+            "Developer options > OEM unlocking is already ON.",
+            UNLOCK_HELP["samsung"] if samsung else UNLOCK_HELP.get(maker, UNLOCK_DEFAULT)]))
+
+    if samsung:
+        lines = ["On Samsung the 'OEM unlocking' switch only appears once VaultKeeper is satisfied the phone is yours:",
+                 "  1. Sign into a Google account AND a Samsung account, with a screen lock set.",
+                 "  2. Connect to Wi-Fi or mobile data and stay online a while - it checks a Samsung server.",
+                 "  3. Wait the ~7-day (168 h) period since setup or the last factory reset, then re-open Developer options.",
+                 "Jumping the clock forward is patched and defeats the anti-theft wait, so don't rely on it."]
+        if sr and sr[2]:
+            lines.append("Your model {} is the {} version, which is unlockable - so the toggle is only hidden, not gone.".format(ph.model, sr[1]))
+        elif sr is None and ph.model:
+            lines.append("Check your exact model number: if it ends in U, U1, W or N (US / Canada / Korea) it can't be unlocked at all.")
+        lines.append("Once the switch is on: power off, hold Volume Up + Volume Down, plug in the cable, then long-press Volume Up to "
+                     "unlock (this ERASES the phone and trips Knox for good).")
+        return Finding(1, "Samsung: the OEM-unlock toggle is hidden by VaultKeeper", "\n".join(lines))
+
+    if a == "0":
+        return Finding(2, "OEM unlocking is OFF in Developer options", "\n".join([
+            "Settings > Developer options > turn ON 'OEM unlocking' (enable Developer options first: tap Build number 7x).",
+            UNLOCK_HELP.get(maker, UNLOCK_DEFAULT)]))
+    return Finding(1, "Turn on OEM unlocking to unlock the bootloader", "\n".join([
+        "Settings > About phone > tap Build number 7x, then Developer options > OEM unlocking.",
+        UNLOCK_HELP.get(maker, UNLOCK_DEFAULT)]))
+
+
 def lock_verdict(ph):
     """(word, tone, explanation); tone is ok / bad / warn."""
     if ph.mode == "none":
@@ -677,6 +797,11 @@ def diagnose(r, ph, image=None):
                              "reboot_bootloader"))
     elif m == "sideload":
         f.append(Finding(0, "Waiting for adb sideload", "'adb sideload <rom-or-ota>.zip' installs it; cancel sideload on the phone to get back."))
+    # Samsung owners trying to unlock: spell out the OEM-unlock situation (VaultKeeper waiting, region lock, or ready).
+    if ph.maker == "samsung" and m in ("android", "recovery", "download") and ph.locked is not False:
+        uf = unlock_diagnosis(r, ph)
+        if not any(x.title == uf.title for x in f):
+            f.append(uf)
     return f
 
 
@@ -1411,6 +1536,7 @@ def main(argv=None):
     p = sub.add_parser("status")
     p.add_argument("--json", action="store_true")
     sub.add_parser("diagnose").add_argument("--recovery")
+    sub.add_parser("check-unlock", help="can this phone's bootloader be unlocked, and if not now, why (owner help)")
     p = sub.add_parser("fix")
     p.add_argument("--recovery", help="FMRRE image for this phone (started from RAM, or installed in Download mode)")
     p.add_argument("--ap", help="Samsung: the firmware's AP .tar.md5 (stock boot / vbmeta / recovery are flashed from it)")
@@ -1484,6 +1610,11 @@ def main(argv=None):
         print_status(ph)
         print()
         print_findings(diagnose(r, ph, getattr(a, "recovery", None)))
+        return 0 if ph.mode != "none" else 3
+    if a.cmd == "check-unlock":
+        print_status(ph)
+        print()
+        print_findings([unlock_diagnosis(r, ph)])
         return 0 if ph.mode != "none" else 3
     try:
         if a.cmd == "fix":
@@ -1655,6 +1786,23 @@ def run_gui(a):
     btn(row1, "Fix it for me", rs.fix, big=True).pack(side="left")
     btn(row1, "Start FMRRE", lambda: rs.boot_fmrre(img_var.get().strip()) and rs.autofix()).pack(side="left", padx=(10, 0))
     btn(row1, "Auto repair (FMRRE)", rs.autofix).pack(side="left", padx=4)
+
+    def check_unlock_gui():  # read-only: just explains the OEM-unlock situation in the log
+        if busy.is_set():
+            return
+
+        def work():
+            rr = Runner(log=lambda s: None, serial=a.serial)
+            ph2 = detect(rr)
+            uf = unlock_diagnosis(rr, ph2)
+            log("")
+            log(T("Can I unlock?") + (" - " + ph2.name if ph2.mode != "none" else ""))
+            log({2: "xx  ", 1: "!   "}.get(uf.level, "i   ") + T(uf.title))
+            for line in T(uf.detail).splitlines():
+                log("     " + line)
+        threading.Thread(target=work, daemon=True).start()
+    cub = ttk.Button(row1, text=T("Can I unlock?"), command=check_unlock_gui)
+    cub.pack(side="left", padx=4)
 
     def sideload_dialog():
         f = filedialog.askopenfilename(title=T("OTA or ROM zip"), filetypes=[("Zip", "*.zip"), ("All files", "*")])

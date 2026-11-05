@@ -117,6 +117,87 @@ RO = {
         "instalează Heimdall (Linux: sudo apt install heimdall-flash, macOS: brew install heimdall) sau folosește Odin pe Windows",
     "{w} is not installed - {}": "{} nu este instalat - {}",
 
+    # ---- OEM-unlock diagnosis (check-unlock)
+    "can the bootloader be unlocked, and if not now, why (your own phone)":
+        "dacă bootloader-ul se poate debloca, iar dacă nu acum, de ce (telefonul tău)",
+    "Can I unlock?": "Pot debloca?",
+    "Connect the phone to read the unlock state": "Conectează telefonul ca să se citească starea de deblocare",
+    "Plug it in with Android running (USB debugging on) or in the bootloader, so the tool can read the OEM-unlock state. In "
+    "Samsung Download mode the state is only on the phone's screen.":
+        "Conectează-l cu Android pornit (depanare USB activată) sau în bootloader, ca unealta să poată citi starea de deblocare "
+        "OEM. În modul Download Samsung starea e doar pe ecranul telefonului.",
+    "The bootloader is unlocked": "Bootloader-ul este deblocat",
+    "The bootloader is already unlocked - FMRRE and other images can be flashed.":
+        "Bootloader-ul este deja deblocat - FMRRE și alte imagini pot fi instalate.",
+    "Samsung Knox is already tripped, as unlocking does.":
+        "Knox Samsung este deja declanșat, așa cum face deblocarea.",
+    "This model's bootloader can't be unlocked": "Bootloader-ul acestui model nu se poate debloca",
+    "The model number {} is a {} unit (suffix {}), with the bootloader locked for good.":
+        "Numărul de model {} este o unitate {} (sufix {}), cu bootloader-ul blocat definitiv.",
+    "The OEM-unlock toggle never appears, and there is no legitimate way around it - this tool won't bypass it.":
+        "Comutatorul de deblocare OEM nu apare niciodată și nu există o cale legitimă de a-l ocoli - unealta asta nu îl ocolește.",
+    "You can still reinstall the official firmware (Smart Switch Emergency Recovery, or Odin with BL/AP/CP/CSC), and the stock "
+    "recovery can 'Apply update from ADB' with an official OTA.":
+        "Poți reinstala firmware-ul oficial (Smart Switch Emergency Recovery sau Odin cu BL/AP/CP/CSC), iar recovery-ul original "
+        "poate 'Apply update from ADB' cu un OTA oficial.",
+    "OEM unlocking is allowed - you can unlock now": "Deblocarea OEM este permisă - poți debloca acum",
+    "'fastboot flashing unlock' (some makers: 'fastboot oem unlock') unlocks it. It ERASES the phone.":
+        "'fastboot flashing unlock' (la unii producători: 'fastboot oem unlock') îl deblochează. ȘTERGE telefonul.",
+    "OEM unlocking is turned OFF": "Deblocarea OEM este OPRITĂ",
+    "The bootloader reports unlocking is not allowed. Boot Android, turn ON 'OEM unlocking' in Developer options, then try again.":
+        "Bootloader-ul raportează că deblocarea nu e permisă. Pornește Android, activează 'Deblocare OEM' în Opțiuni dezvoltator, "
+        "apoi încearcă din nou.",
+    "This bootloader doesn't report the unlock state": "Acest bootloader nu raportează starea de deblocare",
+    "Boot Android and check Developer options > OEM unlocking.":
+        "Pornește Android și verifică Opțiuni dezvoltator > Deblocare OEM.",
+    "Samsung Download mode: check the screen": "Modul Download Samsung: verifică ecranul",
+    "Download mode shows the state on the phone's screen, not to the computer. Read these lines:":
+        "Modul Download arată starea pe ecranul telefonului, nu calculatorului. Citește aceste linii:",
+    "OEM LOCK: OFF (U) -> unlockable or unlocked; ON (L) -> locked.":
+        "  OEM LOCK: OFF (U) -> deblocabil sau deblocat; ON (L) -> blocat.",
+    "KG STATE / RMM STATE: Checking or Prenormal -> Knox Guard / RMM hasn't released it yet (be online and signed in, wait the "
+    "period); Normal or Removed -> clear; a KG lock -> a carrier or finance lock is holding it.":
+        "  KG STATE / RMM STATE: Checking sau Prenormal -> Knox Guard / RMM nu a eliberat încă (fii online și autentificat, "
+        "așteaptă perioada); Normal sau Removed -> liber; o blocare KG -> o blocare de operator sau de finanțare îl ține.",
+    "Carrier: a carrier name here means a carrier or MDM lock may apply.":
+        "  Carrier: un nume de operator aici înseamnă că poate exista o blocare de operator sau MDM.",
+    "Model {} is the {} version, unlockable once the toggle is released.":
+        "Modelul {} este versiunea {}, deblocabil odată ce comutatorul este eliberat.",
+    "Model {} is a {} unit - permanently locked, no custom flashing.":
+        "Modelul {} este o unitate {} - blocat permanent, fără instalări personalizate.",
+    "OEM unlocking is allowed - you can unlock": "Deblocarea OEM este permisă - poți debloca",
+    "Developer options > OEM unlocking is already ON.": "Opțiuni dezvoltator > Deblocare OEM este deja PORNITĂ.",
+    "Samsung: the OEM-unlock toggle is hidden by VaultKeeper":
+        "Samsung: comutatorul de deblocare OEM este ascuns de VaultKeeper",
+    "On Samsung the 'OEM unlocking' switch only appears once VaultKeeper is satisfied the phone is yours:":
+        "La Samsung comutatorul 'Deblocare OEM' apare doar după ce VaultKeeper se convinge că telefonul e al tău:",
+    "1. Sign into a Google account AND a Samsung account, with a screen lock set.":
+        "  1. Autentifică-te cu un cont Google ȘI un cont Samsung, cu blocare de ecran setată.",
+    "2. Connect to Wi-Fi or mobile data and stay online a while - it checks a Samsung server.":
+        "  2. Conectează-te la Wi-Fi sau date mobile și stai online o vreme - verifică un server Samsung.",
+    "3. Wait the ~7-day (168 h) period since setup or the last factory reset, then re-open Developer options.":
+        "  3. Așteaptă perioada de ~7 zile (168 h) de la configurare sau ultima resetare din fabrică, apoi redeschide Opțiuni dezvoltator.",
+    "Jumping the clock forward is patched and defeats the anti-theft wait, so don't rely on it.":
+        "Mutarea ceasului înainte este reparată și ocolește așteptarea anti-furt, deci nu te baza pe ea.",
+    "Your model {} is the {} version, which is unlockable - so the toggle is only hidden, not gone.":
+        "Modelul tău {} este versiunea {}, care este deblocabilă - deci comutatorul e doar ascuns, nu dispărut.",
+    "Check your exact model number: if it ends in U, U1, W or N (US / Canada / Korea) it can't be unlocked at all.":
+        "Verifică numărul exact de model: dacă se termină în U, U1, W sau N (SUA / Canada / Coreea) nu se poate debloca deloc.",
+    "Once the switch is on: power off, hold Volume Up + Volume Down, plug in the cable, then long-press Volume Up to unlock (this "
+    "ERASES the phone and trips Knox for good).":
+        "Odată ce comutatorul e pornit: oprește telefonul, ține Volum Sus + Volum Jos, conectează cablul, apoi apasă lung Volum Sus "
+        "pentru deblocare (asta ȘTERGE telefonul și declanșează Knox definitiv).",
+    "OEM unlocking is OFF in Developer options": "Deblocarea OEM este OPRITĂ în Opțiuni dezvoltator",
+    "Settings > Developer options > turn ON 'OEM unlocking' (enable Developer options first: tap Build number 7x).":
+        "Setări > Opțiuni dezvoltator > activează 'Deblocare OEM' (întâi activează Opțiuni dezvoltator: apasă Build number de 7 ori).",
+    "Turn on OEM unlocking to unlock the bootloader": "Activează Deblocarea OEM ca să deblochezi bootloader-ul",
+    "Settings > About phone > tap Build number 7x, then Developer options > OEM unlocking.":
+        "Setări > Despre telefon > apasă Build number de 7 ori, apoi Opțiuni dezvoltator > Deblocare OEM.",
+    # region names (translated inside the model lines above)
+    "US carrier": "operator SUA", "US unlocked": "deblocat SUA", "Canada": "Canada", "South Korea": "Coreea de Sud",
+    "international / Europe": "internațional / Europa", "China": "China", "global": "global",
+    "Latin America / Asia": "America Latină / Asia", "Japan carrier": "operator Japonia",
+
     # ---- findings
     "No phone found": "Niciun telefon găsit",
     "USB debugging isn't allowed for this computer": "Depanarea USB nu este permisă pentru acest calculator",

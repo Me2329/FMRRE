@@ -252,6 +252,14 @@ Plug the phone in, in whatever mode it is in, and it tells you:
   - Samsung Download mode doesn't tell the computer. The tool says what to read on the phone's screen
     (`OEM LOCK: OFF (U)`, `KG STATE`) and waits for you to confirm.
 
+**"Can I unlock?"** (`fmrre_rescue.py check-unlock`, or the window's button) is a separate, read-only answer for
+your **own** phone when the *OEM unlocking* switch is missing or greyed out. It reads `sys.oem_unlock_allowed`, the
+bootloader lock state (`fastboot flashing get_unlock_ability`) and the **Samsung model-number suffix**, and tells you
+which case you are in: already unlockable, the toggle just turned off, **Samsung VaultKeeper hasn't released it yet**
+(sign into a Google + Samsung account, stay online, wait the ~7-day timer), or a **model that can't be unlocked at
+all** (US/carrier/Korea Snapdragon units — suffix `U`/`U1`/`W`/`N`). It diagnoses; it never bypasses a lock — a
+permanently-locked model is told so plainly, with the official-firmware route instead.
+
 On a **locked** phone it flashes nothing: it explains how that maker's phones are unlocked (unlocking erases the
 phone), and which **official** tool restores the firmware instead (Pixel Repair, Smart Switch / Odin...). The one repair
 it does on a locked phone is the official one: **`sideload <official full OTA>.zip`** (or `fix --ota`) restarts the

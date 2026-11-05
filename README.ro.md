@@ -60,6 +60,13 @@ Conectezi telefonul, în orice mod ar fi, și îți spune:
 - **dacă bootloader-ul e deblocat**. În modul Download Samsung calculatorul nu poate afla, așa că îți spune ce să
   citești pe ecranul telefonului (`OEM LOCK: OFF (U)`).
 
+**„Pot debloca?"** (`fmrre_rescue.py check-unlock`, sau butonul din fereastră) e un răspuns separat, doar de citire,
+pentru **telefonul tău** când comutatorul *Deblocare OEM* lipsește sau e gri. Citește `sys.oem_unlock_allowed`, starea
+bootloader-ului și **sufixul numărului de model Samsung** și îți spune în ce caz ești: deja deblocabil, comutatorul
+abia oprit, **VaultKeeper încă nu l-a eliberat** (intră cu cont Google + Samsung, stai online, așteaptă ~7 zile) sau un
+**model care nu se poate debloca deloc** (unități Snapdragon din SUA/operator/Coreea — sufix `U`/`U1`/`W`/`N`). Doar
+diagnostichează; nu ocolește niciodată o blocare.
+
 **Pe un telefon blocat nu instalează nimic modificat**: îți explică cum se deblochează la producătorul tău (deblocarea
 șterge telefonul) și ce unealtă oficială poate reinstala firmware-ul. Singura reparație pe care o face pe un telefon
 blocat este cea oficială: **`fmrre_rescue.py sideload <OTA oficial complet>.zip`** repornește telefonul în *Apply update
