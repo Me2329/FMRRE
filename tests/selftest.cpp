@@ -13,6 +13,8 @@
 #include <unistd.h>
 
 #include "core/bunzip2.h"
+#include "core/crc32.h"
+#include "core/gzip.h"
 #include "core/crypt.h"
 #include "core/i18n.h"
 #include "core/log.h"
@@ -1563,6 +1565,87 @@ static bool zstdDecode(const std::string& in, std::string& out, std::string& err
     }
 }
 
+// ---- CRC-32, gzip on several threads, gzip with several members ------------------------------------
+static bool gunzipAll(const std::string& gz, std::string& out, std::string& err, int* members = nullptr, size_t step = 1 << 16) {
+    size_t pos = 0;
+    GunzipReader r([&](uint8_t* p, size_t n) -> ssize_t {
+        size_t k = std::min({n, step, gz.size() - pos});
+        memcpy(p, gz.data() + pos, k);
+        pos += k;
+        return ssize_t(k);
+    });
+    out.clear();
+    char buf[70000];
+    for (;;) {
+        ssize_t k = r.read(buf, sizeof buf);
+        if (k < 0) return err = r.error(), false;
+        if (k == 0) break;
+        out.append(buf, size_t(k));
+    }
+    if (members) *members = r.members();
+    return true;
+}
+
+static std::string gzipWith(const std::string& in, unsigned threads, size_t step) {
+    std::string out;
+    GzipWriter w([&](const void* d, size_t n) { return out.append((const char*)d, n), true; }, 1, threads);
+    for (size_t i = 0; i < in.size(); i += step) CHECK(w.write(in.data() + i, std::min(step, in.size() - i)));
+    CHECK(w.finish());
+    return out;
+}
+
+static void testGzip() {
+    CHECK(crc32::update(0, "123456789", 9) == 0xCBF43926u && crc32::update(0, "", 0) == 0);
+    std::string t = zText(300000) + zNoise(50000);
+    uint32_t whole = crc32::update(0, t.data(), t.size());
+    for (size_t cut : {size_t(0), size_t(1), size_t(7), size_t(4096), size_t(123457), t.size()}) {
+        uint32_t a = crc32::update(0, t.data(), cut), b = crc32::update(0, t.data() + cut, t.size() - cut);
+        CHECK(crc32::combine(a, b, t.size() - cut) == whole);           // pieces checked apart, joined
+        CHECK(crc32::update(a, t.data() + cut, t.size() - cut) == whole);  // and in one go
+        CHECK(uint32_t(mz_crc32(0, (const unsigned char*)t.data(), cut)) == a);
+    }
+    // Several 1 MiB pieces: compressible text, noise, zeros; different thread counts and write sizes give the same data.
+    std::string in = zText(1800000) + zNoise(700000) + std::string(900000, '\0') + zText(333, 3);
+    for (unsigned threads : {1u, 3u, 0u}) {
+        std::string gz = gzipWith(in, threads, threads == 3 ? 77777 : 1 << 20), out, err;
+        int members = 0;
+        CHECK(gz.size() > 18 && gz.size() < in.size() / 2 && (uint8_t)gz[0] == 0x1f && (uint8_t)gz[1] == 0x8b);
+        CHECK(gunzipAll(gz, out, err, &members) && out == in && members == 1);
+        CHECK(gunzipAll(gz, out, err, nullptr, 1) && out == in);  // the input one byte at a time
+        // one plain deflate stream: miniz reads it in one go too
+        std::string raw(in.size(), '\0');
+        mz_stream zs{};
+        mz_inflateInit2(&zs, -MZ_DEFAULT_WINDOW_BITS);
+        zs.next_in = (const unsigned char*)gz.data() + 10;
+        zs.avail_in = unsigned(gz.size() - 18);
+        zs.next_out = (unsigned char*)&raw[0];
+        zs.avail_out = unsigned(raw.size());
+        CHECK(mz_inflate(&zs, MZ_FINISH) == MZ_STREAM_END && zs.avail_in == 0 && raw == in);
+        mz_inflateEnd(&zs);
+    }
+    std::string empty = gzipWith("", 2, 1), out, err;
+    CHECK(gunzipAll(empty, out, err) && out.empty());
+    // Members back to back (and zero padding after them) are all read.
+    std::string a = gzipWith(zText(5000), 1, 999), b = gzipWith(zNoise(3000), 2, 1 << 20);
+    int members = 0;
+    CHECK(gunzipAll(a + b + a + std::string(600, '\0'), out, err, &members) && out == zText(5000) + zNoise(3000) + zText(5000) && members == 3);
+    // Damage is refused: the CRC, the length, a cut, bytes after the end, not gzip at all.
+    std::string bad = a;
+    bad[bad.size() - 8] ^= 1;
+    CHECK(!gunzipAll(bad, out, err) && err.find("CRC") != std::string::npos);
+    bad = a;
+    bad[bad.size() - 1] ^= 1;
+    CHECK(!gunzipAll(bad, out, err) && err.find("length") != std::string::npos);
+    CHECK(!gunzipAll(a.substr(0, a.size() - 3), out, err) && err.find("cut off") != std::string::npos);
+    CHECK(!gunzipAll(a + "x", out, err) && err.find("after the end") != std::string::npos);
+    CHECK(!gunzipAll(zText(100), out, err) && err.find("not a gzip") != std::string::npos);
+    CHECK(!gunzipAll("", out, err));
+    // A gzip header with every optional field (name, comment, extra, header CRC), as other tools write it.
+    std::string full = std::string("\x1f\x8b\x08\x1e\0\0\0\0\0\x03", 10) + std::string("\x03\0abc", 5) + "name.tar" + '\0' + "comment" + '\0' + "\x12\x34" +
+                       a.substr(10);
+    CHECK(gunzipAll(full, out, err) && out == zText(5000));
+}
+
 static void testZstd(const std::string& dir) {
     // xxHash64 reference values (the xxhash library)
     CHECK(Xxh64::of("", 0) == 0xef46db3751d8e999ull && Xxh64::of("abc", 3) == 0x44bc2cf5ad770999ull);
@@ -1691,6 +1774,7 @@ int main() {
     testDecoders(dir);
     testLz4(dir);
     testZstd(dir);
+    testGzip();
     testTar(dir);
     testZipSig(dir);
     testPayload(dir);

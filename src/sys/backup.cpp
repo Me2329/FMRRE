@@ -9,7 +9,7 @@
 #include "platform/device.h"
 #include "sys/partitions.h"
 #include "sys/tar.h"
-#include "miniz.h"
+#include "core/gzip.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -57,31 +57,19 @@ public:
             std::string header;
             if (!enc_->beginEncrypt(password, header) || !putRaw(header.data(), header.size())) return false;
         }
-        if (gzip_) {
-            memset(&zs_, 0, sizeof(zs_));
-            if (mz_deflateInit2(&zs_, 1, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 9, MZ_DEFAULT_STRATEGY) != MZ_OK) return false;
-            const unsigned char hdr[10] = {0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3};
-            return put(hdr, 10);
-        }
+        // Compressed on every core (pigz-style, one ordinary gzip member); written here, in order, on this thread.
+        if (gzip_) gz_ = std::make_unique<GzipWriter>([this](const void* d, size_t n) { return put(d, n); });
         return true;
     }
     bool write(const void* data, size_t n) {
         in_ += n;
-        if (!gzip_) return put(data, n);
-        crc_ = (uint32_t)mz_crc32(crc_, (const unsigned char*)data, n);
-        zs_.next_in = (const unsigned char*)data;
-        zs_.avail_in = (unsigned)n;
-        return pump(MZ_NO_FLUSH);
+        return gzip_ ? gz_->write(data, n) : put(data, n);
     }
     bool close() {
         bool ok = true;
-        if (gzip_) {
-            ok = pump(MZ_FINISH);
-            mz_deflateEnd(&zs_);
-            unsigned char tail[8];
-            for (int i = 0; i < 4; i++) tail[i] = uint8_t(crc_ >> (8 * i));
-            for (int i = 0; i < 4; i++) tail[4 + i] = uint8_t(uint32_t(in_) >> (8 * i));
-            ok = ok && put(tail, 8);
+        if (gz_) {
+            ok = gz_->finish();
+            gz_.reset();
         }
         if (ok && enc_) {
             std::string tag = enc_->tag();
@@ -113,24 +101,9 @@ private:
         }
         return true;
     }
-    bool pump(int flush) {
-        unsigned char buf[1 << 16];
-        for (;;) {
-            zs_.next_out = buf;
-            zs_.avail_out = sizeof(buf);
-            int r = mz_deflate(&zs_, flush);
-            size_t have = sizeof(buf) - zs_.avail_out;
-            if (have && !put(buf, have)) return false;
-            if (r == MZ_STREAM_END) return true;
-            if (r != MZ_OK && r != MZ_BUF_ERROR) return false;
-            if (flush == MZ_NO_FLUSH && zs_.avail_in == 0) return true;
-            if (flush == MZ_FINISH && have == 0 && r == MZ_BUF_ERROR) return true;
-        }
-    }
     int fd_ = -1;
     bool gzip_ = false;
-    mz_stream zs_{};
-    uint32_t crc_ = 0;
+    std::unique_ptr<GzipWriter> gz_;
     uint64_t in_ = 0, out_ = 0;
     Sha256 sha_;
     std::unique_ptr<crypt::Stream> enc_;
@@ -229,8 +202,9 @@ bool create(const Options& o, Task& t) {
         return false;
     }
     t.print("Backup folder: %s", dir.c_str());
-    t.print("Compression: %s, SHA-256: %s, encryption: %s", o.compress ? "gzip" : "off", o.digest ? "on" : "off",
-            o.password.empty() ? "off" : "AES-256");
+    unsigned cores = GzipWriter::defaultThreads();
+    std::string comp = !o.compress ? "off" : "gzip on " + std::to_string(cores) + (cores == 1 ? " core" : " cores");
+    t.print("Compression: %s, SHA-256: %s, encryption: %s", comp.c_str(), o.digest ? "on" : "off", o.password.empty() ? "off" : "AES-256");
     // Weight progress per partition by estimated size.
     std::vector<uint64_t> est;
     uint64_t total = 0;
@@ -427,55 +401,28 @@ static bool streamOut(const std::string& file, const PlainSink& sink, Task& t, u
     std::string err;
     if (!in.open(file, password, err)) { t.print("  %s: %s", util::basename(file).c_str(), err.c_str()); return false; }
     bool gz = in.isGzip();
-    std::vector<unsigned char> ib(1 << 18), ob(1 << 18);
-    mz_stream zs{};
+    std::vector<unsigned char> ob(1 << 18);
     bool ok = true;
     int64_t t0 = util::nowMs();
-    auto writeAll = [&](const unsigned char* d, size_t n) {
-        if (!sink(d, n)) return false;
-        written += n;
-        return true;
-    };
-    if (gz) {
-        // Parse gzip header (we accept FNAME/FEXTRA/FCOMMENT for classic TWRP/pigz backups).
-        unsigned char h[10];
-        if (!in.readFull(h, 10)) return false;
-        int flg = h[3];
-        auto skipZ = [&]() { unsigned char c; while (in.readFull(&c, 1) && c) {} };
-        if (flg & 4) { unsigned char x[2] = {0, 0}; if (!in.readFull(x, 2) || !in.skip(size_t(x[0] | (x[1] << 8)))) return false; }
-        if (flg & 8) skipZ();
-        if (flg & 16) skipZ();
-        if (flg & 2 && !in.skip(2)) return false;
-        mz_inflateInit2(&zs, -MZ_DEFAULT_WINDOW_BITS);
-    }
-    bool streamEnd = false;
-    while (ok && !streamEnd && !t.cancelled()) {
-        ssize_t n = in.read(ib.data(), ib.size());
-        if (n <= 0) break;
-        if (!gz) {
-            ok = writeAll(ib.data(), n);
-        } else {
-            zs.next_in = ib.data();
-            zs.avail_in = (unsigned)n;
-            while (zs.avail_in && ok) {
-                zs.next_out = ob.data();
-                zs.avail_out = (unsigned)ob.size();
-                int r = mz_inflate(&zs, MZ_NO_FLUSH);
-                size_t have = ob.size() - zs.avail_out;
-                if (have) ok = writeAll(ob.data(), have);
-                if (r == MZ_STREAM_END) {
-                    // pigz/TWRP may concatenate gzip members; we only support one member.
-                    streamEnd = true;
-                    break;
-                }
-                if (r != MZ_OK && r != MZ_BUF_ERROR) { t.print("  decompression error %d", r); ok = false; }
-                if (r == MZ_BUF_ERROR && zs.avail_in == 0) break;
-            }
+    // gzip: every member (some tools write several back to back), each one's CRC-32 and length checked - a damaged
+    // archive stops the restore even when the backup has no digests.
+    GunzipReader gzr([&in](uint8_t* p, size_t n) { return in.read(p, n); });
+    while (ok && !t.cancelled()) {
+        ssize_t n = gz ? gzr.read(ob.data(), ob.size()) : in.read(ob.data(), ob.size());
+        if (n < 0) {
+            t.print("  %s: %s", util::basename(file).c_str(), gz ? gzr.error().c_str() : "read error");
+            ok = false;
+            break;
         }
+        if (n == 0) break;
+        if (!sink(ob.data(), size_t(n))) {
+            ok = false;
+            break;
+        }
+        written += uint64_t(n);
         t.setSubProgress(float(in.consumed()) / std::max<uint64_t>(in.total(), 1));
         speed(t, written, t0);
     }
-    if (gz) mz_inflateEnd(&zs);
     if (ok && !t.cancelled() && !in.finish(err)) { t.print("  %s", err.c_str()); ok = false; }
     return ok && !t.cancelled();
 }
