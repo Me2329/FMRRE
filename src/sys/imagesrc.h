@@ -65,6 +65,13 @@ struct FlashOptions {
 // Stream `path` (any supported format) onto `dev`. Sparse images are expanded.
 bool flash(const std::string& path, const std::string& zipEntry, const std::string& dev, const FlashOptions& o, Task& t);
 
+// Decompress `path` (.xz .gz .lz4 .zst, or the .img inside a .zip) to the file `out`, as it is: an Android sparse
+// image stays sparse. summary: "boot.img.lz4 -> boot.img: 64 MB (lz4)".
+bool unpack(const std::string& path, const std::string& out, Task& t, std::string* summary = nullptr);
+// Where unpack() puts it by default: next to the file, the compression extension dropped ("boot.img.lz4" ->
+// "boot.img"; a zip -> the name of the image inside it), with "-unpacked" when that name is taken.
+std::string unpackedName(const std::string& path);
+
 // Build the shell command that does the same as flash() with standard tools
 // (dd, xz, gzip, zstd, unzip, simg2img). Returned lines are ready to paste into
 // a terminal; `notes` explains caveats (e.g. sparse images).

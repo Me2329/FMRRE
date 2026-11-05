@@ -1121,6 +1121,14 @@ static void testLz4(const std::string& dir) {
     CHECK(util::readFile(dev, got) && got.substr(0, plain.size()) == plain);
     CHECK(util::writeFile(img, bad));
     CHECK(!runTask("flash-lz4-bad", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
+    // Unpack (Files -> "Decompress to ..."): boot.img.lz4 -> boot.img next to it, "-unpacked" when that name is taken.
+    CHECK(util::writeFile(img, linked));
+    std::string unpacked = img::unpackedName(img);
+    CHECK(util::basename(unpacked) == "dtbo-test.img");
+    CHECK(runTask("unpack-lz4", [&](Task& t) { return img::unpack(img, unpacked, t); }) && util::readFile(unpacked, got) && got == plain);
+    CHECK(util::basename(img::unpackedName(img)) == "dtbo-test-unpacked.img");
+    CHECK(!runTask("unpack-bad", [&](Task& t) { return img::unpack(img2 + ".missing", unpacked, t); }));
+    unlink(unpacked.c_str());
 }
 
 static void testPayload(const std::string& dir) {

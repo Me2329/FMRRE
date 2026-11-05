@@ -478,6 +478,7 @@ const Entry kRo[] = {
     {"Last ROM install", "Ultima instalare de ROM"}, {"another ROM - data not wiped since", "alt ROM - datele nu au fost șterse de atunci"},
     {"Run adb sideload <file.zip> on your computer: the package comes over USB, is checked (CRC, signature) and flashed here, and adb shows the result. FMRRE speaks adb itself - no minadbd needed.",
      "Rulează adb sideload <fișier.zip> pe calculator: pachetul vine prin USB, este verificat (CRC, semnătură) și instalat aici, iar adb arată rezultatul. FMRRE vorbește singur adb - nu e nevoie de minadbd."},
+    {"Decompress to {*}", "Decomprimă în {*}"}, {"Extract {*}", "Extrage {*}"}, {"Unpacking {*}", "Se despachetează {*}"},
     {"Payload signature", "Semnătura payload-ului"}, {"Its signature is damaged", "Semnătura lui este deteriorată"},
     {"Signed with the key that signed the zip", "Semnat cu cheia care a semnat zip-ul"},
     {"Only install zips signed with a trusted key", "Instalează doar zip-uri semnate cu o cheie de încredere"},

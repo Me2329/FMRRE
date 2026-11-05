@@ -165,6 +165,12 @@ public:
         if (img::isImageName(n)) acts.push_back({Icon::Bolt, "Flash image", 2});
         if (util::endsWith(n, ".zip") && !img::inspect(path).zipImages.empty()) acts.push_back({Icon::Bolt, "Flash .img inside zip", 2});
         if (img::isImageName(n) || util::endsWith(n, ".zip")) acts.push_back({Icon::Phone, "Flash as GSI (system)", 11});
+        if (img::isImageName(n) && !util::endsWith(n, ".zip")) {  // boot.img.lz4 -> boot.img (Magisk patches plain images)
+            img::Info zi = img::inspect(path);
+            if (zi.ok && zi.comp != img::Compression::None) acts.push_back({Icon::Download, "Decompress to " + util::basename(img::unpackedName(path)), 14});
+        } else if (util::endsWith(n, ".zip") && !ota && !img::inspect(path).zipImages.empty()) {
+            acts.push_back({Icon::Download, "Extract " + util::basename(img::unpackedName(path)), 14});
+        }
         acts.push_back({Icon::Terminal, "dd command for this file", 12});
         acts.push_back({Icon::Eye, "View", 3});
         acts.push_back({Icon::Hash, "SHA-256 checksum", 4});
@@ -182,7 +188,7 @@ public:
             switch (acts[idx].code) {
                 case 1: {
                     if (payload::isOtaZip(path)) { a.push(makePayloadScreen(path)); break; }
-                    installer::InstallOptions o;
+                    installer::InstallOptions o = installer::optionsFromSettings();  // signatures, CRC: as in Install
                     a.runTask("Flashing " + util::basename(path), Icon::Install,
                               [path, o](Task& t) { return installer::installZip(path, o, t); });
                     break;
@@ -192,6 +198,11 @@ public:
                 case 11: a.push(makeGsiScreen(path)); break;
                 case 12: a.push(makeManualFlashScreen(path)); break;
                 case 13: a.push(makePayloadScreen(path)); break;
+                case 14: {
+                    std::string out = img::unpackedName(path);
+                    a.runTask("Unpacking " + util::basename(path), Icon::Download, [path, out](Task& t) { return img::unpack(path, out, t); });
+                    break;
+                }
                 case 4:
                     a.runTask("SHA-256 of " + util::basename(path), Icon::Hash, [path](Task& t) {
                         t.setStatus("Hashing " + util::basename(path));

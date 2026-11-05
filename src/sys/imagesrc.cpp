@@ -902,4 +902,80 @@ DdCommand ddCommand(const Info& info, const std::string& dev) {
     return d;
 }
 
+bool unpack(const std::string& path, const std::string& out, Task& t, std::string* summary) {
+    Info info = inspect(path);
+    std::string err;
+    std::unique_ptr<Source> src = info.ok ? open(path, info.zipEntry, err) : nullptr;
+    if (!src) {
+        t.print("%s: %s", util::basename(path).c_str(), (info.ok ? err : info.error).c_str());
+        return false;
+    }
+    if (out == path) {
+        t.print("The output would replace the file itself");
+        return false;
+    }
+    int fd = ::open(out.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        t.print("Can't write %s: %s", out.c_str(), strerror(errno));
+        return false;
+    }
+    t.setStatus("Unpacking " + util::basename(path));
+    std::vector<char> buf(1 << 20);
+    bool ok = true;
+    for (;;) {
+        ssize_t r = src->read(buf.data(), buf.size());
+        if (r == 0) break;
+        if (r < 0 || t.cancelled()) {
+            t.print("%s", r < 0 ? src->error.c_str() : "Cancelled");
+            ok = false;
+            break;
+        }
+        for (ssize_t done = 0; ok && done < r;) {
+            ssize_t w = ::write(fd, buf.data() + done, size_t(r - done));
+            if (w <= 0) {
+                t.print("Writing %s failed: %s", out.c_str(), strerror(errno));
+                ok = false;
+            } else {
+                done += w;
+            }
+        }
+        if (!ok) break;
+        float pr = src->progress();
+        if (pr >= 0) t.setSubProgress(pr);
+    }
+    if (ok && fsync(fd) != 0) ok = false;
+    close(fd);
+    if (!ok) {
+        unlink(out.c_str());
+        return false;
+    }
+    std::string s = util::basename(path) + " -> " + util::basename(out) + ": " + util::humanSize(src->produced) + " (" +
+                    compressionName(info.comp) + ")" + (info.sparse ? ", still an Android sparse image" : "");
+    t.print("%s", s.c_str());
+    if (summary) *summary = s;
+    return true;
+}
+
+std::string unpackedName(const std::string& path) {
+    Info info = inspect(path);
+    std::string dir = util::dirname(path), name = util::basename(path);
+    if (info.comp == Compression::Zip && !info.zipEntry.empty()) {
+        name = util::basename(info.zipEntry);
+    } else {
+        std::string low = util::toLower(name);
+        for (auto ext : {".xz", ".gz", ".lz4", ".zst", ".zstd"})
+            if (util::endsWith(low, ext)) {
+                name = name.substr(0, name.size() - strlen(ext));
+                break;
+            }
+        if (!util::endsWith(util::toLower(name), ".img") && !util::endsWith(util::toLower(name), ".bin")) name += ".img";
+    }
+    std::string out = util::joinPath(dir, name);
+    if (util::exists(out) || out == path) {
+        size_t dot = name.rfind('.');
+        out = util::joinPath(dir, dot == std::string::npos ? name + "-unpacked" : name.substr(0, dot) + "-unpacked" + name.substr(dot));
+    }
+    return out;
+}
+
 }  // namespace tw::img

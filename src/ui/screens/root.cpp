@@ -130,8 +130,7 @@ public:
                         t.setRange(0, 0.2f);
                         if (!bootimg::backupStock(tgt, t)) { t.print("Not continuing without a stock backup."); return false; }
                         t.setRange(0.2f, 0.8f);
-                        installer::InstallOptions o;
-                        return installer::installZip(p, o, t);
+                        return installer::installZip(p, installer::optionsFromSettings(), t);
                     });
                 }, "Root installer (zip / APK)"));
                 break;
