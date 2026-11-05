@@ -2,6 +2,7 @@
 #include "sys/history.h"
 #include "core/crypt.h"
 #include "core/log.h"
+#include "core/md5.h"
 #include "core/sha256.h"
 #include "core/task.h"
 #include "core/util.h"
@@ -309,6 +310,10 @@ std::vector<Set> list() {
                     for (size_t k = 0; k < g.second.size(); k++) {
                         std::string sha = util::readLine(s.path + "/" + g.second[k].first + ".sha2");
                         sha = sha.empty() ? "" : util::splitWs(sha)[0];
+                        if (sha.empty()) {  // TWRP 3.0 / 3.1 wrote MD5 digests
+                            std::string md5 = util::readLine(s.path + "/" + g.second[k].first + ".md5");
+                            if (!md5.empty()) sha = "md5:" + util::splitWs(md5)[0];
+                        }
                         if (k == 0) i.file = g.second[k].first, i.sha256 = sha;
                         else i.extra.push_back({g.second[k].first, sha});
                         i.size += g.second[k].second;
@@ -494,10 +499,15 @@ static bool verifyFile(const Set& s, const std::string& file, const std::string&
         return true;
     }
     t.setStatus("Verifying " + file);
+    if (util::startsWith(sha256, "md5:")) {  // an old TWRP backup's .md5
+        bool ok = util::toLower(Md5::hexOfFile(s.path + "/" + file)) == util::toLower(sha256.substr(4));
+        t.print("  %s: %s", file.c_str(), ok ? "MD5 OK" : "DIGEST MISMATCH!");
+        return ok;
+    }
     struct Ctx { Task* t; } ctx{&t};
     std::string got = Sha256::hexOfFile(
         s.path + "/" + file, [](uint64_t d, uint64_t tot, void* c) { ((Ctx*)c)->t->setSubProgress(float(d) / tot); }, &ctx);
-    bool ok = got == sha256;
+    bool ok = got == util::toLower(sha256);
     t.print("  %s: %s", file.c_str(), ok ? "SHA-256 OK" : "DIGEST MISMATCH!");
     return ok;
 }

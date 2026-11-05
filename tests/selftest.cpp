@@ -17,6 +17,7 @@
 #include "core/i18n.h"
 #include "core/log.h"
 #include "core/lz4.h"
+#include "core/md5.h"
 #include "core/pubkey.h"
 #include "core/settings.h"
 #include "core/sha1.h"
@@ -818,6 +819,28 @@ static void testLegacyFolders() {
               got == "second part");
         CHECK(util::writeFile(old + "/cache.ext4.win001", part1 + "x"));  // a changed part: refused before anything is wiped
         CHECK(!runTask("twrp-split-bad", [&](Task& t) { return backup::restore(*set, {"cache"}, true, t); }));
+        // TWRP 3.0 / 3.1 wrote .md5 digests instead of .sha2 (RFC 1321 values first).
+        auto md5hex = [](const std::string& x) {
+            Md5 m;
+            m.update(x.data(), x.size());
+            return Sha256::toHex(m.digest());
+        };
+        CHECK(md5hex("") == "d41d8cd98f00b204e9800998ecf8427e" && md5hex("abc") == "900150983cd24fb0d6963f7d28e17f72" &&
+              md5hex("message digest") == "f96b697d7cb7938d525a2f31aaf161d0" &&
+              md5hex(std::string(1000, 'a')) == "cabe45dcc9ae5b66ba86600cca6b8ba8");
+        CHECK(util::writeFile(old + "/cache.ext4.win001", part1));
+        unlink((old + "/cache.ext4.win001.sha2").c_str());
+        CHECK(util::writeFile(old + "/cache.ext4.win001.md5", md5hex(part1) + "  cache.ext4.win001\n"));
+        for (auto& s2 : backup::list())
+            if (util::basename(s2.path) == "2024-05-01--10-00-00")
+                for (auto& i : s2.items)
+                    if (i.part == "cache") {
+                        CHECK(i.extra.size() == 1 && util::startsWith(i.extra[0].second, "md5:"));
+                        CHECK(runTask("twrp-md5", [&](Task& t) { return backup::verify(s2, t); }));
+                        CHECK(util::writeFile(old + "/cache.ext4.win001", part1 + "!"));
+                        CHECK(!runTask("twrp-md5-bad", [&](Task& t) { return backup::verify(s2, t); }));
+                    }
+        unlink((old + "/cache.ext4.win001.md5").c_str());
         // TWRP's own encryption (OpenAES) is named for what it is, not reported as a damaged archive.
         CHECK(util::writeFile(old + "/cache.ext4.win001", "OAES\x01\x02" + std::string(600, '\x5a')));
         unlink((old + "/cache.ext4.win001.sha2").c_str());
