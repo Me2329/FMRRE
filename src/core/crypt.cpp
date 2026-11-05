@@ -4,6 +4,14 @@
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__aarch64__) && defined(__linux__)
+#include <arm_neon.h>
+#include <sys/auxv.h>
+#endif
+#if defined(__x86_64__) || defined(__i386__)
+#include <cpuid.h>
+#include <immintrin.h>
+#endif
 
 namespace tw::crypt {
 
@@ -46,7 +54,94 @@ const Tables& tables() {
 
 const char kMagic[8] = {'T', 'W', 'V', '2', 'E', 'N', 'C', '1'};
 
+// ---- the CPU's AES instructions: four blocks at a time, so the AES unit's pipeline stays full ----
+
+using BlocksFn = void (*)(const uint8_t (*rk)[16], const uint8_t* in, uint8_t* out, size_t n);
+
+#if defined(__aarch64__) && defined(__linux__)
+// AESE = AddRoundKey + SubBytes + ShiftRows, AESMC = MixColumns.
+__attribute__((target("aes"))) void blocksArm(const uint8_t (*rk)[16], const uint8_t* in, uint8_t* out, size_t n) {
+    uint8x16_t k[15];
+    for (int r = 0; r < 15; r++) k[r] = vld1q_u8(rk[r]);
+    for (; n >= 4; n -= 4, in += 64, out += 64) {
+        uint8x16_t a = vld1q_u8(in), b = vld1q_u8(in + 16), c = vld1q_u8(in + 32), d = vld1q_u8(in + 48);
+        for (int r = 0; r < 13; r++) {
+            a = vaesmcq_u8(vaeseq_u8(a, k[r]));
+            b = vaesmcq_u8(vaeseq_u8(b, k[r]));
+            c = vaesmcq_u8(vaeseq_u8(c, k[r]));
+            d = vaesmcq_u8(vaeseq_u8(d, k[r]));
+        }
+        vst1q_u8(out, veorq_u8(vaeseq_u8(a, k[13]), k[14]));
+        vst1q_u8(out + 16, veorq_u8(vaeseq_u8(b, k[13]), k[14]));
+        vst1q_u8(out + 32, veorq_u8(vaeseq_u8(c, k[13]), k[14]));
+        vst1q_u8(out + 48, veorq_u8(vaeseq_u8(d, k[13]), k[14]));
+    }
+    for (; n; n--, in += 16, out += 16) {
+        uint8x16_t a = vld1q_u8(in);
+        for (int r = 0; r < 13; r++) a = vaesmcq_u8(vaeseq_u8(a, k[r]));
+        vst1q_u8(out, veorq_u8(vaeseq_u8(a, k[13]), k[14]));
+    }
+}
+bool haveAesArm() { return (getauxval(AT_HWCAP) & (1UL << 3)) != 0; }  // HWCAP_AES
+#endif
+
+#if defined(__x86_64__) || defined(__i386__)
+__attribute__((target("aes,sse2"))) void blocksX86(const uint8_t (*rk)[16], const uint8_t* in, uint8_t* out, size_t n) {
+    __m128i k[15];
+    for (int r = 0; r < 15; r++) k[r] = _mm_loadu_si128((const __m128i*)rk[r]);
+    for (; n >= 4; n -= 4, in += 64, out += 64) {
+        __m128i a = _mm_xor_si128(_mm_loadu_si128((const __m128i*)in), k[0]), b = _mm_xor_si128(_mm_loadu_si128((const __m128i*)(in + 16)), k[0]),
+                c = _mm_xor_si128(_mm_loadu_si128((const __m128i*)(in + 32)), k[0]), d = _mm_xor_si128(_mm_loadu_si128((const __m128i*)(in + 48)), k[0]);
+        for (int r = 1; r < 14; r++) {
+            a = _mm_aesenc_si128(a, k[r]);
+            b = _mm_aesenc_si128(b, k[r]);
+            c = _mm_aesenc_si128(c, k[r]);
+            d = _mm_aesenc_si128(d, k[r]);
+        }
+        _mm_storeu_si128((__m128i*)out, _mm_aesenclast_si128(a, k[14]));
+        _mm_storeu_si128((__m128i*)(out + 16), _mm_aesenclast_si128(b, k[14]));
+        _mm_storeu_si128((__m128i*)(out + 32), _mm_aesenclast_si128(c, k[14]));
+        _mm_storeu_si128((__m128i*)(out + 48), _mm_aesenclast_si128(d, k[14]));
+    }
+    for (; n; n--, in += 16, out += 16) {
+        __m128i a = _mm_xor_si128(_mm_loadu_si128((const __m128i*)in), k[0]);
+        for (int r = 1; r < 14; r++) a = _mm_aesenc_si128(a, k[r]);
+        _mm_storeu_si128((__m128i*)out, _mm_aesenclast_si128(a, k[14]));
+    }
+}
+bool haveAesX86() {
+    unsigned a, b, c, d;
+    return __get_cpuid(1, &a, &b, &c, &d) && (c & (1u << 25)) && (d & (1u << 26));  // AES-NI, SSE2
+}
+#endif
+
+struct AesBackend {
+    BlocksFn fn;  // nullptr: the tables
+    const char* name;
+};
+AesBackend pickAes() {
+#if defined(__aarch64__) && defined(__linux__)
+    if (haveAesArm()) return {blocksArm, "ARMv8 AES instructions"};
+#endif
+#if defined(__x86_64__) || defined(__i386__)
+    if (haveAesX86()) return {blocksX86, "AES-NI"};
+#endif
+    return {nullptr, "portable C"};
+}
+AesBackend& aesBackend() {
+    static AesBackend b = pickAes();
+    return b;
+}
+
 }  // namespace
+
+const char* Aes256::backend() { return aesBackend().name; }
+void Aes256::forceSoftware(bool on) { aesBackend() = on ? AesBackend{nullptr, "portable C"} : pickAes(); }
+
+void Aes256::encryptBlocks(const uint8_t* in, uint8_t* out, size_t n) const {
+    if (BlocksFn f = aesBackend().fn) return f(rkb_, in, out, n);
+    for (; n; n--, in += 16, out += 16) encryptBlock(in, out);
+}
 
 Aes256::Aes256(const uint8_t key[32]) {
     const Tables& T = tables();
@@ -66,6 +161,7 @@ Aes256::Aes256(const uint8_t key[32]) {
         }
         rk_[i] = rk_[i - 8] ^ t;
     }
+    for (int i = 0; i < 60; i++) putBe32(rkb_[i / 4] + 4 * (i % 4), rk_[i]);
 }
 
 void Aes256::encryptBlock(const uint8_t in[16], uint8_t out[16]) const {
@@ -216,10 +312,17 @@ void Stream::process(uint8_t* d, size_t n) {
     if (!encrypt_) mac_->update(d, n);  // the MAC covers the ciphertext
     size_t i = 0;
     for (; ksUsed_ < 16 && i < n; i++) d[i] ^= ks_[ksUsed_++];
-    for (; n - i >= 16; i += 16) {  // whole blocks
-        aes_->encryptBlock(counter_, ks_);
-        for (int k = 15; k >= 0 && ++counter_[k] == 0; k--) {}
-        for (int k = 0; k < 16; k++) d[i + k] ^= ks_[k];
+    // Whole blocks, up to 4 KiB of key stream at a time: the counters first, then one call that encrypts them all.
+    uint8_t ctr[4096], ks[4096];
+    while (n - i >= 16) {
+        size_t blocks = std::min<size_t>((n - i) / 16, sizeof ctr / 16);
+        for (size_t b = 0; b < blocks; b++) {
+            memcpy(ctr + 16 * b, counter_, 16);
+            for (int k = 15; k >= 0 && ++counter_[k] == 0; k--) {}
+        }
+        aes_->encryptBlocks(ctr, ks, blocks);
+        for (size_t k = 0; k < blocks * 16; k++) d[i + k] ^= ks[k];
+        i += blocks * 16;
     }
     for (; i < n; i++) {
         if (ksUsed_ == 16) {

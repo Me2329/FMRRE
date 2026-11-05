@@ -7,14 +7,19 @@
 
 namespace tw::crypt {
 
-// AES-256, encryption direction only (all that CTR mode needs). Table based, constant tables.
+// AES-256, encryption direction only (all that CTR mode needs): the CPU's AES instructions where it has them
+// (ARMv8 Cryptography Extensions - almost every 64-bit phone -, x86 AES-NI), else table based.
 class Aes256 {
 public:
     explicit Aes256(const uint8_t key[32]);
     void encryptBlock(const uint8_t in[16], uint8_t out[16]) const;
+    void encryptBlocks(const uint8_t* in, uint8_t* out, size_t n) const;  // n blocks of 16 bytes, each on its own
+    static const char* backend();
+    static void forceSoftware(bool on);  // self-tests compare both
 
 private:
     uint32_t rk_[60];
+    uint8_t rkb_[15][16];  // the round keys as bytes, for the instructions
 };
 
 class HmacSha256 {

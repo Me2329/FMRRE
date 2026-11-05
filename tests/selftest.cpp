@@ -1007,6 +1007,30 @@ static void testCrypt() {
     std::string d = c;
     dec.process((uint8_t*)&d[0], d.size());
     CHECK(d == plain && dec.tag() == tag);
+    // The CPU's AES instructions (if any) and the tables agree: the FIPS block, 1000 blocks at once, and a stream
+    // encrypted one way and decrypted the other.
+    printf("AES backend: %s\n", crypt::Aes256::backend());
+    std::string blocks(16000, '\0'), hw(16000, '\0'), sw(16000, '\0');
+    for (size_t i = 0; i < blocks.size(); i++) blocks[i] = char(i * 7 + (i >> 8));
+    crypt::Aes256 aes(key);
+    aes.encryptBlocks((const uint8_t*)blocks.data(), (uint8_t*)&hw[0], 1000);
+    uint8_t one[16];
+    aes.encryptBlocks(pt, one, 1);
+    crypt::Aes256::forceSoftware(true);
+    aes.encryptBlocks((const uint8_t*)blocks.data(), (uint8_t*)&sw[0], 1000);
+    CHECK(hw == sw && Sha256::toHex(std::string((const char*)one, 16)) == "8ea2b7ca516745bfeafc49904b496089");
+    crypt::Stream enc2;
+    CHECK(enc2.beginEncrypt("pw", hdr, 2000));
+    crypt::Aes256::forceSoftware(false);
+    std::string c2 = plain;
+    for (size_t off = 0, n = 5; off < c2.size(); off += n, n = n * 7 % 4099 + 1) enc2.process((uint8_t*)&c2[off], std::min(n, c2.size() - off));
+    std::string tag2 = enc2.tag();
+    crypt::Aes256::forceSoftware(true);
+    crypt::Stream dec2;
+    CHECK(dec2.beginDecrypt("pw", (const uint8_t*)hdr.data(), err));
+    dec2.process((uint8_t*)&c2[0], c2.size());
+    CHECK(c2 == plain && dec2.tag() == tag2);
+    crypt::Aes256::forceSoftware(false);
 }
 
 static void testDecoders(const std::string& dir) {
