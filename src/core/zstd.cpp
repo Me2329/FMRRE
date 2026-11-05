@@ -10,8 +10,21 @@ namespace {
 inline uint64_t rotl64(uint64_t x, int r) { return (x << r) | (x >> (64 - r)); }
 inline uint32_t le16(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8; }
 inline uint32_t le24(const uint8_t* p) { return le16(p) | uint32_t(p[2]) << 16; }
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+inline uint32_t le32(const uint8_t* p) {
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return v;
+}
+inline uint64_t le64(const uint8_t* p) {
+    uint64_t v;
+    memcpy(&v, p, 8);
+    return v;
+}
+#else
 inline uint32_t le32(const uint8_t* p) { return le24(p) | uint32_t(p[3]) << 24; }
 inline uint64_t le64(const uint8_t* p) { return uint64_t(le32(p)) | uint64_t(le32(p + 4)) << 32; }
+#endif
 inline int highbit(uint32_t v) {  // v > 0
     int b = 0;
     while (v >>= 1) b++;
@@ -56,13 +69,12 @@ struct BackBits {
     const uint8_t* ptr = nullptr;
     uint64_t cont = 0;
     unsigned used = 0;  // bits of cont already consumed, from the top
-    int64_t left = 0;   // bits not read yet
+    unsigned low = 0;   // a stream shorter than 8 bytes: the zero bits below it in cont
 
     bool init(const uint8_t* src, size_t n) {
         if (!n || !src[n - 1]) return false;
         start = src;
-        unsigned pad = 8 - unsigned(highbit(src[n - 1]));
-        left = int64_t(n) * 8 - pad;
+        used = 8 - unsigned(highbit(src[n - 1]));
         if (n >= 8) {
             ptr = src + n - 8;
             cont = le64(ptr);
@@ -71,10 +83,11 @@ struct BackBits {
             memcpy(b + 8 - n, src, n);
             cont = le64(b);
             ptr = start;
+            low = unsigned(8 - n) * 8;
         }
-        used = pad;
         return true;
     }
+    int64_t left() const { return int64_t(ptr - start) * 8 + 64 - int64_t(used) - int64_t(low); }  // bits not read yet
     void reload() {  // afterwards at least 57 bits can be read (until the start is reached)
         if (used < 8 || ptr == start) return;
         size_t back = std::min<size_t>(used >> 3, size_t(ptr - start));
@@ -82,13 +95,21 @@ struct BackBits {
         used -= unsigned(back * 8);
         cont = le64(ptr);
     }
-    uint64_t look(unsigned k) const { return k == 0 || used >= 64 ? 0 : (cont << used) >> (64 - k); }
-    void skip(unsigned k) {
-        used += k;
-        left -= int64_t(k);
+    void reloadFast() {  // only with at least used / 8 bytes before ptr
+        ptr -= used >> 3;
+        used &= 7;
+        cont = le64(ptr);
     }
+    uint64_t look(unsigned k) const { return k == 0 || used >= 64 ? 0 : (cont << used) >> (64 - k); }
+    void skip(unsigned k) { used += k; }
     uint64_t read(unsigned k) {
         uint64_t v = look(k);
+        skip(k);
+        return v;
+    }
+    // Without the checks: only while `used` surely stays below 64 (see the sequence loop).
+    uint64_t readFast(unsigned k) {
+        uint64_t v = (cont << used) >> 1 >> (63 - k);
         skip(k);
         return v;
     }
@@ -106,6 +127,7 @@ struct Fse {
     std::vector<FseEntry> t;
     int log = 0;
     bool valid = false;
+    bool predefined = false;  // holds the predefined table (built once, not for every block)
 
     bool build(const int16_t* norm, int nsym, int al) {
         size_t size = size_t(1) << al;
@@ -191,7 +213,7 @@ size_t readNCount(const uint8_t* src, size_t n, int maxSym, int maxLog, int16_t*
 // ---- Huffman ----------------------------------------------------------------------------------------
 
 struct Huf {
-    std::vector<uint8_t> sym, bits;
+    std::vector<uint16_t> cell;  // symbol | code length << 8, indexed by the next maxBits bits
     int maxBits = 0;
     bool valid = false;
 };
@@ -218,20 +240,20 @@ bool readHufTree(const uint8_t* src, size_t n, Huf& h, size_t& used) {
         BackBits b;
         if (!b.init(src + 1 + hdr, hb - hdr)) return false;
         uint32_t s1 = uint32_t(b.read(unsigned(al))), s2 = uint32_t(b.read(unsigned(al)));
-        if (b.left < 0) return false;
+        if (b.left() < 0) return false;
         for (;;) {
             if (nw > 254) return false;
             b.reload();
             w[nw++] = uint8_t(f.t[s1].sym);
             s1 = f.t[s1].base + uint32_t(b.read(f.t[s1].bits));
-            if (b.left < 0) {
+            if (b.left() < 0) {
                 w[nw++] = uint8_t(f.t[s2].sym);
                 break;
             }
             b.reload();
             w[nw++] = uint8_t(f.t[s2].sym);
             s2 = f.t[s2].base + uint32_t(b.read(f.t[s2].bits));
-            if (b.left < 0) {
+            if (b.left() < 0) {
                 w[nw++] = uint8_t(f.t[s1].sym);
                 break;
             }
@@ -251,33 +273,88 @@ bool readHufTree(const uint8_t* src, size_t n, Huf& h, size_t& used) {
     w[nw++] = uint8_t(highbit(rest) + 1);
     // Codes go to the lowest weights first, then in symbol order: a symbol of weight w owns 2^(w-1) cells.
     h.maxBits = maxBits;
-    h.sym.assign(size_t(1) << maxBits, 0);
-    h.bits.assign(size_t(1) << maxBits, 0);
+    h.cell.assign(size_t(1) << maxBits, 0);
     size_t pos = 0;
     for (int wt = 1; wt <= maxBits; wt++)
         for (int s = 0; s < nw; s++)
             if (w[s] == wt) {
                 size_t len = size_t(1) << (wt - 1);
-                if (pos + len > h.sym.size()) return false;
-                std::fill(h.sym.begin() + long(pos), h.sym.begin() + long(pos + len), uint8_t(s));
-                std::fill(h.bits.begin() + long(pos), h.bits.begin() + long(pos + len), uint8_t(maxBits + 1 - wt));
+                if (pos + len > h.cell.size()) return false;
+                std::fill(h.cell.begin() + long(pos), h.cell.begin() + long(pos + len), uint16_t(s | (maxBits + 1 - wt) << 8));
                 pos += len;
             }
-    if (pos != h.sym.size()) return false;
+    if (pos != h.cell.size()) return false;
     h.valid = true;
     return true;
+}
+
+// The rest of a stream, a symbol at a time with checked reads (the stream's first bytes).
+bool hufFinish(const Huf& h, BackBits& b, uint8_t* out, size_t i, size_t count) {
+    const uint16_t* t = h.cell.data();
+    const unsigned mb = unsigned(h.maxBits);
+    for (; i < count; i++) {
+        b.reload();
+        uint16_t e = t[b.look(mb)];
+        out[i] = uint8_t(e);
+        b.skip(e >> 8);
+    }
+    return b.left() == 0;
 }
 
 bool hufStream(const Huf& h, const uint8_t* src, size_t n, uint8_t* out, size_t count) {
     BackBits b;
     if (!b.init(src, n)) return false;
-    for (size_t i = 0; i < count; i++) {
+    const uint16_t* t = h.cell.data();
+    const unsigned mb = unsigned(h.maxBits), shift = 64 - mb;
+    size_t i = 0;
+    // Four symbols per refill whenever they surely fit in the 64-bit window - everywhere but the stream's first bytes.
+    for (; i + 4 <= count; i += 4) {
         b.reload();
-        uint32_t idx = uint32_t(b.look(unsigned(h.maxBits)));
-        out[i] = h.sym[idx];
-        b.skip(h.bits[idx]);
+        if (b.used + 4 * mb > 64) break;
+        uint64_t c = b.cont;
+        unsigned u = b.used;
+        for (int k = 0; k < 4; k++) {
+            uint16_t e = t[(c << u) >> shift];
+            out[i + size_t(k)] = uint8_t(e);
+            u += e >> 8;
+        }
+        b.used = u;
     }
-    return b.left == 0;
+    return hufFinish(h, b, out, i, count);
+}
+
+// The four streams of 4-stream literals side by side: four independent chains of table lookups keep the CPU busy
+// where one stream would wait for each lookup in turn.
+bool hufStreams4(const Huf& h, const uint8_t* src, const size_t len[4], uint8_t* out, size_t seg, size_t last) {
+    BackBits b[4];
+    uint8_t* o[4];
+    for (int k = 0; k < 4; k++) {
+        if (!b[k].init(src, len[k])) return false;
+        src += len[k];
+        o[k] = out + seg * size_t(k);
+    }
+    const uint16_t* t = h.cell.data();
+    const unsigned mb = unsigned(h.maxBits), shift = 64 - mb;
+    size_t i = 0;
+    for (const size_t lim = std::min(seg, last); i + 4 <= lim; i += 4) {
+        bool fit = true;
+        for (auto& x : b) {
+            x.reload();
+            fit &= x.used + 4 * mb <= 64;
+        }
+        if (!fit) break;
+        uint64_t c0 = b[0].cont, c1 = b[1].cont, c2 = b[2].cont, c3 = b[3].cont;
+        unsigned u0 = b[0].used, u1 = b[1].used, u2 = b[2].used, u3 = b[3].used;
+        for (size_t k = i; k < i + 4; k++) {
+            uint16_t e0 = t[(c0 << u0) >> shift], e1 = t[(c1 << u1) >> shift], e2 = t[(c2 << u2) >> shift], e3 = t[(c3 << u3) >> shift];
+            o[0][k] = uint8_t(e0), o[1][k] = uint8_t(e1), o[2][k] = uint8_t(e2), o[3][k] = uint8_t(e3);
+            u0 += e0 >> 8, u1 += e1 >> 8, u2 += e2 >> 8, u3 += e3 >> 8;
+        }
+        b[0].used = u0, b[1].used = u1, b[2].used = u2, b[3].used = u3;
+    }
+    for (int k = 0; k < 4; k++)
+        if (!hufFinish(h, b[k], o[k], i, k < 3 ? seg : last)) return false;
+    return true;
 }
 
 // ---- sequence codes (RFC 8878 3.1.1.3.2.1) --------------------------------------------------------
@@ -292,6 +369,49 @@ const uint8_t kMLBits[53] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
 const int16_t kLLDefault[36] = {4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1};
 const int16_t kMLDefault[53] = {1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
                                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1};
+// A sequence decoding table: the FSE state transition with the code's value folded in.
+struct SeqCell {
+    uint32_t base;   // literal or match length base, or 1 << offset code
+    uint16_t next;   // next state = next + the next `bits` bits
+    uint8_t extra;   // bits added to base
+    uint8_t bits;
+};
+
+void toSeq(const Fse& f, const uint32_t* base, const uint8_t* extra, std::vector<SeqCell>& out) {
+    out.resize(f.t.size());
+    for (size_t u = 0; u < f.t.size(); u++) {
+        const FseEntry& e = f.t[u];
+        out[u] = base ? SeqCell{base[e.sym], e.base, extra[e.sym], e.bits} : SeqCell{uint32_t(1) << e.sym, e.base, uint8_t(e.sym), e.bits};
+    }
+}
+
+// The sequence loop's copies may write up to 15 bytes past what they need and read up to 15 bytes past the
+// literals: both buffers keep kSlack spare bytes at the end.
+constexpr size_t kSlack = 32;
+
+inline void copy16s(uint8_t* d, const uint8_t* s, size_t n) {  // also right when d - s >= 16 (overlapping)
+    uint8_t* e = d + n;
+    do {
+        memcpy(d, s, 16);
+        d += 16;
+        s += 16;
+    } while (d < e);
+}
+
+// A match: `n` bytes from `off` back; when off < n, the last `off` bytes repeat.
+inline void matchCopy(uint8_t* d, size_t off, size_t n) {
+    const uint8_t* s = d - off;
+    if (off >= 16) return copy16s(d, s, n);
+    if (off == 1) return void(memset(d, *s, n));
+    size_t q = 0;
+    if (off < 8) {  // byte by byte until a whole number of repeats spans 8 bytes, then 8 at a time from that far back
+        size_t span = off * ((8 + off - 1) / off);
+        for (; q < span && q < n; q++) d[q] = s[q];
+        off = span;
+    }
+    for (; q < n; q += 8) memcpy(d + q, d + q - off, 8);
+}
+
 const int16_t kOFDefault[29] = {1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1};
 
 }  // namespace
@@ -324,8 +444,14 @@ void Xxh64::update(const void* data, size_t n) {
         n -= take;
         memLen_ = 0;
     }
-    for (; n >= 32; p += 32, n -= 32)
-        for (int k = 0; k < 4; k++) v_[k] = xround(v_[k], le64(p + 8 * k));
+    uint64_t a = v_[0], b = v_[1], c = v_[2], d = v_[3];  // in registers, not re-read after every store
+    for (; n >= 32; p += 32, n -= 32) {
+        a = xround(a, le64(p));
+        b = xround(b, le64(p + 8));
+        c = xround(c, le64(p + 16));
+        d = xround(d, le64(p + 24));
+    }
+    v_[0] = a, v_[1] = b, v_[2] = c, v_[3] = d;
     memcpy(mem_, p, n);
     memLen_ = n;
 }
@@ -376,9 +502,16 @@ struct ZstdFrame::Impl {
     int frames = 0;
     uint32_t rep[3] = {1, 4, 8};
     Fse ll, of, ml;
+    std::vector<SeqCell> llS, ofS, mlS;  // the same tables, ready for the sequence loop
     Huf huf;
     Xxh64 xxh;
-    std::vector<uint8_t> blk, lit;
+    std::vector<uint8_t> blk, lit;  // lit holds litN literals + kSlack
+    size_t litN = 0;
+    uint8_t* litFor(size_t n) {
+        if (lit.size() < n + kSlack) lit.resize(n + kSlack);
+        litN = n;
+        return lit.data();
+    }
 
     bool fail(const std::string& e) {
         err = "zstd: " + e;
@@ -401,8 +534,8 @@ struct ZstdFrame::Impl {
     bool nextFrame();
     bool nextBlock();
     bool literals(const uint8_t* src, size_t n, size_t& used);
-    bool table(Fse& t, int mode, const uint8_t* src, size_t n, size_t& i, int maxSym, int maxLog, const int16_t* def,
-               int defN, int defLog);
+    bool table(Fse& t, std::vector<SeqCell>& cells, int mode, const uint8_t* src, size_t n, size_t& i, int maxSym, int maxLog,
+               const int16_t* def, int defN, int defLog, const uint32_t* base, const uint8_t* extra);
     bool sequences(const uint8_t* src, size_t n, uint8_t* out, size_t& produced);
     void room();
 };
@@ -410,11 +543,12 @@ struct ZstdFrame::Impl {
 void ZstdFrame::Impl::room() {
     // Called with everything handed out (readPos == end): keep the window, make space for one more block.
     size_t cap = window + std::max<size_t>(kBlockMax, std::min<size_t>(window, 32 << 20)) + kBlockMax;
-    if (end + blockMax > buf.size()) {
+    size_t need = blockMax + kSlack;
+    if (end + need > buf.size()) {
         if (buf.size() < cap) {
-            buf.resize(std::min(cap, std::max(buf.size() * 2, end + blockMax + kBlockMax)));
+            buf.resize(std::min(cap, std::max(buf.size() * 2, end + need + kBlockMax)));
         }
-        if (end + blockMax > buf.size()) {  // full: slide the window to the front
+        if (end + need > buf.size()) {  // full: slide the window to the front
             size_t keep = std::min(end, window);
             memmove(buf.data(), buf.data() + end - keep, keep);
             end = readPos = keep;
@@ -554,11 +688,11 @@ bool ZstdFrame::Impl::literals(const uint8_t* src, size_t n, size_t& used) {
         if (regen > blockMax) return fail("damaged literals (too many)");
         if (type == 0) {
             if (n - hsz < regen) return fail("damaged literals (cut off)");
-            lit.assign(src + hsz, src + hsz + regen);
+            memcpy(litFor(regen), src + hsz, regen);
             used = hsz + regen;
         } else {
             if (n < hsz + 1) return fail("damaged literals (cut off)");
-            lit.assign(regen, src[hsz]);
+            memset(litFor(regen), src[hsz], regen);
             used = hsz + 1;
         }
         return true;
@@ -594,9 +728,9 @@ bool ZstdFrame::Impl::literals(const uint8_t* src, size_t n, size_t& used) {
     } else if (!huf.valid) {
         return fail("damaged block (repeats a Huffman table that doesn't exist)");
     }
-    lit.resize(regen);
+    uint8_t* lo = litFor(regen);
     if (sf == 0) {
-        if (!hufStream(huf, p, left, lit.data(), regen)) return fail("damaged literals (Huffman stream)");
+        if (!hufStream(huf, p, left, lo, regen)) return fail("damaged literals (Huffman stream)");
     } else {
         if (left < 6) return fail("damaged literals (jump table)");
         size_t s[4] = {le16(p), le16(p + 2), le16(p + 4), 0};
@@ -606,36 +740,41 @@ bool ZstdFrame::Impl::literals(const uint8_t* src, size_t n, size_t& used) {
         s[3] = left - s[0] - s[1] - s[2];
         size_t seg = (regen + 3) / 4;
         if (seg * 3 > regen) return fail("damaged literals (too few for 4 streams)");
-        size_t outPos = 0;
-        for (int k = 0; k < 4; k++) {
-            size_t cnt = k < 3 ? seg : regen - 3 * seg;
-            if (!hufStream(huf, p, s[k], lit.data() + outPos, cnt)) return fail("damaged literals (Huffman stream)");
-            p += s[k];
-            outPos += cnt;
-        }
+        if (!hufStreams4(huf, p, s, lo, seg, regen - 3 * seg)) return fail("damaged literals (Huffman stream)");
     }
     used = hsz + comp;
     return true;
 }
 
-bool ZstdFrame::Impl::table(Fse& t, int mode, const uint8_t* src, size_t n, size_t& i, int maxSym, int maxLog,
-                            const int16_t* def, int defN, int defLog) {
+// Symbols in the tables never exceed maxSym (readNCount and the RLE byte are checked), so the sequence loop
+// doesn't check the codes again.
+bool ZstdFrame::Impl::table(Fse& t, std::vector<SeqCell>& cells, int mode, const uint8_t* src, size_t n, size_t& i, int maxSym,
+                            int maxLog, const int16_t* def, int defN, int defLog, const uint32_t* base, const uint8_t* extra) {
     switch (mode) {
-        case 0: return t.build(def, defN, defLog);
+        case 0:
+            if (t.predefined) return t.valid = true;
+            if (!t.build(def, defN, defLog)) return false;
+            t.predefined = true;
+            break;
         case 1:
             if (i >= n || src[i] > maxSym) return false;
             t.rle(src[i++]);
-            return true;
+            t.predefined = false;
+            break;
         case 2: {
             int16_t norm[64];
             int nsym, log;
             size_t k = readNCount(src + i, n - i, maxSym, maxLog, norm, nsym, log);
             if (!k) return false;
             i += k;
-            return t.build(norm, nsym, log);
+            t.predefined = false;
+            if (!t.build(norm, nsym, log)) return false;
+            break;
         }
         default: return t.valid;  // repeat the previous block's table
     }
+    toSeq(t, base, extra, cells);
+    return true;
 }
 
 bool ZstdFrame::Impl::sequences(const uint8_t* src, size_t n, uint8_t* out, size_t& made) {
@@ -653,14 +792,21 @@ bool ZstdFrame::Impl::sequences(const uint8_t* src, size_t n, uint8_t* out, size
             nseq = ((nseq - 128) << 8) + src[i++];
         }
     }
+    // Locals rather than members in the loop: every byte written through `op` could alias a member, so the
+    // compiler would reload them after each copy.
     const uint8_t* litp = lit.data();
-    size_t litLeft = lit.size();
+    const uint8_t* const litEnd = litp + litN;
+    uint8_t* op = out;
+    uint8_t* const oend = out + blockMax;
+    // The earliest byte a match may reach: this frame's first byte, or the start of the kept history.
+    const uint8_t* const floor = out - size_t(std::min<uint64_t>(produced, uint64_t(out - buf.data())));
     if (nseq > 0) {
         if (i >= n) return fail("damaged sequences header");
         uint8_t modes = src[i++];
         if (modes & 3) return fail("damaged sequences header (reserved bits)");
-        if (!table(ll, modes >> 6, src, n, i, 35, 9, kLLDefault, 36, 6) || !table(of, (modes >> 4) & 3, src, n, i, 31, 8, kOFDefault, 29, 5) ||
-            !table(ml, (modes >> 2) & 3, src, n, i, 52, 9, kMLDefault, 53, 6))
+        if (!table(ll, llS, modes >> 6, src, n, i, 35, 9, kLLDefault, 36, 6, kLLBase, kLLBits) ||
+            !table(of, ofS, (modes >> 4) & 3, src, n, i, 31, 8, kOFDefault, 29, 5, nullptr, nullptr) ||
+            !table(ml, mlS, (modes >> 2) & 3, src, n, i, 52, 9, kMLDefault, 53, 6, kMLBase, kMLBits))
             return fail("damaged sequence tables");
         BackBits b;
         if (!b.init(src + i, n - i)) return fail("damaged sequences (bitstream)");
@@ -668,68 +814,82 @@ bool ZstdFrame::Impl::sequences(const uint8_t* src, size_t n, uint8_t* out, size
         uint32_t sl = uint32_t(b.read(unsigned(ll.log))), so = uint32_t(b.read(unsigned(of.log)));
         b.reload();
         uint32_t sm = uint32_t(b.read(unsigned(ml.log)));
-        const uint64_t frameBefore = produced;
+        const SeqCell *LT = llS.data(), *OT = ofS.data(), *MT = mlS.data();
+        uint32_t r0 = rep[0], r1 = rep[1], r2 = rep[2];
         for (uint32_t k = 0; k < nseq; k++) {
-            uint32_t llc = ll.t[sl].sym, ofc = of.t[so].sym, mlc = ml.t[sm].sym;
-            if (llc > 35 || mlc > 52 || ofc > 31) return fail("damaged sequences (code)");
-            b.reload();
-            uint64_t offv = (uint64_t(1) << ofc) + b.read(ofc);
-            b.reload();
-            size_t mlen = kMLBase[mlc] + size_t(b.read(kMLBits[mlc]));
-            b.reload();
-            size_t llen = kLLBase[llc] + size_t(b.read(kLLBits[llc]));
-            uint64_t off;
+            const SeqCell L = LT[sl], O = OT[so], M = MT[sm];
+            const bool more = k + 1 < nseq;  // the last sequence has no next states
+            uint64_t offv;
+            size_t mlen, llen;
+            if (size_t(b.ptr - b.start) >= 8 + (b.used >> 3)) {
+                // Common case: after the refill fewer than 8 bits are used, so the offset and match length bits (at
+                // most 31 + 16) fit; after one more refill so do the literal length and the three states (16 + 9 + 9
+                // + 8). And at least 8 more bytes lie before ptr, so none of it reads past the stream's start.
+                b.reloadFast();
+                offv = O.base + b.readFast(O.extra);
+                mlen = M.base + size_t(b.readFast(M.extra));
+                b.reloadFast();
+                llen = L.base + size_t(b.readFast(L.extra));
+                if (more) {  // next states: literal lengths, match lengths, then offsets
+                    sl = L.next + uint32_t(b.readFast(L.bits));
+                    sm = M.next + uint32_t(b.readFast(M.bits));
+                    so = O.next + uint32_t(b.readFast(O.bits));
+                }
+            } else {  // the stream's first bytes: each read checked
+                b.reload();
+                offv = O.base + b.read(O.extra);
+                b.reload();
+                mlen = M.base + size_t(b.read(M.extra));
+                b.reload();
+                llen = L.base + size_t(b.read(L.extra));
+                if (more) {
+                    b.reload();
+                    sl = L.next + uint32_t(b.read(L.bits));
+                    b.reload();
+                    sm = M.next + uint32_t(b.read(M.bits));
+                    b.reload();
+                    so = O.next + uint32_t(b.read(O.bits));
+                }
+                if (b.left() < 0) return fail("damaged sequences (bitstream overrun)");
+            }
+            size_t off;
             if (offv > 3) {
-                off = offv - 3;
-                rep[2] = rep[1], rep[1] = rep[0], rep[0] = uint32_t(off);
+                off = size_t(offv - 3);
+                r2 = r1, r1 = r0, r0 = uint32_t(off);
             } else {
                 uint64_t idx = offv + (llen == 0 ? 1 : 0);
                 if (idx == 1) {
-                    off = rep[0];
+                    off = r0;
                 } else if (idx == 2) {
-                    off = rep[1];
-                    rep[1] = rep[0], rep[0] = uint32_t(off);
+                    off = r1;
+                    r1 = r0, r0 = uint32_t(off);
                 } else if (idx == 3) {
-                    off = rep[2];
-                    rep[2] = rep[1], rep[1] = rep[0], rep[0] = uint32_t(off);
+                    off = r2;
+                    r2 = r1, r1 = r0, r0 = uint32_t(off);
                 } else {
-                    off = uint64_t(rep[0]) - 1;
-                    rep[2] = rep[1], rep[1] = rep[0], rep[0] = uint32_t(off);
+                    off = size_t(r0) - 1;
+                    r2 = r1, r1 = r0, r0 = uint32_t(off);
                 }
             }
-            if (k + 1 < nseq) {  // next states: literal lengths, match lengths, then offsets
-                b.reload();
-                sl = ll.t[sl].base + uint32_t(b.read(ll.t[sl].bits));
-                b.reload();
-                sm = ml.t[sm].base + uint32_t(b.read(ml.t[sm].bits));
-                b.reload();
-                so = of.t[so].base + uint32_t(b.read(of.t[so].bits));
-            }
-            if (b.left < 0) return fail("damaged sequences (bitstream overrun)");
             // execute: literals, then the match
-            if (llen > litLeft || made + llen + mlen > blockMax) return fail("damaged sequences (more data than a block holds)");
-            memcpy(out + made, litp, llen);
+            if (llen > size_t(litEnd - litp) || llen + mlen > size_t(oend - op))
+                return fail("damaged sequences (more data than a block holds)");
+            copy16s(op, litp, llen);
+            op += llen;
             litp += llen;
-            litLeft -= llen;
-            made += llen;
-            size_t have = size_t(out - buf.data()) + made;  // bytes in the buffer before the match
-            if (off == 0 || off > frameBefore + made || off > have) return fail("damaged sequences (a match points before the data)");
-            uint8_t* d = out + made;
-            const uint8_t* s = d - off;
-            if (off >= mlen) {
-                memcpy(d, s, mlen);
-            } else {
-                for (size_t q = 0; q < mlen; q++) d[q] = s[q];  // overlapping: repeats the last `off` bytes
-            }
-            made += mlen;
+            if (off - 1 >= size_t(op - floor)) return fail("damaged sequences (a match points before the data)");
+            matchCopy(op, off, mlen);
+            op += mlen;
         }
-        if (b.left != 0) return fail("damaged sequences (bitstream not used up)");
+        rep[0] = r0, rep[1] = r1, rep[2] = r2;
+        if (b.left() != 0) return fail("damaged sequences (bitstream not used up)");
     } else if (i != n) {
         return fail("damaged block (data after the sequences header)");
     }
-    if (made + litLeft > blockMax) return fail("damaged block (more data than a block holds)");
-    memcpy(out + made, litp, litLeft);
-    made += litLeft;
+    size_t rest = size_t(litEnd - litp);
+    if (rest > size_t(oend - op)) return fail("damaged block (more data than a block holds)");
+    memcpy(op, litp, rest);
+    made = size_t(op - out) + rest;
     return true;
 }
 
