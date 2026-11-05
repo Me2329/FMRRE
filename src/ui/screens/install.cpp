@@ -115,6 +115,12 @@ void pickImage(App& app) {
                              [](App& a) { a.pop(); a.push(makeManualFlashScreen()); }));
 }
 
+// Samsung firmware: an AP_*.tar / .tar.md5 (Odin package) holding the stock partition images.
+void pickSamsung(App& app) {
+    app.push(makeFilesScreen("", {".tar.md5", ".tar", ".md5"},
+                             [](App& a, const std::string& p) { a.pop(); a.push(makeSamsungApScreen(p)); }, "Select AP firmware"));
+}
+
 class InstallScreen : public Screen {
 public:
     std::string title() const override { return "Install"; }
@@ -243,6 +249,9 @@ public:
             y += ui.dp(148);
             if (ui.button(ui.id("pick_img"), Rect(x, y, w, ui.dp(54)), "Choose image", Icon::Folder)) pickImage(app);
             y += ui.dp(64);
+            if (ui.button(ui.id("samsung_ap"), Rect(x, y, w, ui.dp(50)), "Samsung firmware (AP .tar)", Icon::Phone, BtnStyle::Tonal))
+                pickSamsung(app);
+            y += ui.dp(58);
             if (ui.button(ui.id("cant_find"), Rect(x, y, w, ui.dp(50)), "Can't find your file?", Icon::Search, BtnStyle::Tonal))
                 app.push(makeManualFlashScreen());
             y += ui.dp(58);

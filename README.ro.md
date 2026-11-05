@@ -17,7 +17,7 @@ folosește TWRP: fstab-urile TWRP, OpenRecoveryScript, comanda `twrp` și backup
 
 | | |
 |---|---|
-| **Instalare** | Zip-uri (ROM-uri, Magisk, GApps), imagini `.img` / sparse / `.xz` / `.gz` / `.zst` / `.lz4` / `.bz2` / în zip, cu verificare SHA-256 după scriere |
+| **Instalare** | Zip-uri (ROM-uri, Magisk, GApps), imagini `.img` / sparse / `.xz` / `.gz` / `.zst` / `.lz4` / `.bz2` / în zip, cu verificare SHA-256 după scriere; **firmware Samsung AP `.tar`/`.tar.md5`** direct pe telefon (verifică MD5, instalează boot / recovery / vbmeta stock fără PC sau Odin) |
 | **ROM-uri A/B și OTA** | Instalează `payload.bin` (ROM-uri și OTA complete) în slotul inactiv, cu dm-verity și FEC calculate pe telefon; scoate imaginile boot / init_boot pentru Magisk |
 | **GSI** | Expertul GSI mărește `system` în super, instalează imaginea și dezactivează AVB |
 | **fastbootd propriu** | `fastboot flash` de pe calculator direct în FMRRE, cu partițiile din super redimensionate automat |

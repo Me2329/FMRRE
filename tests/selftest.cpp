@@ -44,6 +44,7 @@
 #include "sys/ors.h"
 #include "sys/pathcheck.h"
 #include "sys/rescue.h"
+#include "sys/samsung.h"
 #include "sys/payload.h"
 #include "sys/super.h"
 #include "sys/tar.h"
@@ -572,6 +573,79 @@ static void testBackupRestore(const std::string& dir) {
             util::writeFile(fe, d2);
         }
     CHECK(!runTask("restore-enc-tampered", [&](Task& t) { return backup::restore(es, {"boot"}, false, t, e.password); }));
+}
+
+// Samsung AP firmware packages (ustar + appended MD5): list the images, verify the checksum, extract one.
+static std::string ustarHeader(const std::string& name, uint64_t size) {
+    std::string h(512, '\0');
+    auto oct = [&](int off, int len, uint64_t v) {
+        char b[32];
+        snprintf(b, sizeof b, "%0*llo", len - 1, (unsigned long long)v);
+        memcpy(&h[off], b, len - 1);
+    };
+    memcpy(&h[0], name.data(), std::min<size_t>(name.size(), 100));
+    oct(100, 8, 0644);
+    oct(108, 8, 0);
+    oct(116, 8, 0);
+    oct(124, 12, size);
+    oct(136, 12, 0);
+    h[156] = '0';
+    memcpy(&h[257], "ustar", 5);
+    memcpy(&h[263], "00", 2);
+    memset(&h[148], ' ', 8);  // checksum field spaces while summing
+    unsigned sum = 0;
+    for (unsigned char ch : h) sum += ch;
+    char cs[8];
+    snprintf(cs, sizeof cs, "%06o", sum);
+    memcpy(&h[148], cs, 6);
+    h[154] = '\0';
+    return h;
+}
+static void tarAppend(std::string& tar, const std::string& name, const std::string& data) {
+    tar += ustarHeader(name, data.size());
+    tar += data;
+    if (data.size() % 512) tar.append(512 - data.size() % 512, '\0');
+}
+static void testSamsungAp(const std::string& dir) {
+    std::string boot = "ANDROID!", recov(3000, 'R'), meta = "junk";  // entry payloads (content doesn't matter here)
+    for (int i = 0; i < 5000; i++) boot.push_back(char('a' + (i * 7 % 26)));
+    std::string tar;
+    tarAppend(tar, "boot.img.lz4", boot);
+    tarAppend(tar, "recovery.img", recov);
+    tarAppend(tar, "meta-data/fota.zip", meta);  // not a partition image: must be ignored
+    tarAppend(tar, "vbmeta.img.lz4", std::string(600, 'V'));
+    tar.append(1024, '\0');  // end of archive
+    Md5 hasher;
+    hasher.update(tar.data(), tar.size());
+    std::string hex = Sha256::toHex(hasher.digest());
+    std::string ap = dir + "/AP_test.tar.md5";
+    CHECK(util::writeFile(ap, tar + hex + "  AP_test.tar\n"));
+
+    samsung::Package pkg;
+    std::string err;
+    CHECK(samsung::read(ap, pkg, err));
+    CHECK(pkg.md5 == samsung::Md5State::Ok);
+    CHECK(pkg.images.size() == 3);  // boot, recovery, vbmeta - not the meta-data entry
+    CHECK(samsung::partitionFor("boot.img.lz4") == "boot" && samsung::partitionFor("vbmeta.img.lz4") == "vbmeta");
+    CHECK(samsung::partitionFor("recovery.img") == "recovery" && samsung::partitionFor("meta-data/fota.zip").empty());
+    bool foundBoot = false;
+    for (auto& im : pkg.images)
+        if (im.partition == "boot") {
+            foundBoot = im.lz4 && im.size == boot.size();
+            std::string out = dir + "/out-boot.img.lz4", got;
+            CHECK(runTask("ap-extract", [&](Task& t) { return samsung::extract(ap, im, out, t); }));
+            CHECK(util::readFile(out, got) && got == boot);  // the exact entry bytes, kept compressed
+            unlink(out.c_str());
+        }
+    CHECK(foundBoot);
+    // A damaged tar body: the MD5 no longer matches (caught before anything is flashed).
+    std::string bad = tar;
+    bad[600] ^= 0x40;
+    CHECK(util::writeFile(ap, bad + hex + "  AP_test.tar\n"));
+    CHECK(samsung::read(ap, pkg, err) && pkg.md5 == samsung::Md5State::Mismatch);
+    // A plain .tar with no appended checksum: still readable, md5 None.
+    CHECK(util::writeFile(dir + "/plain.tar", tar));
+    CHECK(samsung::read(dir + "/plain.tar", pkg, err) && pkg.md5 == samsung::Md5State::None && pkg.images.size() == 3);
 }
 
 // A backup split into parts (for FAT32 cards): each .winNNN is a whole, independent archive; restore stitches them
@@ -1955,6 +2029,7 @@ int main() {
     testAvb(dir);
     testBackupRestore(dir);
     testSplitBackup(dir);
+    testSamsungAp(dir);
     testLegacyFolders();
     testPathcheck(dir);
     testCrypt();

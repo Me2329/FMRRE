@@ -501,6 +501,11 @@ const Entry kRo[] = {
     {"Fingerprint", "Amprentă build"},
     {"Display test", "Test ecran"}, {"Dead pixels, burn-in, colour uniformity", "Pixeli morți, burn-in, uniformitatea culorii"},
     {"Tap to change, Back to leave", "Atinge pentru a schimba, Înapoi pentru a ieși"},
+    // Samsung firmware (AP) on-device flashing
+    {"Samsung firmware", "Firmware Samsung"}, {"Samsung firmware (AP .tar)", "Firmware Samsung (AP .tar)"},
+    {"Select AP firmware", "Alege firmware AP"}, {"Images - tap one to flash", "Imagini - atinge una pentru instalare"},
+    {"MD5 checksum OK", "Sumă de control MD5 OK"}, {"MD5 MISMATCH - the file is damaged", "MD5 NEPOTRIVIT - fișierul e deteriorat"},
+    {"No checksum in this package", "Fără sumă de control în acest pachet"}, {"Couldn't read the checksum", "Nu s-a putut citi suma de control"},
     {"All partitions", "Toate partițiile"}, {"A/B (seamless)", "A/B (fără întreruperi)"},
     {"A-only (dedicated recovery)", "doar A (recovery dedicat)"}, {"encrypted", "criptat"}, {"not encrypted", "necriptat"},
     {"What was flashed, wiped, restored and repaired", "Ce s-a instalat, șters, restaurat și reparat"}, {"Nothing yet", "Nimic încă"},
