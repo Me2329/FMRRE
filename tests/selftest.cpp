@@ -765,7 +765,7 @@ static void testAvb(const std::string& dir) {
 static std::string tarEntry(const std::string& name, char type, const std::string& data, const std::string& link = "") {
     char h[512] = {0};
     memcpy(h, name.data(), std::min<size_t>(name.size(), 100));
-    snprintf(h + 100, 8, "%07o", 0644);
+    snprintf(h + 100, 8, "%07o", type == '5' ? 0755 : 0644);  // folders searchable, or a non-root reader can't get in
     snprintf(h + 108, 8, "%07o", 0);
     snprintf(h + 116, 8, "%07o", 0);
     snprintf(h + 124, 12, "%011o", unsigned(data.size()));
