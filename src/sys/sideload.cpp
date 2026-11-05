@@ -39,6 +39,8 @@ std::string receive(Task& t, int tcpPort) {
     return path;
 }
 
+bool streamed() { return g_session && g_session->streamed(); }
+
 void finish(bool installed) {
     if (!g_session) return;
     g_session->finish(installed);

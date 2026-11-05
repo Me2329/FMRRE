@@ -22,6 +22,7 @@
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/fusefile.h"
 #include "sys/partitions.h"
 
 namespace tw::adbd {
@@ -406,6 +407,8 @@ struct Sideload::Impl {
     std::string pathOut;
     std::thread watch;
     std::atomic<bool> stopWatch{false};
+    std::unique_ptr<fusefile::Server> fuse;  // the package served from the computer, block by block, while it installs
+    uint64_t pkgSize = 0, blockSize = 0;
 
     bool send(uint32_t cmd, uint32_t a0, uint32_t a1, const std::string& data = "") {
         uint8_t h[24];
@@ -437,11 +440,42 @@ struct Sideload::Impl {
         p.data.resize(len);
         return !len || link->readFull(&p.data[0], len);
     }
+    // One block of a sideload-host package: asked for by number, sent by the computer in one or more WRTEs.
+    bool fetch(uint64_t b, std::string& out) {
+        char req[32];
+        snprintf(req, sizeof req, "%08" PRIu64, b);
+        if (b * blockSize >= pkgSize || !send(A_WRTE, localId, remoteId, std::string(req, 8))) return false;
+        uint64_t need = std::min(blockSize, pkgSize - b * blockSize);
+        out.clear();
+        bool acked = false;
+        while (out.size() < need || !acked) {
+            Packet q;
+            if (!recv(q)) return false;
+            if (q.cmd == A_OKAY && q.a1 == localId) {
+                acked = true;
+            } else if (q.cmd == A_WRTE && q.a1 == localId) {
+                if (q.data.size() > need - out.size()) return false;
+                out += q.data;
+                if (!send(A_OKAY, localId, remoteId)) return false;
+            } else if (q.cmd == A_CLSE || q.cmd == A_CNXN) {
+                return false;
+            }
+        }
+        return true;
+    }
     void stopWatcher() {
         stopWatch = true;
         if (watch.joinable()) watch.join();
     }
+    void stopFuse() {
+        if (!fuse) return;
+        fuse->stop();
+        LOGI("adb sideload: %s served from the computer for a %s package%s", util::humanSize(fuse->fetched()).c_str(),
+             util::humanSize(pkgSize).c_str(), fuse->problem().empty() ? "" : (" (" + fuse->problem() + ")").c_str());
+        fuse.reset();
+    }
     void close() {
+        stopFuse();
         stopWatcher();
         link.reset();  // USB: gives the gadget back to adbd
     }
@@ -567,6 +601,24 @@ std::string Sideload::receive(const Options& o, Task& t) {
             d.send(A_CLSE, 0, d.remoteId);  // not a service of ours
             continue;
         }
+        d.pkgSize = size;
+        d.blockSize = block;
+        if (host && !(device::isSim() && getenv("FMRRE_SIDELOAD_STORE"))) {
+            // Served from the computer while it installs, through FUSE as in AOSP's recovery: nothing is stored, so
+            // the package needs no free space; blocks read again are checked against their first SHA-256.
+            auto fs = std::make_unique<fusefile::Server>();
+            std::string ferr;
+            if (fs->start(device::path("/sideload"), "package.zip", size, uint32_t(block),
+                          [&d](uint64_t b, std::string& out) { return d.fetch(b, out); }, ferr)) {
+                d.send(A_OKAY, d.localId, d.remoteId);
+                d.streamOpen = true;
+                d.fuse = std::move(fs);
+                d.pathOut = d.fuse->path();
+                t.print("Reading the %s package from the computer as it installs (nothing is stored)", util::humanSize(size).c_str());
+                return d.pathOut;
+            }
+            LOGI("adb sideload: %s - the package is stored first", ferr.c_str());
+        }
         std::string why, dir = pickDir(size, why);
         if (dir.empty()) {
             t.print("adb sideload: %s", why.c_str());
@@ -592,37 +644,19 @@ std::string Sideload::receive(const Options& o, Task& t) {
             snprintf(det, sizeof det, "%s / %s", util::humanSize(got).c_str(), util::humanSize(size).c_str());
             t.setDetail(det);
         };
-        // Data for our stream: written where it belongs, acknowledged so the computer sends more.
-        auto take = [&](const Packet& q, uint64_t at, uint64_t limit) {
-            if (q.data.size() > limit - at) return false;
-            size_t done = 0;
-            while (done < q.data.size()) {
-                ssize_t w = pwrite(fd, q.data.data() + done, q.data.size() - done, off_t(at + done));
+        auto put = [&](const std::string& data, uint64_t at) {
+            for (size_t done = 0; done < data.size();) {
+                ssize_t w = pwrite(fd, data.data() + done, data.size() - done, off_t(at + done));
                 if (w <= 0) return false;
                 done += size_t(w);
             }
-            return d.send(A_OKAY, d.localId, d.remoteId);
+            return true;
         };
-        if (host) {  // ask for each block; the computer sends it (in one or more WRTEs)
-            uint64_t blocks = (size + block - 1) / block;
-            for (uint64_t b = 0; b < blocks && ok; b++) {
-                char req[32];
-                snprintf(req, sizeof req, "%08" PRIu64, b);
-                if (!d.send(A_WRTE, d.localId, d.remoteId, std::string(req, 8))) { ok = false; break; }
-                uint64_t start = b * block, need = std::min(block, size - start), have = 0;
-                bool acked = false;
-                while (ok && (have < need || !acked)) {
-                    Packet q;
-                    if (!d.recv(q)) { ok = false; break; }
-                    if (q.cmd == A_OKAY && q.a1 == d.localId) acked = true;
-                    else if (q.cmd == A_WRTE && q.a1 == d.localId) {
-                        ok = take(q, start + have, start + need);
-                        have += q.data.size();
-                    } else if (q.cmd == A_CLSE || q.cmd == A_CNXN) {
-                        ok = false;
-                    }
-                }
-                got = start + have;
+        if (host) {  // ask for each block in turn
+            std::string data;
+            for (uint64_t b = 0; b * block < size && ok; b++) {
+                ok = d.fetch(b, data) && put(data, b * block);
+                if (ok) got += data.size();
                 progress();
             }
         } else {  // the old protocol: the whole file, pushed
@@ -630,7 +664,7 @@ std::string Sideload::receive(const Options& o, Task& t) {
                 Packet q;
                 if (!d.recv(q)) { ok = false; break; }
                 if (q.cmd == A_WRTE && q.a1 == d.localId) {
-                    ok = take(q, got, size);
+                    ok = q.data.size() <= size - got && put(q.data, got) && d.send(A_OKAY, d.localId, d.remoteId);
                     got += q.data.size();
                     progress();
                 } else if (q.cmd == A_CLSE || q.cmd == A_CNXN) {
@@ -657,6 +691,8 @@ std::string Sideload::receive(const Options& o, Task& t) {
     }
 }
 
+bool Sideload::streamed() const { return d_->fuse != nullptr; }
+
 void Sideload::finish(bool installed) {
     Impl& d = *d_;
     if (d.finished || !d.link || !d.streamOpen) {
@@ -664,6 +700,7 @@ void Sideload::finish(bool installed) {
         return;
     }
     d.finished = true;
+    d.stopFuse();  // the installer is done with the package
     // adb sideload exits 0 on DONEDONE, 1 on FAILFAIL (adb_sideload_install). A computer that went away meanwhile
     // can't make this wait for ever: the link is cut after 5 seconds.
     d.stopWatcher();

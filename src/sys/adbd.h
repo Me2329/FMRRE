@@ -25,9 +25,12 @@ class Sideload {
 public:
     Sideload();
     ~Sideload();  // closes the connection (as a failure, if finish() wasn't called) and gives USB back to adbd
-    // Waits for `adb sideload` and stores the package in the first of internal storage, /cache, /tmp that has room
-    // for it. Returns its path, or "" (why: in t's log).
+    // Waits for `adb sideload`. The package is then read from the computer as it installs, through FUSE at
+    // /sideload/package.zip (as in AOSP's recovery: nothing is stored, no free space needed; a block read twice
+    // must not change). Without FUSE - or with the old protocol, which pushes the whole file - it is stored in the
+    // first of internal storage, /cache, /tmp that has room. Returns its path, or "" (why: in t's log).
     std::string receive(const Options& o, Task& t);
+    bool streamed() const;  // read from the computer as it installs (FUSE)
     // After installing: the computer is told (adb sideload exits 0, or reports the failure), then it is closed.
     void finish(bool installed);
     std::string reboot;  // the computer asked for `adb reboot <target>` instead ("" = system, "-" = none)

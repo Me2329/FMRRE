@@ -5,6 +5,7 @@
 //   - backup -> wipe -> restore round trip (tar + gzip + sha256) in the simulator sandbox
 //   - bzip2 / xz decoding, Reed-Solomon, dm-verity hash tree + FEC, A/B OTA payload extraction
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <map>
 #include <cstring>
@@ -34,6 +35,7 @@
 #include "sys/avb.h"
 #include "sys/backup.h"
 #include "sys/bootimg.h"
+#include "sys/fusefile.h"
 #include "sys/history.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
@@ -1646,6 +1648,70 @@ static void testGzip() {
     CHECK(gunzipAll(full, out, err) && out == zText(5000));
 }
 
+// ---- one file over FUSE (adb sideload without storing the package) ---------------------------------
+static void testFuseFile(const std::string& dir) {
+    const uint32_t bs = 65536;
+    const uint64_t size = 5 * uint64_t(bs) + 1000;
+    std::atomic<int> fetches{0};
+    std::atomic<bool> lie{false};
+    auto blockData = [&](uint64_t b) {
+        std::string d(size_t(std::min<uint64_t>(bs, size - b * bs)), '\0');
+        for (size_t i = 0; i < d.size(); i++) d[i] = char((b * 131 + i * 7) & 0xFF);
+        return d;
+    };
+    fusefile::Server srv;
+    std::string err, mnt = dir + "/fuse";
+    if (!srv.start(mnt, "package.zip", size, bs, [&](uint64_t b, std::string& out) {
+            fetches++;
+            out = blockData(b);
+            if (lie && b == 2) out[100] ^= 1;  // a computer that changes a block after it was read once
+            return true;
+        }, err)) {
+        printf("FUSE can't be mounted here (%s): skipped\n", err.c_str());
+        return;
+    }
+    std::string want;
+    for (uint64_t b = 0; b * bs < size; b++) want += blockData(b);
+    std::string got;
+    CHECK(util::readFile(srv.path(), got) && got == want);  // the whole file, blocks fetched on demand
+    struct stat st;
+    CHECK(stat(srv.path().c_str(), &st) == 0 && uint64_t(st.st_size) == size && (st.st_mode & 0777) == 0444 && S_ISREG(st.st_mode));
+    auto names = util::listDir(mnt);
+    CHECK(names.size() == 1 && names[0].name == "package.zip");
+    CHECK(open((mnt + "/package.zip").c_str(), O_WRONLY) < 0 && errno == EROFS);
+    CHECK(!util::exists(mnt + "/other"));
+    // A read in the middle that spans two blocks, at an odd offset.
+    int fd = open(srv.path().c_str(), O_RDONLY);
+    char buf[3000];
+    CHECK(fd >= 0 && pread(fd, buf, sizeof buf, off_t(bs) * 3 - 1234) == ssize_t(sizeof buf) &&
+          memcmp(buf, want.data() + bs * 3 - 1234, sizeof buf) == 0);
+    // Past the end: nothing.
+    CHECK(pread(fd, buf, sizeof buf, off_t(size)) == 0);
+    // Read again past the kernel's cache (O_DIRECT) once the server's own few cached blocks are others: a block
+    // that changed since its first read is refused - its SHA-256 differs.
+    int dfd = open(srv.path().c_str(), O_RDONLY | O_DIRECT);
+    void* ab = nullptr;
+    if (dfd >= 0 && posix_memalign(&ab, 4096, 4096) == 0) {
+        bool ok = true;
+        for (uint64_t b : {0, 1, 3, 4}) ok &= pread(dfd, ab, 4096, off_t(b * bs)) == 4096 && memcmp(ab, want.data() + b * bs, 4096) == 0;
+        CHECK(ok);
+        lie = true;
+        int before = fetches;
+        ssize_t r = pread(dfd, ab, 4096, off_t(2 * bs));
+        CHECK(fetches > before && r < 0 && errno == EIO);
+        CHECK(srv.problem().find("different data for block 2") != std::string::npos);
+        lie = false;
+    } else {
+        printf("FUSE: no O_DIRECT here - the changed-block check didn't run\n");
+    }
+    free(ab);
+    if (dfd >= 0) close(dfd);
+    close(fd);
+    CHECK(srv.fetched() >= size);
+    srv.stop();
+    CHECK(!util::exists(mnt + "/package.zip"));
+}
+
 static void testZstd(const std::string& dir) {
     // xxHash64 reference values (the xxhash library)
     CHECK(Xxh64::of("", 0) == 0xef46db3751d8e999ull && Xxh64::of("abc", 3) == 0x44bc2cf5ad770999ull);
@@ -1775,6 +1841,7 @@ int main() {
     testLz4(dir);
     testZstd(dir);
     testGzip();
+    testFuseFile(dir);
     testTar(dir);
     testZipSig(dir);
     testPayload(dir);

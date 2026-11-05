@@ -147,8 +147,9 @@ public:
         Settings& s = Settings::get();
 
         if (mode_ == 3) {
-            const char* about = "Run adb sideload <file.zip> on your computer: the package comes over USB, is checked (CRC, signature) and "
-                                "flashed here, and adb shows the result. FMRRE speaks adb itself - no minadbd needed.";
+            const char* about = "Run adb sideload <file.zip> on your computer: the package is read over USB while it installs - no free "
+                                "space needed - checked (CRC, signature) and flashed here, and adb shows the result. FMRRE speaks adb "
+                                "itself - no minadbd needed.";
             float aboutH = font::wrap(Face::Regular, ui.dp(13.5f), about, w - ui.dp(94)).size() * font::lineHeight(Face::Regular, ui.dp(13.5f));
             Rect info(x, y, w, std::max(ui.dp(190), ui.dp(48) + aboutH + ui.dp(64)));
             ui.card(info);
@@ -180,7 +181,8 @@ public:
                     t.setRange(0, 0.7f);
                     std::string pkg = sideload::receive(t);
                     if (pkg.empty()) return false;
-                    t.setRange(0.7f, 0.3f);
+                    if (sideload::streamed()) t.setRange(0, 1);  // read as it installs: the install is all of it
+                    else t.setRange(0.7f, 0.3f);
                     bool ok = installer::installZip(pkg, o, t);
                     sideload::finish(ok);
                     unlink(pkg.c_str());

@@ -37,8 +37,10 @@ jobs:
         run: python3 tests/zipsig_test.py out/sim/fmrre
       - name: Zstandard tests (the zstd tool's output at every level, decoded by FMRRE)
         run: python3 tests/zstd_test.py out/sim/fmrre
-      - name: adb sideload tests (the real adb client against FMRRE's own adb, over TCP)
+      - name: adb sideload tests (the real adb client against FMRRE's own adb, over TCP; the package stored first)
         run: python3 tests/adb_sideload_test.py out/sim/fmrre
+      - name: adb sideload tests as root (the package read through FUSE as it installs, and stored first)
+        run: sudo env "PATH=$PATH" python3 tests/adb_sideload_test.py out/sim/fmrre
       - name: tar tests (FMRRE's tar against GNU tar, both ways; archives that try to escape)
         run: python3 tests/tar_test.py out/sim/fmrre
       - name: Backup tests (gzip made on every core, read by zlib / gzip; several members; damaged archives)
