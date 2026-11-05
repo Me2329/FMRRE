@@ -112,7 +112,15 @@ public:
             s.set("anim_speed", int(50 + speed * 150 + 0.5f) / 10 * 10);
             changed = true;
         }
-        y += sp.h + ui.dp(18);
+        y += sp.h + ui.dp(12);
+        Rect dq(x, y, w, ui.dp(70));
+        int det = s.integer("detail", -1);
+        ui.card(dq, ui.dp(18));
+        if (ui.listItem(ui.id("detail"), dq.inset(ui.dp(4)), Icon::Eye, "Display quality",
+                        det == 0 ? "Low - no shadows or animations (faster)" : "High - shadows, glows, animations",
+                        det == 0 ? "Low" : "High", th.accent) & Clicked)
+            app.push(makeDetailScreen(false));
+        y += dq.h + ui.dp(18);
 
         // ---- Display
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Display");

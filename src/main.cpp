@@ -143,6 +143,7 @@ static int runScript(App& app, const std::string& file, const std::string& outDi
             else if (name == "about") sc = makeAboutScreen();
             else if (name == "mount") sc = makeMountScreen();
             else if (name == "settings") sc = makeSettingsScreen();
+            else if (name == "detail") sc = makeDetailScreen(raw == "first");
             else if (name == "backup") sc = makeBackupScreen();
             else if (name == "restore") sc = makeRestoreScreen();
             if (sc) app.push(std::move(sc));

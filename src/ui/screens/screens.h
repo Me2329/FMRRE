@@ -53,6 +53,7 @@ std::unique_ptr<Screen> makeMonitorScreen();
 std::unique_ptr<Screen> makePartInfoScreen();
 std::unique_ptr<Screen> makeInputTestScreen();
 std::unique_ptr<Screen> makeSettingsScreen();
+std::unique_ptr<Screen> makeDetailScreen(bool firstRun = false);
 std::unique_ptr<Screen> makeRebootScreen();
 std::unique_ptr<Screen> makeOperationScreen(Icon icon);
 std::unique_ptr<Screen> makeAboutScreen();

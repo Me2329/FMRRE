@@ -30,13 +30,22 @@ App::App(Display* d, EvdevInput* in, InputQueue* q) : display_(d), input_(in), q
     if (!Settings::get().str("pin_hash").empty()) locked_ = true;
     stack_.push_back(makeHomeScreen());
     stack_.back()->onShow(*this);
+    // First boot: let the user pick display quality before anything else (older phones run smoother on low detail).
+    if (Settings::get().integer("detail", -1) < 0 && !device::isSim()) {
+        stack_.push_back(makeDetailScreen(true));
+        stack_.back()->onShow(*this);
+    }
 }
 
 void App::applySettings() {
     Settings& s = Settings::get();
     ui.th = makeTheme(s.integer("accent", 0), s.integer("style", 0));
     i18n::setLanguage(s.str("lang", "en"));
-    ui.animations = s.flag("animations", device::animationsByDefault());
+    // Detail level (slow phones): 0 = low (no shadows, glows or animations), 1 = high, -1 = not chosen yet (full).
+    bool low = s.integer("detail", -1) == 0;
+    canvas.setLowDetail(low);
+    if (low) ui.th.glows = false;
+    ui.animations = !low && s.flag("animations", device::animationsByDefault());
     ui.animSpeed = s.integer("anim_speed", 100) / 100.0f;
     topInset = ui.dp((float)s.integer("inset_top", device::isSim() ? 0 : 24));
     bottomInset = ui.dp((float)s.integer("inset_bottom", device::isSim() ? 0 : 8));
