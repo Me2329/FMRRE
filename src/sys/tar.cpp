@@ -291,6 +291,7 @@ struct Extractor::Impl {
     std::map<std::string, std::string> pax, globalPax;
     int fd = -1;
     std::string curPath;
+    std::string okParent = "-";  // the last folder parentsOk() passed ("" = root itself, "-" = none)
     Meta cur;
     std::vector<std::pair<std::string, Meta>> dirs;  // their own mode / times last: files go in first
     int zeros = 0;
@@ -316,8 +317,12 @@ struct Extractor::Impl {
         return true;
     }
     // Every folder on the way must be a real folder (made if missing), never a symlink - nothing is written
-    // through a link the archive itself put there.
+    // through a link the archive itself put there. The last folder that passed is remembered (entries come folder
+    // by folder) until an entry is put at that folder or one above it.
     bool parentsOk(const std::string& rel) {
+        size_t slash = rel.rfind('/');
+        std::string parent = slash == std::string::npos ? "" : rel.substr(0, slash);
+        if (parent == okParent) return true;
         std::string p = root;
         auto comps = util::split(rel, '/');
         for (size_t i = 0; i + 1 < comps.size(); i++) {
@@ -329,23 +334,50 @@ struct Extractor::Impl {
                 return false;
             }
         }
+        okParent = parent;
         return true;
     }
-    void apply(const std::string& path, const Meta& m, bool link, Stats& st) {
-        if (lchown(path.c_str(), uid_t(m.uid), gid_t(m.gid)) != 0) {}
-        if (!link && chmod(path.c_str(), m.mode & 07777) != 0) {}
+    // Something not a folder goes to `rel`: if that is the remembered folder or one above it, check again next time.
+    void replacing(const std::string& rel) {
+        if (okParent != "-" && (okParent == rel || util::startsWith(okParent, rel + "/"))) okParent = "-";
+    }
+    // Make it with `create`; whatever is in the way (a file, a link, an empty folder) is removed first.
+    template <class F>
+    bool make(const std::string& path, F create) {
+        if (create()) return true;
+        if (errno != EEXIST) return false;
+        struct stat old;
+        if (lstat(path.c_str(), &old) != 0 || (S_ISDIR(old.st_mode) ? rmdir(path.c_str()) : unlink(path.c_str())) != 0) return false;
+        return create();
+    }
+    void label(int fd, const std::string& path, const Meta& m, Stats& st) {
         for (auto& kv : m.xattrs) {
             std::string v = kv.second;
             if (kv.first == kSelinux && (v.empty() || v.back() != '\0')) v.push_back('\0');
-            if (lsetxattr(path.c_str(), kv.first.c_str(), v.data(), v.size(), 0) == 0) {
+            int r = fd >= 0 ? fsetxattr(fd, kv.first.c_str(), v.data(), v.size(), 0) : lsetxattr(path.c_str(), kv.first.c_str(), v.data(), v.size(), 0);
+            if (r == 0) {
                 if (kv.first == kSelinux) st.labels++;
             } else {
                 st.xattrFailed++;
                 note(st, "couldn't set " + kv.first + " on " + path.substr(root.size()) + ": " + strerror(errno));
             }
         }
+    }
+    void apply(const std::string& path, const Meta& m, bool link, Stats& st) {
+        if (lchown(path.c_str(), uid_t(m.uid), gid_t(m.gid)) != 0) {}
+        if (!link && chmod(path.c_str(), m.mode & 07777) != 0) {}
+        label(-1, path, m, st);
         timespec ts[2] = {{m.mtime, 0}, {m.mtime, 0}};
         utimensat(AT_FDCWD, path.c_str(), ts, AT_SYMLINK_NOFOLLOW);
+    }
+    // A regular file, still open: through its descriptor (no path lookups), then closed.
+    void applyFd(int fd, const std::string& path, const Meta& m, Stats& st) {
+        if (fchown(fd, uid_t(m.uid), gid_t(m.gid)) != 0) {}
+        if (fchmod(fd, m.mode & 07777) != 0) {}
+        label(fd, path, m, st);
+        timespec ts[2] = {{m.mtime, 0}, {m.mtime, 0}};
+        futimens(fd, ts);
+        close(fd);
     }
 };
 
@@ -452,26 +484,19 @@ bool Extractor::feed(const void* data, size_t n) {
                     d.state = d.remaining ? Impl::Skip : (d.padLeft ? Impl::Pad : Impl::Header);
                     break;
                 }
-                struct stat old;
-                if (type != '5' && !rel.empty() && lstat(path.c_str(), &old) == 0) {  // replace what is there
-                    if (S_ISDIR(old.st_mode) ? rmdir(path.c_str()) != 0 : unlink(path.c_str()) != 0) {
-                        st_.refused++;
-                        note(st_, "can't replace " + rel + ": " + strerror(errno));
-                        d.state = d.remaining ? Impl::Skip : (d.padLeft ? Impl::Pad : Impl::Header);
-                        break;
-                    }
-                }
+                if (type != '5') d.replacing(rel);
                 if (hasData) {
-                    d.fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
-                    if (d.fd < 0) return fail("can't create " + rel + ": " + strerror(errno));
+                    // O_EXCL: whatever is in the way (a file, a link, an empty folder) is removed first - and only
+                    // looked at when there is something.
+                    if (!d.make(path, [&] { return (d.fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600)) >= 0; }))
+                        return fail("can't create " + rel + ": " + strerror(errno));
                     d.curPath = path;
                     d.cur = m;
                     st_.files++;
                     st_.bytes += size;
                     if (!size) {
-                        close(d.fd);
+                        d.applyFd(d.fd, path, m, st_);
                         d.fd = -1;
-                        d.apply(path, m, false, st_);
                     }
                     d.state = size ? Impl::Data : Impl::Header;
                     break;
@@ -483,13 +508,15 @@ bool Extractor::feed(const void* data, size_t n) {
                         st_.dirs++;
                         break;
                     case '2':
-                        if (symlink(link.c_str(), path.c_str()) != 0) return fail("can't create the link " + rel + ": " + strerror(errno));
+                        if (!d.make(path, [&] { return symlink(link.c_str(), path.c_str()) == 0; }))
+                            return fail("can't create the link " + rel + ": " + strerror(errno));
                         d.apply(path, m, true, st_);
                         st_.links++;
                         break;
                     case '1': {
                         std::string target;
-                        if (!d.sanitize(link, target) || target.empty() || ::link((d.root + "/" + target).c_str(), path.c_str()) != 0) {
+                        if (!d.sanitize(link, target) || target.empty() ||
+                            !d.make(path, [&] { return ::link((d.root + "/" + target).c_str(), path.c_str()) == 0; })) {
                             st_.refused++;
                             note(st_, "hard link " + rel + " -> " + link + " not made");
                         } else {
@@ -502,7 +529,7 @@ bool Extractor::feed(const void* data, size_t n) {
                     case '6': {
                         mode_t kind = type == '3' ? S_IFCHR : type == '4' ? S_IFBLK : S_IFIFO;
                         dev_t dev = makedev(unsigned(parseNum(h + 329, 8)), unsigned(parseNum(h + 337, 8)));
-                        if (mknod(path.c_str(), kind | 0600, type == '6' ? 0 : dev) != 0) {
+                        if (!d.make(path, [&] { return mknod(path.c_str(), kind | 0600, type == '6' ? 0 : dev) == 0; })) {
                             st_.refused++;
                             note(st_, "can't create " + rel + ": " + strerror(errno));
                         } else {
@@ -530,9 +557,8 @@ bool Extractor::feed(const void* data, size_t n) {
                 n -= k;
                 d.remaining -= k;
                 if (!d.remaining) {
-                    close(d.fd);
+                    d.applyFd(d.fd, d.curPath, d.cur, st_);
                     d.fd = -1;
-                    d.apply(d.curPath, d.cur, false, st_);
                     d.state = d.padLeft ? Impl::Pad : Impl::Header;
                 }
                 break;
