@@ -30,6 +30,8 @@ std::string signatureExplanation(const zipsig::Result& r, bool isRom);
 std::unique_ptr<Screen> makeSuperScreen();
 // "Why did my phone bootloop?": previous boot's kernel log explained, with fixes.
 std::unique_ptr<Screen> makeRescueScreen();
+// The flash history (FMRRE/history.txt), newest first.
+std::unique_ptr<Screen> makeHistoryScreen();
 // Auto repair: health checks + logs -> a plan of fixes, safest first. autostart: count down and run the
 // recommended fixes unattended (after a failed boot). prompt: Android asked for a factory reset.
 std::unique_ptr<Screen> makeAutoRepairScreen(bool autostart = false, bool prompt = false);
