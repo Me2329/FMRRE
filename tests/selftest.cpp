@@ -1157,6 +1157,22 @@ static void testLz4(const std::string& dir) {
     CHECK(util::basename(img::unpackedName(img)) == "dtbo-test-unpacked.img");
     CHECK(!runTask("unpack-bad", [&](Task& t) { return img::unpack(img2 + ".missing", unpacked, t); }));
     unlink(unpacked.c_str());
+
+    // bzip2 images (.img.bz2): decoded on the way in, like the other compressors. kBz2Fixture is a real bzip2 stream
+    // (tests/make... / the bzip2 tool) whose plaintext is fixturePlain().
+    std::string bz = dir + "/sim/data/media/0/Download/system.img.bz2", bzDev = dir + "/sim/dev/block/by-name/system_b";
+    CHECK(util::writeFile(bz, std::string((const char*)kBz2Fixture, sizeof kBz2Fixture)));
+    CHECK(img::inspect(bz).comp == img::Compression::Bzip2);
+    CHECK(runTask("flash-bz2", [&](Task& t) { return img::flash(bz, "", bzDev, fo, t); }));
+    CHECK(util::readFile(bzDev, got) && got.substr(0, fixturePlain().size()) == fixturePlain());
+    std::string bzOut = img::unpackedName(bz);
+    CHECK(util::basename(bzOut) == "system.img");
+    CHECK(runTask("unpack-bz2", [&](Task& t) { return img::unpack(bz, bzOut, t); }) && util::readFile(bzOut, got) && got == fixturePlain());
+    unlink(bzOut.c_str());
+    std::string bzBad((const char*)kBz2Fixture, sizeof kBz2Fixture);
+    bzBad[bzBad.size() / 2] ^= 0x40;  // a block-CRC mismatch: refused, never flashed as garbage
+    CHECK(util::writeFile(bz, bzBad));
+    CHECK(!runTask("flash-bz2-bad", [&](Task& t) { return img::flash(bz, "", bzDev, fo, t); }));
 }
 
 static void testPayload(const std::string& dir) {

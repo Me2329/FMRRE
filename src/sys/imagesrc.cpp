@@ -14,6 +14,7 @@
 #include "sys/history.h"
 #include "core/log.h"
 #include "core/lz4.h"
+#include "core/bunzip2.h"
 #include "core/zstd.h"
 #include "core/sha256.h"
 #include "core/task.h"
@@ -38,6 +39,7 @@ const char* compressionName(Compression c) {
         case Compression::Xz: return "xz";
         case Compression::Zstd: return "zstd";
         case Compression::Lz4: return "lz4";
+        case Compression::Bzip2: return "bzip2";
         case Compression::Zip: return "zip";
         default: return "uncompressed";
     }
@@ -59,7 +61,7 @@ const char* kindName(Kind k) {
 }
 
 std::vector<std::string> imageExtensions() {
-    return {".img", ".img.xz", ".img.gz", ".img.zst", ".img.lz4", ".bin", ".mbn", ".xz", ".gz", ".zst", ".lz4", ".raw", ".simg"};
+    return {".img", ".img.xz", ".img.gz", ".img.zst", ".img.lz4", ".img.bz2", ".bin", ".mbn", ".xz", ".gz", ".zst", ".lz4", ".bz2", ".raw", ".simg"};
 }
 
 bool isImageName(const std::string& name) {
@@ -383,11 +385,44 @@ private:
     ZstdFrame dec_;
 };
 
+class Bz2Source : public Source {
+public:
+    Bz2Source(int fd, uint64_t size)
+        : dec_([this](uint8_t* p, size_t n) -> ssize_t { return pull(p, n); }) {
+        in_.fd = fd;
+        in_.size = size;
+    }
+    ~Bz2Source() override { close(in_.fd); }
+    float progress() const override { return in_.progress(); }
+
+    ssize_t read(void* out, size_t n) override {
+        ssize_t r = dec_.read((uint8_t*)out, n);
+        if (r < 0) {
+            error = dec_.error();
+            return -1;
+        }
+        produced += r;
+        return r;
+    }
+
+private:
+    ssize_t pull(uint8_t* p, size_t n) {
+        if (in_.off >= in_.len && !in_.fill()) return 0;
+        size_t k = std::min(n, in_.len - in_.off);
+        memcpy(p, in_.buf.data() + in_.off, k);
+        in_.off += k;
+        return ssize_t(k);
+    }
+    InBuf in_;
+    Bunzip2 dec_;
+};
+
 Compression sniff(const uint8_t* h, size_t n) {
     if (n >= 2 && h[0] == 0x1f && h[1] == 0x8b) return Compression::Gzip;
     if (n >= 6 && !memcmp(h, "\xFD" "7zXZ\0", 6)) return Compression::Xz;
     if (n >= 4 && !memcmp(h, "\x28\xB5\x2F\xFD", 4)) return Compression::Zstd;
     if (n >= 4 && !memcmp(h, "\x04\x22\x4D\x18", 4)) return Compression::Lz4;
+    if (n >= 4 && h[0] == 'B' && h[1] == 'Z' && h[2] == 'h' && h[3] >= '1' && h[3] <= '9') return Compression::Bzip2;
     if (n >= 4 && !memcmp(h, "PK\x03\x04", 4)) return Compression::Zip;
     return Compression::None;
 }
@@ -470,6 +505,7 @@ std::unique_ptr<Source> open(const std::string& path, const std::string& zipEntr
         case Compression::Xz: return std::make_unique<XzSource>(fd, size);
         case Compression::Zstd: return std::make_unique<ZstdSource>(fd, size);
         case Compression::Lz4: return std::make_unique<Lz4Source>(fd, size);
+        case Compression::Bzip2: return std::make_unique<Bz2Source>(fd, size);
         case Compression::Zip: {
             close(fd);
             auto z = std::make_unique<ZipSource>();
@@ -554,6 +590,10 @@ Info inspect(const std::string& path, const std::string& zipEntry) {
         case Compression::Lz4:
             streamSize = (hn >= 14 && (h[4] & 0x08)) ? le(h + 6, 8) : 0;
             info.sizeExact = streamSize != 0;
+            break;
+        case Compression::Bzip2:
+            streamSize = 0;  // bzip2 stores no uncompressed size
+            info.sizeExact = false;
             break;
         case Compression::Zip: {
             mz_zip_archive z{};
@@ -861,6 +901,7 @@ DdCommand ddCommand(const Info& info, const std::string& dev) {
         case Compression::Gzip: cat = "gzip -dc " + p; break;
         case Compression::Zstd: cat = "zstd -dc " + p; break;
         case Compression::Lz4: cat = "lz4 -dc " + p; break;
+        case Compression::Bzip2: cat = "bzip2 -dc " + p; break;
         case Compression::Zip: cat = "unzip -p " + p + " " + shq(info.zipEntry.empty() ? "system.img" : info.zipEntry); break;
         default: break;
     }
@@ -873,7 +914,7 @@ DdCommand ddCommand(const Info& info, const std::string& dev) {
             d.lines.push_back("simg2img " + p + " " + out);
         } else {
             std::string tmp = "/data/local/tmp/" + util::basename(info.zipEntry.empty() ? info.path : info.zipEntry);
-            for (auto ext : {".xz", ".gz", ".zst", ".lz4"})
+            for (auto ext : {".xz", ".gz", ".zst", ".lz4", ".bz2"})
                 if (util::endsWith(tmp, ext)) tmp = tmp.substr(0, tmp.size() - strlen(ext));
             d.lines.push_back(cat + " > " + shq(tmp));
             d.lines.push_back("simg2img " + shq(tmp) + " " + out);
@@ -963,7 +1004,7 @@ std::string unpackedName(const std::string& path) {
         name = util::basename(info.zipEntry);
     } else {
         std::string low = util::toLower(name);
-        for (auto ext : {".xz", ".gz", ".lz4", ".zst", ".zstd"})
+        for (auto ext : {".xz", ".gz", ".lz4", ".zst", ".zstd", ".bz2"})
             if (util::endsWith(low, ext)) {
                 name = name.substr(0, name.size() - strlen(ext));
                 break;

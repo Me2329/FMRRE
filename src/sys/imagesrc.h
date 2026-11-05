@@ -14,7 +14,7 @@ class Task;
 // nothing is decompressed to a temporary file first.
 namespace img {
 
-enum class Compression { None, Gzip, Xz, Zstd, Lz4, Zip };
+enum class Compression { None, Gzip, Xz, Zstd, Lz4, Bzip2, Zip };
 enum class Kind { Unknown, Ext4, Erofs, F2fs, Boot, VendorBoot, Vbmeta, Super, Dtbo, Fat };
 
 const char* compressionName(Compression c);
