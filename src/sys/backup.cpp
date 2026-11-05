@@ -20,6 +20,7 @@
 #include <memory>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -48,9 +49,14 @@ uint64_t estimateSize(const std::string& mp) {
 // ---- streaming writer: optional gzip + sha256 + progress -------------------------
 class Sink {
 public:
+    // Can be reopened for the next part of a split backup: every per-file counter and the digest start fresh.
     bool open(const std::string& path, bool gzip, const std::string& password = "") {
         fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
         if (fd_ < 0) return false;
+        sha_.reset();
+        in_ = out_ = 0;
+        enc_.reset();
+        gz_.reset();
         gzip_ = gzip;
         if (!password.empty()) {
             enc_ = std::make_unique<crypt::Stream>();
@@ -155,15 +161,35 @@ static bool backupOne(Partition& p, const std::string& dir, const Options& o, Ta
     if (!Partitions::get().mount(p)) { t.print("  cannot mount %s", p.displayName.c_str()); return false; }
     item.type = "tar";
     item.compressed = o.compress;
-    item.file = p.name + "." + p.fsType + ".win" + std::string(o.compress ? ".gz" : "") + (o.password.empty() ? "" : ".enc");
     item.encrypted = !o.password.empty();
+    std::string suffix = std::string(o.compress ? ".gz" : "") + (o.password.empty() ? "" : ".enc");
+    // Split naming matches TWRP: data.fs.win000, .win001 ... (part 0 is numbered too). Unsplit keeps data.fs.win.
+    std::string stem = p.name + "." + p.fsType + ".win";
+    auto partName = [&](int k) { char n[16]; snprintf(n, sizeof n, "%03d", k); return stem + n + suffix; };
+    item.file = (o.splitSize ? partName(0) : stem + suffix);
     t.setStatus("Backing up " + p.displayName);
     t.print("Backing up %s (%s)...", p.displayName.c_str(), p.fsType.c_str());
     uint64_t est = estimateSize(p.mountPoint);
     std::vector<std::string> excl = isDataLike(p) ? std::vector<std::string>{"media", "lost+found"} : std::vector<std::string>{"lost+found"};
     if (!sink.open(dir + "/" + item.file, o.compress, o.password)) return false;
     // FMRRE's own tar: SELinux labels and the other extended attributes always go in.
-    uint64_t done = 0;
+    uint64_t done = 0, partBase = 0;  // partBase: bytes handed to the sink before the current part
+    int part = 0;
+    item.size = 0;
+    bool rotateFailed = false;
+    std::string curName = item.file;
+    // Close the full part (digest + size recorded), then open the next one; tar::create keeps feeding into it.
+    auto rotate = [&]() -> bool {
+        if (!sink.close()) return rotateFailed = true, false;
+        if (part == 0) item.sha256 = o.digest ? sink.digest() : "";
+        else item.extra.push_back({curName, o.digest ? sink.digest() : ""});
+        item.size += sink.written();
+        curName = partName(++part);
+        t.print("  part %d full, continuing in %s", part, curName.c_str());
+        if (!sink.open(dir + "/" + curName, o.compress, o.password)) return rotateFailed = true, false;
+        partBase = done;
+        return true;
+    };
     tar::Stats ts;
     std::string terr;
     bool ok = tar::create(p.contentPath(), excl, [&](const void* d, size_t n) {
@@ -172,15 +198,17 @@ static bool backupOne(Partition& p, const std::string& dir, const Options& o, Ta
         if (est) t.setSubProgress(std::min(0.99f, float(done) / est));
         speed(t, done, t0);
         return true;
-    }, ts, terr, [&]() { return t.cancelled(); });
-    ok = sink.close() && ok && !t.cancelled();
+    }, ts, terr, [&]() { return t.cancelled(); }, o.splitSize, rotate);
+    ok = sink.close() && ok && !t.cancelled() && !rotateFailed;
+    // Record the final (or only) part.
+    if (part == 0) item.sha256 = o.digest ? sink.digest() : "";
+    else item.extra.push_back({curName, o.digest ? sink.digest() : ""});
+    item.size += sink.written();
     if (!terr.empty() && !t.cancelled()) t.print("  %s", terr.c_str());
     for (auto& n : ts.notes) t.print("  note: %s", n.c_str());
-    item.size = sink.written();
-    if (o.digest) item.sha256 = sink.digest();
-    t.print("  %llu files, %llu folders, %llu links, %d SELinux labels: %s -> %s", (unsigned long long)ts.files,
+    t.print("  %llu files, %llu folders, %llu links, %d SELinux labels: %s -> %s%s", (unsigned long long)ts.files,
             (unsigned long long)ts.dirs, (unsigned long long)ts.links, ts.labels, util::humanSize(done).c_str(),
-            util::humanSize(item.size).c_str());
+            util::humanSize(item.size).c_str(), part ? ("  (" + std::to_string(part + 1) + " parts)").c_str() : "");
     return ok;
 }
 
@@ -189,22 +217,35 @@ static void writeManifest(const std::string& dir, const std::vector<Item>& items
     m += "device=" + device::info().device + "\nmodel=" + device::info().model + "\ncreated=" + util::dateStamp() + "\n";
     for (auto& i : items) {
         m += "item=" + i.part + "|" + i.file + "|" + i.type + "|" + (i.compressed ? "1" : "0") + "|" +
-             std::to_string(i.size) + "|" + i.sha256 + "|" + (i.encrypted ? "1" : "0") + "\n";
+             std::to_string(i.size) + "|" + i.sha256 + "|" + (i.encrypted ? "1" : "0");
+        for (auto& e : i.extra) m += "|" + e.first + ":" + e.second;  // split parts beyond the first
+        m += "\n";
         if (!i.sha256.empty()) util::writeFile(dir + "/" + i.file + ".sha2", i.sha256 + "  " + i.file + "\n");
+        for (auto& e : i.extra)
+            if (!e.second.empty()) util::writeFile(dir + "/" + e.first + ".sha2", e.second + "  " + e.first + "\n");
     }
     util::writeFile(dir + "/fmrre.manifest", m);
 }
 
-bool create(const Options& o, Task& t) {
+bool create(const Options& oIn, Task& t) {
+    Options o = oIn;
     std::string dir = backupRoot() + "/" + o.name;
     if (!util::mkdirs(dir)) {
         t.print("Cannot create backup folder %s", dir.c_str());
         return false;
     }
     t.print("Backup folder: %s", dir.c_str());
+    // A FAT (FAT32) card can't hold a file of 4 GiB or more: split automatically so the backup fits. exFAT and the
+    // Linux filesystems have no such limit.
+    struct statfs sf;
+    if (o.splitSize == 0 && statfs(dir.c_str(), &sf) == 0 && (sf.f_type == 0x4d44 /* MSDOS_SUPER_MAGIC (FAT) */)) {
+        o.splitSize = 4000ull << 20;  // just under 4 GiB
+        t.print("The storage is FAT32 (max file 4 GiB): splitting the backup into 4000 MB parts.");
+    }
     unsigned cores = GzipWriter::defaultThreads();
     std::string comp = !o.compress ? "off" : "gzip on " + std::to_string(cores) + (cores == 1 ? " core" : " cores");
-    t.print("Compression: %s, SHA-256: %s, encryption: %s", comp.c_str(), o.digest ? "on" : "off", o.password.empty() ? "off" : "AES-256");
+    t.print("Compression: %s, SHA-256: %s, encryption: %s%s", comp.c_str(), o.digest ? "on" : "off",
+            o.password.empty() ? "off" : "AES-256", o.splitSize ? ("  (split at " + util::humanSize(o.splitSize) + ")").c_str() : "");
     // Weight progress per partition by estimated size.
     std::vector<uint64_t> est;
     uint64_t total = 0;
@@ -259,6 +300,10 @@ std::vector<Set> list() {
                     if (f.size() < 6) continue;
                     Item i{f[0], f[1], f[2], f[3] == "1", (uint64_t)std::stoull(f[4]), f[5]};
                     i.encrypted = f.size() > 6 ? f[6] == "1" : crypt::isEncrypted(s.path + "/" + i.file);
+                    for (size_t k = 7; k < f.size(); k++) {  // split parts beyond the first: "name:sha256"
+                        size_t c = f[k].rfind(':');
+                        if (c != std::string::npos) i.extra.push_back({f[k].substr(0, c), f[k].substr(c + 1)});
+                    }
                     s.items.push_back(i);
                 }
             } else {

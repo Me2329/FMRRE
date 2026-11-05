@@ -300,7 +300,7 @@ std::string help() {
            "  recovery <image>          install FMRRE permanently (stock recovery/boot saved first)\n"
            "  wipe <data|cache|dalvik|system|...>\n"
            "  format data\n"
-           "  backup <SDCRBIVEP>[O][M] [name] [--password=PW]   O=compress M=no digest, PW: AES-256\n"
+           "  backup <SDCRBIVEP>[O][M] [name] [--password=PW] [--split=SIZE]   O=compress M=no digest, PW: AES-256; split e.g. 3G for FAT32\n"
            "  restore <name> [letters] [--password=PW]\n"
            "  mount|unmount <mountpoint>\n"
            "  mkdir <path>\n"
@@ -401,8 +401,12 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             if (!p) t.print("format: unknown partition");
         } else if (cmd == "backup") {
             backup::Options o;
-            for (size_t k = 0; k < a.size(); k++)
-                if (util::startsWith(a[k], "--password=")) { o.password = a[k].substr(11); a.erase(a.begin() + (long)k); break; }
+            for (size_t k = 0; k < a.size();) {
+                if (util::startsWith(a[k], "--password=")) o.password = a[k].substr(11);
+                else if (util::startsWith(a[k], "--split=")) o.splitSize = util::parseSize(a[k].substr(8));  // e.g. --split=3G for FAT32
+                else { k++; continue; }
+                a.erase(a.begin() + (long)k);
+            }
             std::string letters = a.empty() ? "SDB" : a[0];
             o.parts = mountPointsForLetters(letters);
             o.compress = letters.find_first_of("Oo") != std::string::npos;

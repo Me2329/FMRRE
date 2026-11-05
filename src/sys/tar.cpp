@@ -101,9 +101,23 @@ struct Writer {
     dev_t rootDev = 0;
     std::map<std::pair<dev_t, ino_t>, std::string> seen;  // hard links
     std::vector<char> buf = std::vector<char>(1 << 20);
+    uint64_t splitAt = 0;                     // 0 = one archive
+    const std::function<bool()>* rotate = nullptr;
+    uint64_t written = 0;                      // bytes in the current archive
 
     bool put(const void* p, size_t n) {
         if (!out(p, n)) return err = "writing the archive failed", false;
+        written += n;
+        return true;
+    }
+    // Before a file: if adding it would push the current part past the split size, end the part first - so each part
+    // stays under the limit (a single file bigger than the limit still has to go whole into its own part).
+    bool maybeSplit(uint64_t nextEntry) {
+        if (!splitAt || written == 0 || written + nextEntry <= splitAt) return true;
+        static const char zeros[2 * kBlock] = {0};
+        if (!put(zeros, sizeof zeros)) return false;  // end of this part
+        written = 0;
+        if (rotate && *rotate && !(*rotate)()) return err = "couldn't start the next backup file", false;
         return true;
     }
     bool pad(uint64_t size) {
@@ -224,6 +238,9 @@ struct Writer {
         }
         if (rel.empty()) rootDev = s.st_dev;
         bool dir = S_ISDIR(s.st_mode);
+        // Roughly what this entry adds: a header, data padded to 512, and room for pax (xattrs / long names).
+        uint64_t entryBytes = kBlock + (S_ISREG(s.st_mode) ? (uint64_t(s.st_size) + kBlock - 1) / kBlock * kBlock : 0) + 3 * kBlock;
+        if (!rel.empty() && !maybeSplit(entryBytes)) return false;  // start a new part before this file if it wouldn't fit
         if (!entry(rel.empty() ? "./" : "./" + rel + (dir ? "/" : ""), path, s)) return false;
         if (!dir) return true;
         if (!rel.empty() && s.st_dev != rootDev) {  // another file system mounted here: not part of this partition
@@ -264,11 +281,13 @@ std::string field(const char* f, size_t n) { return std::string(f, strnlen(f, n)
 }  // namespace
 
 bool create(const std::string& root, const std::vector<std::string>& exclude, const Sink& out, Stats& st, std::string& err,
-            const std::function<bool()>& cancelled) {
+            const std::function<bool()>& cancelled, uint64_t splitAt, const std::function<bool()>& rotate) {
     Writer w{out, st, err, cancelled, root, std::set<std::string>(exclude.begin(), exclude.end())};
+    w.splitAt = splitAt;
+    w.rotate = &rotate;
     if (!w.walk("")) return false;
     static const char zeros[2 * kBlock] = {0};
-    return w.put(zeros, sizeof zeros);  // end of archive
+    return w.put(zeros, sizeof zeros);  // end of the last archive
 }
 
 // ---- extraction ------------------------------------------------------------------------------------

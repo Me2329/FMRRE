@@ -36,6 +36,9 @@ struct Options {
     bool compress = true;
     bool digest = true;
     std::string password;  // non-empty: encrypt every file (AES-256-CTR + HMAC-SHA256, PBKDF2 key)
+    // Split a filesystem backup into parts of about this many bytes (data.fs.win000, .win001 ...) so it fits on a
+    // FAT32 card (single file < 4 GiB). 0 = one file. Set automatically for a FAT target; images are never split.
+    uint64_t splitSize = 0;
 };
 
 std::string backupRoot();  // <storage>/FMRRE/BACKUPS/<serial> (restore also lists <storage>/TWRP/BACKUPS/<serial>)

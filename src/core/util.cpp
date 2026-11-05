@@ -98,6 +98,21 @@ std::string humanSize(uint64_t b) {
     return buf;
 }
 
+uint64_t parseSize(const std::string& s) {
+    char* end = nullptr;
+    double v = strtod(s.c_str(), &end);
+    if (end == s.c_str() || v < 0) return 0;
+    while (*end == ' ') end++;
+    switch (*end | 0x20) {  // lower-case the unit
+        case 'g': v *= 1ull << 30; break;
+        case 'm': v *= 1ull << 20; break;
+        case 'k': v *= 1ull << 10; break;
+        case 't': v *= 1ull << 40; break;
+        default: break;  // bytes
+    }
+    return uint64_t(v);
+}
+
 std::string humanDuration(int64_t ms) {
     int64_t s = ms / 1000;
     char buf[32];

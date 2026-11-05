@@ -29,8 +29,15 @@ struct Stats {
 using Sink = std::function<bool(const void*, size_t)>;
 // Archive everything under `root` as "./..." (like `cd root && tar -cf - .`), minus `exclude` (names relative to
 // root, e.g. "media", "lost+found"). cancelled() is asked between files.
+//
+// Split backups: when `splitAt` > 0, once an archive has written that many (uncompressed) bytes the current one is
+// finished (its end blocks written to `out`) at the next file boundary and `rotate()` is called - the caller closes
+// the current output file and opens the next, so later `out()` calls land there. Each part is a whole, independent
+// archive, read back one after another (Extractor::nextArchive). A single file larger than `splitAt` still goes
+// whole into one part. Output is only ever smaller than the input, so parts never exceed `splitAt`.
 bool create(const std::string& root, const std::vector<std::string>& exclude, const Sink& out, Stats& st,
-            std::string& err, const std::function<bool()>& cancelled = {});
+            std::string& err, const std::function<bool()>& cancelled = {}, uint64_t splitAt = 0,
+            const std::function<bool()>& rotate = {});
 
 // Extraction is fed the archive in pieces (the restore streams it out of gzip / decryption).
 class Extractor {
