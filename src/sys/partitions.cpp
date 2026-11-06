@@ -7,13 +7,17 @@
 #include "platform/device.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/statvfs.h>
+#include <strings.h>
 #include <unistd.h>
 
 namespace tw {
@@ -59,6 +63,15 @@ std::string Partitions::byNameDir() {
     return "/dev/block/by-name";
 }
 
+std::string Partitions::byName(const std::string& name) {
+    std::string dir = byNameDir(), exact = dir + "/" + name;
+    if (util::exists(exact)) return exact;
+    // Samsung names partitions in capitals (BOOT, RECOVERY, RADIO): match without case.
+    for (auto& e : util::listDir(dir))
+        if (strcasecmp(e.name.c_str(), name.c_str()) == 0) return dir + "/" + e.name;
+    return "";
+}
+
 uint64_t Partitions::blockSize(const std::string& dev) {
     int fd = open(dev.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return 0;
@@ -69,6 +82,43 @@ uint64_t Partitions::blockSize(const std::string& dev) {
     }
     close(fd);
     return sz;
+}
+
+// /dev/block/sda5 -> "sda", /dev/block/mmcblk0p1 -> "mmcblk0" (symlinks such as by-name/ are followed first).
+static std::string diskOf(const std::string& dev) {
+    char real[PATH_MAX];
+    std::string b = util::basename(realpath(dev.c_str(), real) ? std::string(real) : dev);
+    if (util::startsWith(b, "mmcblk")) {
+        size_t p = b.find('p', 6);
+        return p == std::string::npos ? b : b.substr(0, p);
+    }
+    if (util::startsWith(b, "sd")) {
+        while (b.size() > 3 && isdigit((unsigned char)b.back())) b.pop_back();
+        return b;
+    }
+    return "";
+}
+
+const char* Partitions::diskKind(const std::string& dev) {
+    std::string disk = diskOf(dev);
+    if (disk.empty()) return "unknown";
+    std::string sys = device::path("/sys/block/" + disk);
+    if (!util::exists(sys)) return "unknown";
+    if (util::startsWith(disk, "mmcblk")) {
+        // The MMC core says what the card is: "SD" for a microSD, "MMC" for the phone's own eMMC.
+        std::string type = util::trim(util::readLine(sys + "/device/type"));
+        return type == "SD" ? "sd" : type.empty() ? "unknown" : "internal";
+    }
+    // sd*: on UFS phones sda..sdf are the phone's own storage (LUNs). A USB disk's sysfs path runs through the USB
+    // host controller (.../usb1/1-1/...).
+    char real[PATH_MAX];
+    std::string path = realpath(sys.c_str(), real) ? std::string(real) : "";
+    if (path.empty()) return util::trim(util::readLine(sys + "/removable")) == "1" ? "usb" : "unknown";
+    return path.find("/usb") != std::string::npos ? "usb" : "internal";
+}
+
+static bool isFooterKeyLoc(const std::string& k, const std::string& v) {
+    return (k == "encryptable" || k == "forceencrypt" || k == "forcefdeorfbe") && v == "footer";
 }
 
 static std::string resolveDev(std::string dev, bool slotSelect, bool logical) {
@@ -98,7 +148,7 @@ void Partitions::addFromTwrpLine(const std::vector<std::string>& f) {
         else if (flags.empty() && f[i][0] == '/') continue;  // secondary block device: ignored
         else if (!flags.empty()) flags += " " + f[i];
     }
-    bool slotSel = false;
+    bool slotSel = false, footer = false;
     for (auto& fl : util::split(flags, ';')) {
         auto eq = fl.find('=');
         std::string k = util::trim(fl.substr(0, eq));
@@ -113,7 +163,10 @@ void Partitions::addFromTwrpLine(const std::vector<std::string>& f) {
         else if (k == "slotselect") slotSel = true;
         else if (k == "logical") p.logical = true;
         else if (k == "fsflags") p.mountOpts = v;
+        else if (k == "length") p.length = strtoll(v.c_str(), nullptr, 0);
+        else if (isFooterKeyLoc(k, v)) footer = true;
     }
+    if (footer && p.length == 0) p.length = -16384;  // AOSP's CRYPT_FOOTER_OFFSET
     p.blockDev = resolveDev(dev, slotSel, p.logical);
     finalize(p);
 }
@@ -135,23 +188,28 @@ void Partitions::addFromAospLine(const std::vector<std::string>& f) {
             p.removable = true;
             p.storage = true;
             p.displayName = "MicroSD";
-            const char* c[] = {"/dev/block/mmcblk1p1", "/dev/block/mmcblk1"};
-            p.blockDev = device::path(util::exists(c[0]) ? c[0] : c[1]);
-            finalize(p);
+            finalize(p);  // the card's device is found by rescanRemovable() (mmcblk0 on UFS phones, mmcblk1 on eMMC)
         } else if (mgr.find("voldmanaged=usb") != std::string::npos) {
             p.mountPoint = "/usb_otg";
             p.fsType = "auto";
             p.removable = true;
             p.storage = true;
             p.displayName = "USB OTG";
-            p.blockDev = device::path("/dev/block/sda1");
-            finalize(p);
+            finalize(p);  // never a fixed sda1: on UFS phones that is the phone's own storage
         }
         return;
     }
     if (p.mountPoint == "/") p.mountPoint = "/system_root";
     bool slotSel = mgr.find("slotselect") != std::string::npos;
     p.logical = mgr.find("logical") != std::string::npos;
+    bool footer = false;
+    for (auto& o : util::split(mgr, ',')) {
+        auto eq = o.find('=');
+        std::string k = o.substr(0, eq), v = eq == std::string::npos ? "" : o.substr(eq + 1);
+        if (k == "length") p.length = strtoll(v.c_str(), nullptr, 0);
+        else if (isFooterKeyLoc(k, v)) footer = true;
+    }
+    if (footer && p.length == 0) p.length = -16384;
     if (find(p.mountPoint)) return;  // first entry wins (fstabs often list ext4+f2fs variants)
     p.blockDev = resolveDev(dev, slotSel, p.logical);
     if (p.mountPoint == "/data" || p.mountPoint == "/cache" || p.mountPoint == "/metadata") p.wipe = true;
@@ -178,16 +236,15 @@ void Partitions::finalize(Partition& p) {
 
 void Partitions::addImagesFromByName() {
     // Supplement AOSP fstabs (which omit raw partitions) with well-known images.
-    std::string dir = byNameDir();
     const std::string slot = device::info().slot;
     static const char* images[] = {"boot", "init_boot", "vendor_boot", "dtbo", "recovery", "vbmeta", "vbmeta_system",
                                    "modemst1", "modemst2", "persist", "logo", "splash"};
     for (auto img : images) {
         std::string mp = std::string("/") + img;
         if (find(mp)) continue;
-        std::string dev = dir + "/" + img;
-        if (!slot.empty() && util::exists(dev + slot)) dev += slot;
-        if (!util::exists(dev)) continue;
+        std::string dev = slot.empty() ? "" : byName(img + slot);
+        if (dev.empty()) dev = byName(img);
+        if (dev.empty()) continue;
         Partition p;
         p.mountPoint = mp;
         p.fsType = std::string(img) == "persist" ? "ext4" : "emmc";
@@ -200,7 +257,7 @@ void Partitions::addImagesFromByName() {
 
 void Partitions::load() {
     parts_.clear();
-    std::vector<std::string> cands = {"/etc/twrp.fstab", "/etc/recovery.fstab", "/system/etc/recovery.fstab"};
+    std::vector<std::string> cands = {"/etc/twrp.fstab", "/system/etc/twrp.fstab", "/etc/recovery.fstab", "/system/etc/recovery.fstab"};
     std::string hw = device::prop("ro.hardware");
     std::string plat = device::prop("ro.boot.hardware");
     for (auto& h : {hw, plat})
@@ -224,8 +281,10 @@ void Partitions::load() {
         if (line.empty() || line[0] == '#') continue;
         auto f = util::splitWs(line);
         if (f.size() < 3) continue;
-        // AOSP lines have the mount point second; TWRP lines have the fs type second.
-        if (f[1][0] == '/' || f[1] == "auto") addFromAospLine(f);
+        // AOSP lines have the mount point second; TWRP lines have the fs type second. "auto" second is AOSP only for
+        // vold's sysfs patterns (/devices/...): "/usb_otg auto /dev/block/sdg1 flags=..." is a TWRP line.
+        bool aosp = f[1][0] == '/' || (f[1] == "auto" && (util::startsWith(f[0], "/devices/") || util::startsWith(f[0], "/sys/")));
+        if (aosp) addFromAospLine(f);
         else if (f[0][0] == '/') addFromTwrpLine(f);
     }
     addImagesFromByName();
@@ -296,6 +355,10 @@ void Partitions::refresh() {
 
 bool Partitions::mount(Partition& p, std::string* err) {
     if (p.isImage()) { if (err) *err = "raw image partitions cannot be mounted"; return false; }
+    if (p.removable && std::string(diskKind(p.blockDev)) == "internal") {  // never put backups on the phone's own LUNs
+        if (err) *err = p.blockDev + " is the phone's own storage, not a removable disk";
+        return false;
+    }
     if (isMounted(p)) return true;
     if (device::isSim()) {
         util::mkdirs(p.contentPath());
@@ -415,10 +478,33 @@ bool Partitions::wipe(Partition& p, Task& t) {
     return ok_;
 }
 
+std::string Partitions::mkfsCommand(const Partition& p, const std::string& fs, uint64_t whole, bool haveMke2fs) {
+    std::string dev = util::shellQuote(p.blockDev);
+    // fstab length=: a negative value keeps that many bytes free at the end of the partition (where full-disk
+    // encryption keeps its key - a filesystem over it makes Android's encryption fail on the next boot).
+    uint64_t bytes = 0;
+    if (p.length < 0 && whole > uint64_t(-p.length)) bytes = whole - uint64_t(-p.length);
+    if (p.length > 0 && (whole == 0 || uint64_t(p.length) <= whole)) bytes = uint64_t(p.length);
+    if (fs == "ext4")
+        return haveMke2fs ? "mke2fs -F -t ext4 -b 4096 " + dev + (bytes ? " " + std::to_string(bytes / 4096) : "")
+                          : "make_ext4fs " + (bytes ? "-l " + std::to_string(bytes / 4096 * 4096) + " " : std::string()) + dev;
+    if (fs == "f2fs") {
+        std::string sectors = bytes ? " " + std::to_string(bytes / 512) : "";
+        return "make_f2fs -f -g android " + dev + sectors + " || mkfs.f2fs -f " + dev + sectors;
+    }
+    if (fs == "vfat") return "mkfs.fat " + dev + " || newfs_msdos -F 32 " + dev;
+    if (fs == "exfat") return "mkfs.exfat " + dev;
+    return "";
+}
+
 bool Partitions::format(Partition& p, Task& t, const std::string& newFs) {
     bool ok_ = [&]() -> bool {
         std::string fs = newFs.empty() ? p.fsType : newFs;
         t.print("Formatting %s as %s...", p.displayName.c_str(), fs.c_str());
+        if (p.removable && std::string(diskKind(p.blockDev)) == "internal") {
+            t.print("  refused: %s is the phone's own storage, not a removable disk", p.blockDev.c_str());
+            return false;
+        }
         if (device::isSim()) {
             util::removeTree(p.contentPath(), {"__keep__"});
             util::mkdirs(p.contentPath());
@@ -427,21 +513,14 @@ bool Partitions::format(Partition& p, Task& t, const std::string& newFs) {
             return true;
         }
         unmount(p);
-        std::string dev = util::shellQuote(p.blockDev);
-        std::string cmd;
-        if (fs == "ext4") {
-            cmd = util::haveBinary("mke2fs") ? "mke2fs -F -t ext4 -b 4096 " + dev
-                                              : "make_ext4fs " + dev;
-        } else if (fs == "f2fs") {
-            cmd = "make_f2fs -f -g android " + dev + " || mkfs.f2fs -f " + dev;
-        } else if (fs == "vfat") {
-            cmd = "mkfs.fat " + dev + " || newfs_msdos -F 32 " + dev;
-        } else if (fs == "exfat") {
-            cmd = "mkfs.exfat " + dev;
-        } else {
+        uint64_t whole = blockSize(p.blockDev);
+        std::string cmd = mkfsCommand(p, fs, whole, util::haveBinary("mke2fs"));
+        if (cmd.empty()) {
             t.print("  unsupported filesystem '%s'", fs.c_str());
             return false;
         }
+        if (p.length < 0 && whole > uint64_t(-p.length))
+            t.print("  %lld bytes at the end are kept free for the encryption footer", (long long)-p.length);
         int rc = util::run(cmd, [&](const std::string& l) { t.print("  %s", l.c_str()); });
         if (rc != 0) {
             t.print("  mkfs failed (exit %d)", rc);
@@ -526,35 +605,46 @@ std::string Partitions::fsInfo(Partition& p) {
 }
 
 int Partitions::rescanRemovable() {
-    int found = 0;
-    // USB mass storage shows up as sd* disks that are not UFS LUNs (those are not removable).
-    std::string usbDev;
+    // Find the real USB disk and microSD card from sysfs - never by a fixed name: on UFS phones sda..sdf are the
+    // phone's own storage, and mmcblk0 is the SD card there but the internal eMMC on older phones.
+    std::string usbDev, sdDev;
     for (auto& e : util::listDir(device::path("/sys/block"))) {
-        if (!util::startsWith(e.name, "sd")) continue;
-        if (util::readLine(device::path("/sys/block/" + e.name + "/removable")) != "1") continue;
         std::string base = device::path("/dev/block/" + e.name);
-        usbDev = util::exists(base + "1") ? base + "1" : base;
-        break;
+        if (usbDev.empty() && util::startsWith(e.name, "sd") && std::string(diskKind(base)) == "usb")
+            usbDev = util::exists(base + "1") ? base + "1" : base;
+        if (sdDev.empty() && util::startsWith(e.name, "mmcblk") && e.name.find("boot") == std::string::npos &&
+            e.name.find("rpmb") == std::string::npos && std::string(diskKind(base)) == "sd")
+            sdDev = util::exists(base + "p1") ? base + "p1" : base;
     }
-    Partition* otg = find("/usb_otg");
-    if (!usbDev.empty()) {
-        if (!otg) {
-            Partition p;
-            p.mountPoint = "/usb_otg";
-            p.fsType = "auto";
-            p.removable = p.storage = true;
-            p.displayName = "USB OTG";
-            p.blockDev = usbDev;
-            finalize(p);
-        } else {
-            otg->blockDev = usbDev;
+    bool haveUsb = false, haveSd = false;
+    int found = 0;
+    for (auto& p : parts_) {
+        if (!p.removable) continue;
+        bool usb = p.mountPoint.find("usb") != std::string::npos || p.mountPoint.find("otg") != std::string::npos;
+        (usb ? haveUsb : haveSd) = true;
+        std::string kind = p.blockDev.empty() ? "unknown" : diskKind(p.blockDev);
+        if (kind == "internal") {
+            LOGE("%s: %s is the phone's own storage, not a removable disk - not using it", p.mountPoint.c_str(),
+                 p.blockDev.c_str());
+            p.blockDev.clear();
         }
+        // A verified card / USB disk beats an fstab device that isn't one (or isn't there).
+        const std::string& real = usb ? usbDev : sdDev;
+        if (!real.empty() && (kind != (usb ? "usb" : "sd") || !util::exists(p.blockDev))) p.blockDev = real;
+        if (!p.blockDev.empty() && util::exists(p.blockDev)) found++;
+    }
+    auto add = [&](const char* mp, const char* name, const std::string& dev) {
+        Partition p;
+        p.mountPoint = mp;
+        p.fsType = "auto";
+        p.removable = p.storage = true;
+        p.displayName = name;
+        p.blockDev = dev;
+        finalize(p);
         found++;
-    }
-    if (Partition* sd = find("/external_sd")) {
-        for (auto c : {"/dev/block/mmcblk1p1", "/dev/block/mmcblk1"})
-            if (util::exists(device::path(c))) { sd->blockDev = device::path(c); found++; break; }
-    }
+    };
+    if (!haveUsb && !usbDev.empty()) add("/usb_otg", "USB OTG", usbDev);
+    if (!haveSd && !sdDev.empty()) add("/external_sd", "MicroSD", sdDev);
     refresh();
     return found;
 }

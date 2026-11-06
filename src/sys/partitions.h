@@ -21,6 +21,7 @@ struct Partition {
     bool storage = false;     // can hold backups / be browsed
     bool logical = false;     // dynamic partition (super)
     bool readOnly = false;    // erofs etc.
+    int64_t length = 0;       // fstab length=: <0 leaves that many bytes free at the end (FDE crypto footer), >0 = fs size
 
     bool isImage() const { return fsType == "emmc" || fsType == "mtd"; }
     // Where the content lives right now (mount point, or sandbox in sim mode).
@@ -71,7 +72,13 @@ public:
     bool dataEncrypted();
 
     static std::string byNameDir();
+    static std::string byName(const std::string& name);  // by-name/<name>, any letter case; "" if absent
     static uint64_t blockSize(const std::string& dev);
+    // What kind of disk a block device is on: "usb", "sd" (SD card), "internal" (UFS LUN / eMMC - never removable),
+    // or "unknown" (no sysfs entry). Removable storage is only used when it is really USB or SD.
+    static const char* diskKind(const std::string& dev);
+    // The mkfs command line for a partition (honours fstab length=); "" for an unknown filesystem.
+    static std::string mkfsCommand(const Partition& p, const std::string& fs, uint64_t partitionBytes, bool haveMke2fs);
 
 private:
     void addFromTwrpLine(const std::vector<std::string>& f);

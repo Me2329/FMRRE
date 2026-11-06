@@ -673,6 +673,98 @@ static void testSamsungAp(const std::string& dir) {
 
 // A backup split into parts (for FAT32 cards): each .winNNN is a whole, independent archive; restore stitches them
 // back. Tested compressed+encrypted (parts are independent gzip + encryption streams) and plain.
+// Removable storage on a UFS phone (like the Galaxy S8): sda.. are the phone's own storage, the microSD is mmcblk0 and
+// a USB stick is an sd* disk behind the USB controller. Fstab lines that point at the wrong device (sda1 as "USB OTG",
+// mmcblk1 as the card) must never make FMRRE mount or format internal storage. Also: length= / =footer in fstabs.
+static void testRemovableSafety(const std::string& dir) {
+    std::string root = dir + "/ufs";
+    sim::ensureRoot(root);
+    device::init(true, root);
+    auto disk = [&](const std::string& name, const std::string& devPath) {
+        util::mkdirs(root + devPath);
+        util::mkdirs(root + "/sys/block");
+        CHECK(symlink((root + devPath).c_str(), (root + "/sys/block/" + name).c_str()) == 0);
+    };
+    disk("sda", "/sys/devices/platform/11120000.ufs/host0/target0:0:0/0:0:0:0/block/sda");
+    disk("sdg", "/sys/devices/platform/10c00000.usb/xhci-hcd/usb1/1-1/1-1:1.0/host1/target1:0:0/1:0:0:0/block/sdg");
+    util::mkdirs(root + "/sys/block/mmcblk0/device");
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "SD\n");
+    util::mkdirs(root + "/sys/block/mmcblk0boot0");
+    for (auto n : {"sda", "sda1", "sdg", "sdg1", "mmcblk0", "mmcblk0p1"}) util::writeFile(root + "/dev/block/" + n, "");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/sda1")) == "internal");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/sdg1")) == "usb");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/mmcblk0p1")) == "sd");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/loop3")) == "unknown");
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "MMC\n");  // an eMMC phone: mmcblk0 is internal
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/mmcblk0p1")) == "internal");
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "SD\n");
+
+    // Wrong devices in the fstab (found via /system/etc/twrp.fstab, where the PC builder puts it on old ramdisks).
+    util::mkdirs(root + "/system/etc");
+    CHECK(util::writeFile(root + "/system/etc/twrp.fstab",
+                          "/data ext4 /dev/block/by-name/userdata flags=display=\"Data\";encryptable=footer;length=-20480\n"
+                          "/cache ext4 /dev/block/by-name/cache flags=encryptable=footer\n"
+                          "/usb_otg auto /dev/block/sda1 flags=display=\"USB OTG\";storage;removable\n"
+                          "/external_sd vfat /dev/block/mmcblk1p1 flags=display=\"MicroSD\";storage;removable\n"));
+    unlink((root + "/etc/recovery.fstab").c_str());
+    Partitions& P = Partitions::get();
+    P.load();
+    CHECK(util::endsWith(P.fstabPath(), "/system/etc/twrp.fstab"));
+    CHECK(P.find("/data") && P.find("/data")->length == -20480);  // explicit length wins over the footer default
+    CHECK(P.find("/cache") && P.find("/cache")->length == -16384);
+    P.rescanRemovable();
+    Partition* otg = P.find("/usb_otg");
+    Partition* sd = P.find("/external_sd");
+    CHECK(otg && otg->blockDev == root + "/dev/block/sdg1" && otg->present);
+    CHECK(sd && sd->blockDev == root + "/dev/block/mmcblk0p1" && sd->present);
+    // No USB stick plugged in: "USB OTG" must not fall back to the fstab's sda1 (internal).
+    unlink((root + "/sys/block/sdg").c_str());
+    P.load();
+    P.rescanRemovable();
+    otg = P.find("/usb_otg");
+    CHECK(otg && otg->blockDev.empty() && !otg->present);
+    // Even if a removable entry is forced onto internal storage, mount and format refuse it.
+    otg->blockDev = root + "/dev/block/sda1";
+    std::string err;
+    CHECK(!P.mount(*otg, &err) && err.find("own storage") != std::string::npos);
+    CHECK(!runTask("format-internal", [&](Task& t) { return P.format(*otg, t, "vfat"); }));
+
+    // AOSP-format fstab: voldmanaged storage is detected, never guessed; =footer reserves AOSP's 16 KiB.
+    unlink((root + "/system/etc/twrp.fstab").c_str());
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "SD\n");
+    CHECK(util::writeFile(root + "/etc/recovery.fstab",
+                          "/dev/block/by-name/userdata /data ext4 noatime wait,check,forceencrypt=footer\n"
+                          "/devices/platform/11500000.dwmmc2/mmc_host* auto auto defaults voldmanaged=sdcard:auto\n"
+                          "/devices/platform/10c00000.usb/usb* auto auto defaults voldmanaged=usb:auto\n"));
+    P.load();
+    CHECK(P.find("/data") && P.find("/data")->length == -16384);
+    CHECK(P.find("/usb_otg") && P.find("/usb_otg")->blockDev.empty());  // no USB disk now: nothing, not sda1
+    P.rescanRemovable();
+    CHECK(P.find("/external_sd") && P.find("/external_sd")->blockDev == root + "/dev/block/mmcblk0p1");
+    CHECK(P.find("/usb_otg") && !P.find("/usb_otg")->present);
+
+    // Samsung's by-name links are capitals: found whatever case is asked for.
+    util::writeFile(root + "/dev/block/by-name/RADIO", "");
+    CHECK(Partitions::byName("radio") == root + "/dev/block/by-name/RADIO");
+    CHECK(Partitions::byName("boot_a") == root + "/dev/block/by-name/boot_a" && Partitions::byName("nope").empty());
+
+    // The mkfs command keeps the footer free: 64 MiB partition, 20 KiB reserved.
+    Partition d;
+    d.blockDev = "/dev/block/sda30";
+    d.length = -20480;
+    uint64_t whole = 64ull << 20;
+    CHECK(Partitions::mkfsCommand(d, "ext4", whole, true) == "mke2fs -F -t ext4 -b 4096 '/dev/block/sda30' 16379");
+    CHECK(Partitions::mkfsCommand(d, "ext4", whole, false) == "make_ext4fs -l 67088384 '/dev/block/sda30'");
+    CHECK(Partitions::mkfsCommand(d, "f2fs", whole, true).find("'/dev/block/sda30' 131032") != std::string::npos);
+    d.length = 0;
+    CHECK(Partitions::mkfsCommand(d, "ext4", whole, true) == "mke2fs -F -t ext4 -b 4096 '/dev/block/sda30'");
+    CHECK(Partitions::mkfsCommand(d, "btrfs", whole, true).empty());
+
+    util::removeTree(root);
+    device::init(true, dir + "/sim");  // back to the shared sandbox for the tests that follow
+    P.load();
+}
+
 static void testSplitBackup(const std::string& dir) {
     std::string root = dir + "/sim";
     sim::ensureRoot(root);
@@ -2053,6 +2145,7 @@ int main() {
     testBackupRestore(dir);
     testSplitBackup(dir);
     testSamsungAp(dir);
+    testRemovableSafety(dir);
     testLegacyFolders();
     testPathcheck(dir);
     testCrypt();

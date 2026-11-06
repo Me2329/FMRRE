@@ -84,9 +84,10 @@ std::string resolveTarget(const std::string& name) {
         std::string m = lp::mappedPath(c);
         if (!m.empty()) return m;
     }
-    std::string by = Partitions::byNameDir();
-    for (auto c : {n + slot(), n})
-        if (util::exists(by + "/" + c)) return by + "/" + c;
+    for (auto c : {n + slot(), n}) {
+        std::string d = Partitions::byName(c);  // any letter case: Samsung's are BOOT, RECOVERY, ...
+        if (!d.empty()) return d;
+    }
     return "";
 }
 
