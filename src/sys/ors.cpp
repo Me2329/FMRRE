@@ -18,6 +18,7 @@
 #include "sys/fastboot.h"
 #include "sys/history.h"
 #include "sys/imagesrc.h"
+#include "sys/samsung.h"
 #include "sys/installer.h"
 #include "sys/mtp.h"
 #include "sys/partitions.h"
@@ -321,6 +322,7 @@ std::string help() {
            "  root status|backup|modules-off   modules-off fixes module bootloops\n"
            "  verify-zip <zip>          whose signature is on it (the installed system's key, another ROM's...)\n"
            "  unpack <image> [file]     decompress an image (.xz .gz .lz4 .zst, or the .img inside a .zip) to a file\n"
+           "  ap-extract <AP> <part>    pull a partition image out of a Samsung AP tar, decompressed (part, or 'all')\n"
            "  tar c <dir> <file.tar> | tar x <file.tar> <dir> [--strip /data]   FMRRE's tar (SELinux labels kept)\n"
            "  check <path>              why can't I see this file?\n"
            "  dd <image> <partition>    print the equivalent dd command\n"
@@ -544,6 +546,33 @@ bool run(const std::vector<std::string>& lines, Task& t) {
                 std::string in = pathcheck::resolve(a[0]);
                 ok = img::unpack(in, a.size() > 1 ? pathcheck::resolve(a[1]) : img::unpackedName(in), t);
             }
+        } else if (cmd == "ap-extract") {  // pull a partition image out of a Samsung AP tar, decompressed (for make_recovery_img.sh)
+            if (a.size() < 2) {
+                t.print("usage: ap-extract <AP.tar[.md5]> <partition|all> [out]   e.g. ap-extract AP_G950F.tar.md5 recovery recovery.img");
+                ok = false;
+            } else {
+                std::string ap = pathcheck::resolve(a[0]), want = a[1];
+                samsung::Package pkg;
+                std::string err;
+                if (!samsung::read(ap, pkg, err)) { t.print("%s", err.c_str()); ok = false; }
+                else {
+                    if (pkg.md5 == samsung::Md5State::Mismatch) { t.print("WARNING: the AP's MD5 does not match - the file may be corrupt"); ok = false; }
+                    else t.print("MD5: %s", pkg.md5 == samsung::Md5State::Ok ? "OK" : "none (plain tar)");
+                    int done = 0;
+                    for (auto& im : pkg.images) {
+                        if (want != "all" && im.partition != want) continue;
+                        // Default: next to the AP. "all" takes an output folder, a single image an output file.
+                        std::string dir = ap.substr(0, ap.rfind('/') == std::string::npos ? 0 : ap.rfind('/'));
+                        std::string out = dir + "/" + im.partition + ".img";
+                        if (a.size() >= 3) out = want == "all" ? pathcheck::resolve(a[2]) + "/" + im.partition + ".img" : pathcheck::resolve(a[2]);
+                        std::string tmp = out + ".ap.tmp";
+                        if (samsung::extract(ap, im, tmp, t) && img::unpack(tmp, out, t)) { t.print("  %s -> %s", im.name.c_str(), pathcheck::pretty(out).c_str()); done++; }
+                        else { ok = false; }
+                        ::unlink(tmp.c_str());
+                    }
+                    if (ok && done == 0) { t.print("no '%s' image in this AP", want.c_str()); ok = false; }
+                }
+            }
         } else if (cmd == "tar") {  // tar c <dir> <out.tar> | tar x <in.tar> <dir> [--strip /data]: FMRRE's own tar
             bool create = a.size() >= 3 && a[0] == "c", extract = a.size() >= 3 && a[0] == "x";
             std::string from = create || extract ? pathcheck::resolve(a[1]) : "", to = create || extract ? pathcheck::resolve(a[2]) : "";
@@ -666,7 +695,7 @@ int cliMain(const std::vector<std::string>& args) {
     for (auto& a : args) line += (line.empty() ? "" : " ") + a;
     std::string pid = util::readLine(uiPidFile());
     bool uiAlive = !pid.empty() && kill(atoi(pid.c_str()), 0) == 0;
-    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "unpack" || args[0] == "tar" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
+    bool readOnly = (args[0] == "root" && (args.size() == 1 || args[1] == "status")) || args[0] == "check" || args[0] == "verify-zip" || args[0] == "unpack" || args[0] == "ap-extract" || args[0] == "tar" || args[0] == "dd" || args[0] == "help" || (args[0] == "lp" && (args.size() == 1 || args[1] == "list")) ||
                     (args[0] == "vbmeta" && (args.size() == 1 || args[1] == "status")) ||
                     (args[0] == "payload" && args.size() > 1 && (args[1] == "info" || args[1] == "verify")) || (args[0] == "rescue" && args.size() == 1) || args[0] == "history" ||
                     (args[0] == "autofix" && std::find(args.begin(), args.end(), "--dry-run") != args.end());

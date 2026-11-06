@@ -606,6 +606,8 @@ static void tarAppend(std::string& tar, const std::string& name, const std::stri
     tar += data;
     if (data.size() % 512) tar.append(512 - data.size() % 512, '\0');
 }
+static std::string lz4Plain();  // further down, next to the other LZ4 tests
+
 static void testSamsungAp(const std::string& dir) {
     std::string boot = "ANDROID!", recov(3000, 'R'), meta = "junk";  // entry payloads (content doesn't matter here)
     for (int i = 0; i < 5000; i++) boot.push_back(char('a' + (i * 7 % 26)));
@@ -646,6 +648,27 @@ static void testSamsungAp(const std::string& dir) {
     // A plain .tar with no appended checksum: still readable, md5 None.
     CHECK(util::writeFile(dir + "/plain.tar", tar));
     CHECK(samsung::read(dir + "/plain.tar", pkg, err) && pkg.md5 == samsung::Md5State::None && pkg.images.size() == 3);
+
+    // `ap-extract` (the S8 guide pulls the stock recovery out of the AP with it): a real LZ4 frame from the official
+    // library comes out decompressed next to the AP, "all" fills a folder, a missing partition is an error, and no
+    // temporary file is left behind.
+    std::string arc;
+    tarAppend(arc, "recovery.img.lz4", std::string((const char*)kLz4Linked, sizeof kLz4Linked));
+    tarAppend(arc, "boot.img", boot);
+    arc.append(1024, '\0');
+    Md5 h2;
+    h2.update(arc.data(), arc.size());
+    util::mkdirs(device::path("/tmp/apx/all"));
+    CHECK(util::writeFile(device::path("/tmp/apx/AP_x.tar.md5"), arc + Sha256::toHex(h2.digest()) + "  AP_x.tar\n"));
+    std::string got;
+    CHECK(runTask("ap-extract", [](Task& t) { return ors::run({"ap-extract /tmp/apx/AP_x.tar.md5 recovery"}, t); }));
+    CHECK(util::readFile(device::path("/tmp/apx/recovery.img"), got) && got == lz4Plain());
+    CHECK(runTask("ap-extract-all", [](Task& t) { return ors::run({"ap-extract /tmp/apx/AP_x.tar.md5 all /tmp/apx/all"}, t); }));
+    CHECK(util::readFile(device::path("/tmp/apx/all/boot.img"), got) && got == boot);
+    CHECK(util::readFile(device::path("/tmp/apx/all/recovery.img"), got) && got == lz4Plain());
+    CHECK(!runTask("ap-extract-none", [](Task& t) { return ors::run({"ap-extract /tmp/apx/AP_x.tar.md5 vendor"}, t); }));
+    CHECK(!util::exists(device::path("/tmp/apx/recovery.img.ap.tmp")) && !util::exists(device::path("/tmp/apx/all/boot.img.ap.tmp")));
+    util::removeTree(device::path("/tmp/apx"));
 }
 
 // A backup split into parts (for FAT32 cards): each .winNNN is a whole, independent archive; restore stitches them
