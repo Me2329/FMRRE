@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "core/task.h"
+#include "core/i18n.h"
 #include "core/util.h"
 #include "platform/device.h"
 
@@ -85,6 +86,7 @@ public:
             Rect body = logR.inset(ui.dp(12));
             float fs = ui.dp(12.5f);
             float lh = font::lineHeight(Face::Mono, fs);
+            i18n::NoTranslate raw;  // command output, shown as it is
             auto lines = t.lines(300);
             std::vector<std::string> wrapped;
             for (auto& l : lines)

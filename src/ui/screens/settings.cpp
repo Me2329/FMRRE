@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "core/i18n.h"
 #include "core/settings.h"
 #include "core/sha256.h"
 #include "core/util.h"
@@ -39,6 +40,26 @@ public:
             return r;
         };
 
+        // ---- Language
+        ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Language");
+        y += ui.dp(30);
+        {
+            Rect lc(x, y, w, ui.dp(64));
+            ui.card(lc);
+            float lx = lc.x + ui.dp(14);
+            std::string cur = s.str("lang", "en");
+            int li = 0;
+            for (auto& L : i18n::languages()) {
+                float cw = ui.chipWidth(L.name) + ui.dp(10);
+                if (ui.chip(ui.id("lang", li++), Rect(lx, lc.y + ui.dp(13), cw, ui.dp(38)), L.name, cur == L.code)) {
+                    s.set("lang", L.code);
+                    changed = true;
+                }
+                lx += cw + ui.dp(8);
+            }
+            y += lc.h + ui.dp(18);
+        }
+
         // ---- Appearance
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Appearance");
         y += ui.dp(30);
@@ -74,7 +95,7 @@ public:
             cxp += cw + ui.dp(8);
         }
         float yy = ap.y + ui.dp(204);
-        bool anim = s.flag("animations", true);
+        bool anim = s.flag("animations", device::animationsByDefault());
         if (ui.toggleRow(ui.id("anim"), Rect(ap.x + ui.dp(4), yy, ap.w - ui.dp(8), ui.dp(64)), Icon::Bolt, "Animations",
                          "Transitions, ripples and motion", anim)) {
             s.setFlag("animations", anim);
@@ -91,7 +112,15 @@ public:
             s.set("anim_speed", int(50 + speed * 150 + 0.5f) / 10 * 10);
             changed = true;
         }
-        y += sp.h + ui.dp(18);
+        y += sp.h + ui.dp(12);
+        Rect dq(x, y, w, ui.dp(70));
+        int det = s.integer("detail", -1);
+        ui.card(dq, ui.dp(18));
+        if (ui.listItem(ui.id("detail"), dq.inset(ui.dp(4)), Icon::Eye, "Display quality",
+                        det == 0 ? "Low - no shadows or animations (faster)" : "High - shadows, glows, animations",
+                        det == 0 ? "Low" : "High", th.accent) & Clicked)
+            app.push(makeDetailScreen(false));
+        y += dq.h + ui.dp(18);
 
         // ---- Display
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Display");
@@ -141,10 +170,11 @@ public:
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Security & feedback");
         y += ui.dp(30);
         bool hasPin = !s.str("pin_hash").empty();
-        Rect sc(x, y, w, ui.dp(68) * 3 + ui.dp(8));
+        Rect sc(x, y, w, ui.dp(68) * 5 + ui.dp(8));
         ui.card(sc);
         yy = sc.y + ui.dp(4);
-        bool vib = s.flag("vibrate", true), lob = s.flag("lock_on_blank", true);
+        bool vib = s.flag("vibrate", true), lob = s.flag("lock_on_blank", true), afx = s.flag("autofix_auto");
+        bool req = s.flag("zip_sig_require");
         if (ui.toggleRow(ui.id("vib"), rowRect(yy), Icon::Vibrate, "Haptic feedback", "Vibrate on touch", vib)) s.setFlag("vibrate", vib);
         int pr = ui.listItem(ui.id("pin"), rowRect(yy), Icon::Lock, hasPin ? "Remove PIN lock" : "Set PIN lock",
                              hasPin ? "Recovery asks for the PIN on boot" : "Protect this recovery with a PIN", "", hasPin ? th.danger : th.accent);
@@ -157,7 +187,7 @@ public:
                 app.push(makeTextInputScreen("New PIN", "4-12 digits", "", [](App& a, const std::string& pin) {
                     bool digits = pin.size() >= 4 && pin.size() <= 12 && pin.find_first_not_of("0123456789") == std::string::npos;
                     if (!digits) { a.toast("PIN must be 4-12 digits", Icon::Warning, a.ui.th.danger); return; }
-                    Settings::get().set("pin_hash", Sha256::hexOf(pin + ":twrpv2"));
+                    Settings::get().set("pin_hash", Sha256::hexOf(pin + kPinSalt));
                     Settings::get().save();
                     a.toast("PIN set", Icon::Lock, a.ui.th.ok);
                 }, true));
@@ -165,6 +195,12 @@ public:
         }
         if (ui.toggleRow(ui.id("lob"), rowRect(yy), Icon::Moon, "Lock when screen turns off", hasPin ? "" : "Needs a PIN", lob))
             s.setFlag("lock_on_blank", lob);
+        if (ui.toggleRow(ui.id("afx"), rowRect(yy), Icon::Wrench, "Repair automatically after a failed boot",
+                         "Runs the safe fixes after a 15 s countdown, then reboots. Never erases data", afx))
+            s.setFlag("autofix_auto", afx);
+        if (ui.toggleRow(ui.id("sigreq"), rowRect(yy), Icon::Key, "Only install zips signed with a trusted key",
+                         "The installed system's keys, this recovery's and FMRRE/keys - like a stock recovery", req))
+            s.setFlag("zip_sig_require", req);
         y += sc.h + ui.dp(18);
 
         // ---- Touch calibration (handy when porting)
@@ -181,13 +217,13 @@ public:
 
         Rect ab(x, y, w, ui.dp(72));
         ui.card(ab);
-        if (ui.listItem(ui.id("about"), ab.inset(ui.dp(4)), Icon::Info, "About TWRP v2", "Version, device & credits", "", th.accent) & Clicked)
+        if (ui.listItem(ui.id("about"), ab.inset(ui.dp(4)), Icon::Info, "About FMRRE", "Version, device & credits", "", th.accent) & Clicked)
             app.push(makeAboutScreen());
         y += ab.h + ui.dp(12);
         if (ui.button(ui.id("reset"), Rect(x, y, w, ui.dp(50)), "Reset appearance", Icon::Refresh, BtnStyle::Outline)) {
             s.set("accent", 0);
             s.set("style", 0);
-            s.setFlag("animations", true);
+            s.setFlag("animations", device::animationsByDefault());
             s.set("anim_speed", 100);
             changed = true;
         }
@@ -207,6 +243,11 @@ private:
     float bright_ = 1;
 };
 
+std::string bootloaderText() {
+    int u = device::bootloaderUnlocked();
+    return u == 1 ? "Unlocked" : u == 0 ? "Locked" : "not reported";
+}
+
 class AboutScreen : public Screen {
 public:
     std::string title() const override { return "About"; }
@@ -222,18 +263,21 @@ public:
         c.radialGlowRR(hero.cx(), hero.y, hero.w * 0.7f, withAlpha(th.accent, 0.25f), hero, ui.dp(24));
         Rect logo(hero.cx() - ui.dp(30), hero.y + ui.dp(20), ui.dp(60), ui.dp(60));
         c.fillRoundRect(logo, ui.dp(18), th.accent);
-        font::drawIn(c, Face::Bold, ui.dp(22), logo, "TW", th.onAccent, AlignCenter);
-        font::drawIn(c, Face::Bold, ui.dp(20), Rect(hero.x, hero.y + ui.dp(88), hero.w, ui.dp(26)), "TWRP v2  2.0.0", th.text, AlignCenter);
+        drawLogoText(c, logo, ui.dp(22), th.onAccent);
+        font::drawIn(c, Face::Bold, ui.dp(20), Rect(hero.x, hero.y + ui.dp(88), hero.w, ui.dp(26)), "FMRRE  2.0.0", th.text, AlignCenter);
         font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(hero.x, hero.y + ui.dp(116), hero.w, ui.dp(20)),
-                     std::string("Built ") + TW_BUILD_DATE + "  \xE2\x80\xA2  native C++ / DRM / evdev", th.textDim, AlignCenter);
+                     std::string("FMR Recovery Environment  \xE2\x80\xA2  built ") + TW_BUILD_DATE, th.textDim, AlignCenter);
         y += hero.h + ui.dp(18);
         const auto& i = device::info();
         std::vector<std::pair<std::string, std::string>> kv = {
             {"Model", i.model}, {"Device", i.device}, {"Manufacturer", i.manufacturer}, {"Platform", i.platform},
             {"Android", i.android + " (SDK " + i.sdk + ")"}, {"Security patch", i.patch}, {"Kernel", i.kernel},
             {"Slot", i.ab ? std::string(1, (char)toupper(i.slot.back())) : "not A/B"}, {"Serial", i.serial},
+            {"Bootloader", bootloaderText()},
             {"Display", std::to_string(c.width()) + " x " + std::to_string(c.height())},
             {"fstab", Partitions::get().fstabPath()},
+            {"Build", std::string(device::buildAbi()) + "  \xE2\x80\xA2  CPU " + device::machine()},
+            {"SHA-256", Sha256::backend()},
         };
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Device");
         y += ui.dp(30);
@@ -246,7 +290,12 @@ public:
                          th.text, AlignRight);
             ky += ui.dp(44);
         }
-        y += card.h + ui.dp(18);
+        y += card.h + ui.dp(12);
+        if (!device::abiAdvice().empty()) {
+            icons::drawCentered(c, Icon::Info, x + ui.dp(10), y + ui.dp(9), ui.dp(15), th.warn);
+            y += ui.textBlock(x + ui.dp(26), y, w - ui.dp(26), device::abiAdvice(), ui.dp(12.5f), th.warn) + ui.dp(10);
+        }
+        y += ui.dp(6);
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Credits");
         y += ui.dp(30);
         Rect cr(x, y, w, ui.dp(150));

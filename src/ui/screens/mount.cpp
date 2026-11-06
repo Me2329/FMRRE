@@ -2,6 +2,8 @@
 
 #include "core/settings.h"
 #include "core/util.h"
+#include "platform/device.h"
+#include "sys/mtp.h"
 #include "sys/partitions.h"
 
 namespace tw {
@@ -11,7 +13,7 @@ namespace {
 class MountScreen : public Screen {
 public:
     std::string title() const override { return "Mount"; }
-    std::string subtitle() const override { return "Tap a partition to mount / unmount"; }
+    std::string subtitle() const override { return "Tap to mount / unmount, hold for file system tools"; }
     void onShow(App&) override { Partitions::get().refresh(); }
 
     float headerActionsWidth() const override { return 44; }
@@ -29,6 +31,37 @@ public:
         float pad = ui.dp(16);
         ui.beginScroll(ui.id("mount_scroll"), area);
         float x = area.x + pad, w = area.w - pad * 2, y = area.y;
+
+        // ---- MTP: the phone's storage on a computer
+        mtp::Status ms = mtp::status();
+        std::string sub = !ms.running ? (error_.empty() ? "Copy files to and from a computer" : error_)
+                          : ms.connected ? "Connected to " + ms.peer
+                                         : "On - waiting for a computer (" + ms.transport + ")";
+        Rect mc(x, y, w, ui.dp(76));
+        ui.card(mc, ui.dp(20));
+        bool on = ms.running;
+        if (ui.toggleRow(ui.id("mtp"), Rect(x + ui.dp(4), y + ui.dp(4), w - ui.dp(8), ui.dp(68)), Icon::Usb, "MTP - files on a computer", sub, on)) {
+            if (on) {
+                mtp::Options o;
+                if (device::isSim()) {  // the simulator has no USB gadget: MTP over TCP (tests/mtp_test.py speaks it)
+                    o.usb = false;
+                    o.tcpPort = 5557;
+                }
+                std::string err;
+                if (mtp::start(o, err)) {
+                    error_.clear();
+                    app.toast("MTP is on", Icon::Usb, th.ok);
+                } else {
+                    error_ = err;
+                    app.toast("MTP could not start", Icon::Warning, th.danger);
+                }
+            } else {
+                mtp::stop();
+                app.toast("MTP is off", Icon::Usb);
+            }
+        }
+        y += mc.h + ui.dp(18);
+
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Filesystems");
         y += ui.dp(30);
         auto& P = Partitions::get();
@@ -58,7 +91,10 @@ public:
                 ui.label(Rect(tx, r.y + ui.dp(58), r.w - ui.dp(80), ui.dp(18)), p.present ? (p.size ? util::humanSize(p.size) : "") : "",
                          ui.dp(12), th.textFaint);
             }
-            if (res & Clicked) {
+            if (res & LongPressed) {
+                app.vibrate(30);
+                app.push(makeFsToolsScreen(p.mountPoint));
+            } else if (res & Clicked) {
                 std::string err;
                 bool ok = p.mounted ? P.unmount(p, &err) : P.mount(p, &err);
                 if (!ok) app.toast((p.mounted ? "Unmount failed: " : "Mount failed: ") + err, Icon::Warning, th.danger);
@@ -87,11 +123,21 @@ public:
             P.refresh();
             app.toast("All partitions unmounted", Icon::Mount);
         }
+        y += ui.dp(60);
+        if (ui.button(ui.id("rescan"), Rect(x, y, bw, ui.dp(50)), "Rescan USB / SD", Icon::Usb, BtnStyle::Tonal)) {
+            int n = P.rescanRemovable();
+            app.toast(n ? std::to_string(n) + " removable drive(s) found" : "No USB or SD card detected", Icon::Usb);
+        }
+        if (ui.button(ui.id("fstools"), Rect(x + bw + ui.dp(10), y, bw, ui.dp(50)), "FS tools", Icon::Wrench, BtnStyle::Tonal))
+            app.push(makeFsToolsScreen(""));
         y += ui.dp(64);
         ui.label(Rect(x + ui.dp(6), y, w, ui.dp(18)), "fstab: " + P.fstabPath(), ui.dp(11.5f), th.textFaint, Face::Mono);
         y += ui.dp(30);
         ui.endScroll(y);
     }
+
+private:
+    std::string error_;  // why MTP didn't start
 };
 
 }  // namespace

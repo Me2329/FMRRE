@@ -69,6 +69,9 @@ public:
     void lockNow();
     void vibrate(int ms = 18);
 
+    // Called about three times a second, also while the screen is idle (OpenRecoveryScript / CLI queue).
+    std::function<void(App&)> idleHook;
+
     Ui ui;
     Canvas canvas;
     int W = 0, H = 0;
@@ -89,6 +92,8 @@ private:
     void back();
     void startTransition(bool forward);
     void updateStatus();
+    void tickIdle();
+    int64_t lastIdle_ = 0;
 
     Display* display_;
     EvdevInput* input_;
@@ -130,6 +135,7 @@ private:
     bool volDownHeld_ = false, powerHeld_ = false;
     std::vector<InputEvent> pending_;
     bool wasTaskRunning_ = false;
+    bool lowBatteryOk_ = false;  // the user swiped past the low battery warning for this task
 };
 
 }  // namespace tw

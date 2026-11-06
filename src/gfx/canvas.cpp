@@ -91,6 +91,9 @@ Canvas::IRect Canvas::clipFor(float x0, float y0, float x1, float y1) const {
     r.y0 = std::max(c.y0, (int)std::floor(y0 + oy_));
     r.x1 = std::min(c.x1, (int)std::ceil(x1 + ox_));
     r.y1 = std::min(c.y1, (int)std::ceil(y1 + oy_));
+    // Fully clipped rects must come out empty, never inverted (callers loop/fill from x0 to x1).
+    r.x1 = std::max(r.x1, r.x0);
+    r.y1 = std::max(r.y1, r.y0);
     return r;
 }
 
@@ -240,6 +243,7 @@ void Canvas::strokeRoundRect(const Rect& rc, float rad, float width, Color c) {
 }
 
 void Canvas::shadow(const Rect& rc, float rad, float blur, Color c, float dy, bool hollow) {
+    if (lowDetail_) return;  // the heaviest per-frame work; cards still have their outline
     int w = (int)std::lround(rc.w), h = (int)std::lround(rc.h);
     if (w <= 0 || h <= 0) return;
     float r2 = std::min(rad + blur * 0.25f, std::min((float)w, (float)h) / 2);
@@ -352,6 +356,7 @@ void Canvas::fillCircleInRR(float cx, float cy, float rad, const Rect& rr, float
 }
 
 void Canvas::radialGlow(float cx, float cy, float rad, Color c) {
+    if (lowDetail_) return;
     IRect r = clipFor(cx - rad, cy - rad, cx + rad, cy + rad);
     float inv = 1.0f / rad;
     for (int y = r.y0; y < r.y1; y++) {
@@ -368,6 +373,7 @@ void Canvas::radialGlow(float cx, float cy, float rad, Color c) {
 }
 
 void Canvas::radialGlowRR(float cx, float cy, float rad, Color c, const Rect& rr, float rrRadius) {
+    if (lowDetail_) return;
     int w = (int)std::lround(rr.w), h = (int)std::lround(rr.h);
     if (w <= 0 || h <= 0) return;
     rrRadius = std::min(rrRadius, std::min((float)w, (float)h) / 2);

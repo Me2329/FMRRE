@@ -1,11 +1,29 @@
-# CMake toolchain: cross-compile TWRP v2 for Android with Zig (no NDK needed).
+# CMake toolchain: cross-compile FMRRE for Android with Zig (no NDK needed).
 # Produces a fully static musl binary that runs inside any recovery ramdisk.
+#   -DZIG_TARGET=<zig triple> -DZIG_CPU=<zig cpu>   (scripts/build.sh sets both, see its table)
 set(CMAKE_SYSTEM_NAME Linux)
+# CMake re-reads this file for its compiler checks without our -D values: fall back to the
+# environment (exported below) so every check targets the same CPU as the real build.
+if(NOT ZIG_TARGET AND DEFINED ENV{ZIG_TARGET})
+  set(ZIG_TARGET "$ENV{ZIG_TARGET}")
+endif()
 if(NOT ZIG_TARGET)
   set(ZIG_TARGET "aarch64-linux-musl")
 endif()
+if(NOT ZIG_CPU AND DEFINED ENV{ZIG_CPU})
+  set(ZIG_CPU "$ENV{ZIG_CPU}")
+endif()
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES ZIG_TARGET ZIG_CPU)
+# ARMv5 (soft-float "armeabi"): zig's runtime needs __sync_* atomics, which only the real build
+# provides (src/platform/arm_atomics.cpp) - so CMake's checks compile without linking.
+if(ZIG_TARGET STREQUAL "arm-linux-musleabi")
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+endif()
 string(REGEX MATCH "^[^-]+" CMAKE_SYSTEM_PROCESSOR "${ZIG_TARGET}")
 set(ENV{ZIG_TARGET} "${ZIG_TARGET}")
+if(ZIG_CPU)
+  set(ENV{ZIG_CPU} "${ZIG_CPU}")
+endif()
 set(CMAKE_C_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zig-cc")
 set(CMAKE_CXX_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zig-cxx")
 set(CMAKE_AR "${CMAKE_CURRENT_LIST_DIR}/zig-ar")

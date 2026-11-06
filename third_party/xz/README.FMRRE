@@ -1,0 +1,1 @@
+xz-embedded ae63ae3a36ed01724674e8f3d750dc47bf125410 (https://github.com/tukaani-project/xz-embedded), 0BSD. xz_config.h enables CRC64, SHA-256 and concatenated streams.

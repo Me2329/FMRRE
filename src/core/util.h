@@ -17,6 +17,7 @@ bool startsWith(const std::string& s, const std::string& p);
 bool endsWith(const std::string& s, const std::string& p);
 std::string toLower(std::string s);
 std::string humanSize(uint64_t bytes);
+uint64_t parseSize(const std::string& s);  // "3G", "256M", "512K", "4096" (bytes); 0 if it doesn't parse
 std::string humanDuration(int64_t ms);
 std::string basename(const std::string& p);
 std::string dirname(const std::string& p);

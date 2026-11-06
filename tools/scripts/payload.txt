@@ -1,0 +1,26 @@
+# A/B ROM / OTA screens (payload.bin) on the simulator's demo LineageOS zip
+wait 1200
+open payload /sdcard/Download/lineage-22.2-20261101-nightly-husky-signed.zip
+shot p1_payload.png
+swipe 270 900 270 300 300
+wait 900
+shot p2_payload_scrolled.png
+swipe 270 900 270 200 300
+wait 900
+shot p3_payload_bottom.png
+tap 270 890
+wait 900
+shot p4_extract.png
+tap 270 1005
+wait 600
+waittask
+shot p5_extract_done.png
+key back
+wait 500
+key back
+wait 700
+swipe 62 1005 520 1005 400
+wait 1500
+shot p6_installing.png
+waittask
+shot p7_installed.png

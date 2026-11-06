@@ -11,6 +11,7 @@
 
 #include "core/log.h"
 #include "core/util.h"
+#include "core/i18n.h"
 #include "platform/device.h"
 
 namespace tw {
@@ -19,10 +20,14 @@ namespace {
 
 class TerminalScreen : public Screen {
 public:
-    explicit TerminalScreen(const std::string& initial) {
+    TerminalScreen(const std::string& initial, const std::string& prefill) {
         cwd_ = device::isSim() ? device::simRoot() : "/";
-        add("TWRP v2 terminal - commands run as root via " + util::shellPath());
+        add("FMRRE terminal - commands run as root via " + util::shellPath());
         add("Tip: tap the keyboard icon to hide/show the keyboard.");
+        if (!prefill.empty()) {
+            add("Command ready below - check it, then press the run button.");
+            input_ = prefill;
+        }
         if (!initial.empty()) exec(initial);
     }
     ~TerminalScreen() override {
@@ -119,6 +124,7 @@ public:
     }
 
     void draw(Ui& ui, App&, Rect area) override {
+        i18n::NoTranslate raw;  // shell output and commands
         Theme& th = ui.th;
         float pad = ui.dp(12);
         if (kb_) {
@@ -223,8 +229,8 @@ private:
 
 }  // namespace
 
-std::unique_ptr<Screen> makeTerminalScreen(const std::string& initialCmd) {
-    return std::make_unique<TerminalScreen>(initialCmd);
+std::unique_ptr<Screen> makeTerminalScreen(const std::string& initialCmd, const std::string& prefill) {
+    return std::make_unique<TerminalScreen>(initialCmd, prefill);
 }
 
 }  // namespace tw

@@ -22,6 +22,15 @@ struct Info {
 };
 const Info& info();
 
+// The Android ABI this binary was built for (arm64-v8a, armeabi-v7a, armeabi, x86, x86_64, riscv64, mips).
+const char* buildAbi();
+// What the kernel reports (uname -m): aarch64, armv8l (32-bit mode on a 64-bit CPU), armv7l, i686, x86_64, ...
+std::string machine();
+// Default for the "Animations" setting: off on soft-float builds (armeabi), where the software renderer is slow.
+bool animationsByDefault();
+// Non-empty when a better build exists for this CPU (e.g. a 32-bit build running on a 64-bit kernel).
+std::string abiAdvice();
+
 struct Battery {
     int percent = -1;
     std::string status;  // Charging / Discharging / Full
@@ -51,5 +60,10 @@ void vibrate(int ms);
 // target: "" (system), recovery, bootloader, fastboot, edl, download, poweroff
 void reboot(const std::string& target);
 bool switchSlot(std::string& msg);
+// Bootloader lock state from the boot properties (ro.boot.flash.locked, vbmeta.device_state,
+// verifiedbootstate): 1 unlocked, 0 locked, -1 not reported. `how` gets the evidence ("verifiedbootstate=orange").
+int bootloaderUnlocked(std::string* how = nullptr);
+// Make slot "_a" / "_b" active for the next boot (boot control HAL via bootctl).
+bool setActiveSlot(const std::string& suffix, std::string& msg);
 
 }  // namespace tw::device

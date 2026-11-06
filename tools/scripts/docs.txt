@@ -1,14 +1,9 @@
-# Screenshots for the README (540x1170 simulator, fresh sandbox)
+# Screenshots for the README (540x1170 simulator, fresh sandbox) - tools/make_screenshots.sh runs it.
+# Screens are opened by name where the menus may move; taps are only used inside a screen.
 wait 1700
 shot home.png
-tap 140 490
+open install /sdcard/Download/Magisk-v29.0.zip
 wait 600
-tap 270 502
-wait 600
-tap 270 318
-wait 600
-tap 270 404
-wait 900
 shot install.png
 swipe 62 1005 520 1005 400
 wait 700
@@ -34,24 +29,17 @@ shot dialog.png
 key back
 key home
 wait 600
-tap 397 1010
-wait 700
-tap 270 220
+open monitor
 wait 2500
 shot monitor.png
 key back
 wait 600
-tap 270 768
-wait 600
-text getprop | grep product; uname -r
-tap 489 708
+open terminal getprop | grep product; uname -r
 wait 900
 shot terminal.png
 key home
 wait 600
-tap 397 855
-wait 700
-tap 270 318
+open files /sdcard/Download
 wait 700
 tap 270 662
 wait 800
@@ -59,8 +47,6 @@ shot files.png
 key back
 key home
 wait 600
-swipe 270 950 270 250 250
-wait 1500
-tap 270 874
+open settings
 wait 900
 shot settings.png

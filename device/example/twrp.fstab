@@ -1,4 +1,4 @@
-# TWRP v2 fstab example for a modern A/B device with dynamic partitions.
+# FMRRE fstab example for a modern A/B device with dynamic partitions.
 # Format:  <mount point>  <fs>  <block device>  flags=<flag;flag;...>
 #   display="Name"   name in the UI          backup=1      offered in Backup
 #   wipeingui        offered in Advanced wipe flashimg=1    image target in Install
@@ -6,7 +6,7 @@
 #   storage          can hold backups         removable     SD card / USB OTG
 #
 # Copy to your recovery ramdisk as /system/etc/twrp.fstab or /etc/twrp.fstab.
-# If no twrp.fstab exists, TWRP v2 reads the regular AOSP fstab instead.
+# If no twrp.fstab exists, FMRRE reads the regular AOSP fstab instead.
 
 /system_root  ext4   system       flags=display="System";logical;slotselect;backup=1
 /vendor       ext4   vendor       flags=display="Vendor";logical;slotselect;backup=1

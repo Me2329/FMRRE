@@ -5,6 +5,7 @@
 
 #include "core/log.h"
 #include "core/util.h"
+#include "core/settings.h"
 #include "platform/device.h"
 #include "sys/partitions.h"
 
@@ -25,10 +26,24 @@ public:
         struct Item { Icon icon; const char* title; const char* sub; Color tint; int code; };
         const auto& info = device::info();
         std::vector<std::pair<const char*, std::vector<Item>>> groups = {
+            {"Partitions & boot",
+             {{Icon::Usb, "Fastboot mode (fastbootd)", "fastboot flash from a computer, super resized for you", th.info, 27},
+              {Icon::Download, "Install FMRRE permanently", "Keep it after fastboot boot - stock is saved first", th.accent, 26},
+              {Icon::Key, "Root", "Magisk / KernelSU / APatch, stock backup, modules", th.ok, 25},
+              {Icon::Storage, "Super partitions", "Resize / delete dynamic partitions (system, product...)", th.accent, 20},
+              {Icon::Phone, "GSI wizard", "Flash a Generic System Image the right way", th.ok, 21},
+              {Icon::Bolt, "Verified boot (vbmeta)", "Disable / enable dm-verity and AVB", th.warn, 22},
+              {Icon::Wrench, "File system tools", "Repair, resize, change file system", th.info, 23},
+              {Icon::Search, "Find & flash a file", "Manual path, diagnostics, dd command", th.accent2, 24}}},
             {"Diagnostics",
-             {{Icon::Chart, "System monitor", "Live CPU, memory, battery & thermals", th.accent, 1},
+             {{Icon::Wrench, "Auto repair", "Doesn't start? Finds the problem and fixes it", th.danger, 29},
+              {Icon::Shield, "Bootloop rescue", "Why the last boot failed, with one-tap fixes", th.warn, 28},
+              {Icon::Timer, "Flash history", "Every flash, wipe, restore and repair, with the time", th.accent2, 30},
+              {Icon::Phone, "Device info", "Model, Android, slot, encryption, CPU", th.accent, 12},
+              {Icon::Chart, "System monitor", "Live CPU, memory, battery & thermals", th.accent, 1},
               {Icon::Storage, "Partition info", "Block devices, sizes and flags", th.info, 2},
-              {Icon::Touch, "Input & touch test", "Check keys and touch calibration", th.ok, 3}}},
+              {Icon::Touch, "Input & touch test", "Check keys and touch calibration", th.ok, 3},
+              {Icon::Image, "Display test", "Dead pixels, burn-in, colour uniformity", th.accent2, 13}}},
             {"Tools",
              {{Icon::Folder, "File manager", "Browse, copy, move, chmod", th.warn, 4},
               {Icon::Terminal, "Terminal", "Run shell commands as root", rgb(0x94A3B8), 5},
@@ -38,7 +53,7 @@ public:
               {Icon::Usb, "Restart ADB", "Restart the adbd service", th.ok, 9},
               {Icon::Refresh, "Reload partitions", "Re-read fstab and block devices", th.textDim, 10}}},
         };
-        if (info.ab) groups[1].second.insert(groups[1].second.begin(), {Icon::Swap, "Switch boot slot",
+        if (info.ab) groups[2].second.insert(groups[2].second.begin(), {Icon::Swap, "Switch boot slot",
                                              "Make the other A/B slot active", th.danger, 11});
         int k = 0;
         for (auto& g : groups) {
@@ -62,8 +77,21 @@ public:
         Theme& th = app.ui.th;
         switch (code) {
             case 1: app.push(makeMonitorScreen()); break;
+            case 20: app.push(makeSuperScreen()); break;
+            case 21: app.push(makeGsiScreen()); break;
+            case 22: app.push(makeVbmetaScreen()); break;
+            case 23: app.push(makeFsToolsScreen("")); break;
+            case 24: app.push(makeManualFlashScreen()); break;
+            case 25: app.push(makeRootScreen()); break;
+            case 26: app.push(makeInstallRecoveryScreen()); break;
+            case 27: app.push(makeFastbootScreen(true)); break;
+            case 28: app.push(makeRescueScreen()); break;
+            case 30: app.push(makeHistoryScreen()); break;
+            case 29: app.push(makeAutoRepairScreen()); break;
             case 2: app.push(makePartInfoScreen()); break;
             case 3: app.push(makeInputTestScreen()); break;
+            case 12: app.push(makeDeviceInfoScreen()); break;
+            case 13: app.push(makeDisplayTestScreen()); break;
             case 4: app.push(makeFilesScreen()); break;
             case 5: app.push(makeTerminalScreen()); break;
             case 6: {
@@ -291,7 +319,7 @@ public:
     std::string title() const override { return "Input test"; }
     std::string subtitle() const override { return "Press keys, draw on the screen"; }
 
-    void draw(Ui& ui, App&, Rect area) override {
+    void draw(Ui& ui, App& app, Rect area) override {
         Theme& th = ui.th;
         Canvas& c = *ui.c;
         for (auto& e : ui.events()) {
@@ -322,6 +350,25 @@ public:
         for (auto& k : keys_) {
             font::drawIn(c, Face::Mono, ui.dp(13), Rect(info.x + ui.dp(16), ky, info.w, ui.dp(20)), k, th.accent);
             ky += ui.dp(22);
+        }
+        // Touch calibration: if taps land in the wrong place or axis (common on an odd panel), toggle these and the
+        // transform updates live - the drawing pad below shows the effect at once.
+        Rect cal = pad.cutTop(ui.dp(66));
+        ui.card(cal, ui.dp(18));
+        font::drawIn(c, Face::Regular, ui.dp(12), Rect(cal.x + ui.dp(16), cal.y + ui.dp(10), cal.w - ui.dp(32), ui.dp(16)),
+                     "Touch calibration (if taps land in the wrong place)", th.textDim);
+        Settings& st = Settings::get();
+        struct Cal { const char* lbl; const char* key; };
+        Cal cals[] = {{"Swap X/Y", "touch_swap"}, {"Flip X", "touch_flipx"}, {"Flip Y", "touch_flipy"}};
+        float cgap = ui.dp(8), ccw = (cal.w - ui.dp(32) - 2 * cgap) / 3;
+        for (int i = 0; i < 3; i++) {
+            bool on = st.flag(cals[i].key);
+            if (ui.chip(ui.id("cal", i), Rect(cal.x + ui.dp(16) + i * (ccw + cgap), cal.y + ui.dp(30), ccw, ui.dp(30)), cals[i].lbl, on)) {
+                st.setFlag(cals[i].key, !on);
+                st.save();
+                app.applySettings();
+                app.vibrate();
+            }
         }
         pad.cutTop(ui.dp(10));
         ui.card(pad, ui.dp(20), th.surface, false);

@@ -76,15 +76,18 @@ public:
 
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Options");
         y += ui.dp(30);
-        Rect opt(x, y, w, ui.dp(68) * 2 + ui.dp(8));
+        Rect opt(x, y, w, ui.dp(68) * 3 + ui.dp(8));
         ui.card(opt);
-        bool comp = s.flag("backup_compress", true), dig = s.flag("backup_digest", true);
+        bool comp = s.flag("backup_compress", true), dig = s.flag("backup_digest", true), enc = s.flag("backup_encrypt", false);
         if (ui.toggleRow(ui.id("comp"), Rect(x + ui.dp(4), y + ui.dp(4), w - ui.dp(8), ui.dp(64)), Icon::Zip, "Compression",
                          "gzip - smaller backups, slightly slower", comp))
             s.setFlag("backup_compress", comp), s.save();
         if (ui.toggleRow(ui.id("dig"), Rect(x + ui.dp(4), y + ui.dp(72), w - ui.dp(8), ui.dp(64)), Icon::Shield, "SHA-256 digests",
                          "Verify integrity before restoring", dig))
             s.setFlag("backup_digest", dig), s.save();
+        if (ui.toggleRow(ui.id("enc"), Rect(x + ui.dp(4), y + ui.dp(140), w - ui.dp(8), ui.dp(64)), Icon::Lock, "Encrypt with a password",
+                         "AES-256 - the password is needed to restore", enc))
+            s.setFlag("backup_encrypt", enc), s.save();
         y += opt.h + ui.dp(18);
 
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Storage");
@@ -119,8 +122,22 @@ public:
             o.name = name_;
             o.compress = s.flag("backup_compress", true);
             o.digest = s.flag("backup_digest", true);
-            app.runTask("Backup " + name_, Icon::Backup, [o](Task& t) { return backup::create(o, t); });
+            std::string title = "Backup " + name_;
             name_ = util::dateStamp() + "_" + device::info().device;
+            if (!s.flag("backup_encrypt", false)) {
+                app.runTask(title, Icon::Backup, [o](Task& t) { return backup::create(o, t); });
+                return;
+            }
+            // Asked twice: a typo here would make the backup unrecoverable.
+            app.push(makeTextInputScreen("Backup password", "At least 4 characters", "", [o, title](App& a, const std::string& p1) {
+                if (p1.size() < 4) { a.toast("Use at least 4 characters", Icon::Warning, a.ui.th.warn); return; }
+                a.push(makeTextInputScreen("Repeat the password", "", "", [o, title, p1](App& b, const std::string& p2) {
+                    if (p1 != p2) { b.toast("The passwords don't match", Icon::Warning, b.ui.th.danger); return; }
+                    backup::Options oo = o;
+                    oo.password = p1;
+                    b.runTask(title, Icon::Backup, [oo](Task& t) { return backup::create(oo, t); });
+                }, true));
+            }, true));
         }
     }
 
@@ -155,7 +172,7 @@ public:
         ui.label(Rect(info.x + ui.dp(66), info.y + ui.dp(18), info.w - ui.dp(80), ui.dp(24)), date, ui.dp(16), th.text, Face::SemiBold);
         ui.label(Rect(info.x + ui.dp(66), info.y + ui.dp(46), info.w - ui.dp(80), ui.dp(20)),
                  util::humanSize(set_.size) + "  \xE2\x80\xA2  " + std::to_string(set_.items.size()) + " partition(s)" +
-                     (set_.hasManifest ? "  \xE2\x80\xA2  TWRP v2" : "  \xE2\x80\xA2  classic TWRP"),
+                     (set_.hasManifest ? "  \xE2\x80\xA2  FMRRE" : "  \xE2\x80\xA2  classic TWRP"),
                  ui.dp(13), th.textDim);
         y += info.h + ui.dp(18);
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Restore these");
@@ -168,7 +185,8 @@ public:
             bool on = sel_.count(it.part) > 0;
             Partition* p = Partitions::get().find(it.part);
             if (!p) p = Partitions::get().find("/" + it.part);
-            std::string sub = it.file + (it.sha256.empty() ? "" : "  \xE2\x80\xA2  sha256");
+            std::string sub = it.file + (it.extra.empty() ? "" : " +" + std::to_string(it.extra.size())) +
+                              (it.sha256.empty() ? "" : "  \xE2\x80\xA2  sha256");
             if (ui.checkRow(ui.id("ri", (int)k), Rect(x + ui.dp(4), iy, w - ui.dp(8), ui.dp(58)), p ? p->displayName : it.part, sub, on,
                             util::humanSize(it.size))) {
                 if (on) sel_.insert(it.part); else sel_.erase(it.part);
@@ -177,6 +195,13 @@ public:
         }
         y += card.h + ui.dp(14);
         Settings& s = Settings::get();
+        if (backup::encrypted(set_)) {
+            Rect er(x, y, w, ui.dp(44));
+            ui.c->fillRoundRect(er, ui.dp(14), withAlpha(th.info, 0.12f));
+            icons::drawCentered(*ui.c, Icon::Lock, x + ui.dp(22), er.cy(), ui.dp(16), th.info);
+            ui.label(Rect(x + ui.dp(40), y, w - ui.dp(48), er.h), "Encrypted - you'll be asked for the password", ui.dp(13), th.text);
+            y += er.h + ui.dp(10);
+        }
         Rect opt(x, y, w, ui.dp(72));
         ui.card(opt);
         bool ver = s.flag("restore_verify", true);
@@ -204,7 +229,16 @@ public:
         } else if (ui.slideToConfirm(ui.id("r_go"), sb, "Swipe to restore", th.ok)) {
             std::vector<std::string> parts(sel_.begin(), sel_.end());
             bool v = s.flag("restore_verify", true);
-            app.runTask("Restore " + set_.name, Icon::Restore, [copy, parts, v](Task& t) { return backup::restore(copy, parts, v, t); });
+            std::string title = "Restore " + set_.name;
+            if (!backup::encrypted(set_)) {
+                app.runTask(title, Icon::Restore, [copy, parts, v](Task& t) { return backup::restore(copy, parts, v, t); });
+                return;
+            }
+            app.push(makeTextInputScreen("Backup password", "", "", [copy, parts, v, title](App& a, const std::string& pw) {
+                std::string err;
+                if (!backup::checkPassword(copy, pw, err)) { a.toast(err.find("wrong password") != std::string::npos ? "Wrong password" : err, Icon::Lock, a.ui.th.danger); return; }
+                a.runTask(title, Icon::Restore, [copy, parts, v, pw](Task& t) { return backup::restore(copy, parts, v, t, pw); });
+            }, true));
         }
     }
 
@@ -240,6 +274,7 @@ public:
             ui.card(r, ui.dp(22));
             std::string parts;
             for (auto& it : s.items) parts += (parts.empty() ? "" : ", ") + it.part;
+            if (backup::encrypted(s)) parts += "  \xE2\x80\xA2  encrypted";
             if (ui.listItem(ui.id("set", (int)i), r.inset(ui.dp(4)), Icon::Restore, s.name, parts.empty() ? "empty" : parts,
                             util::humanSize(s.size), th.ok) & Clicked)
                 app.push(std::make_unique<RestoreDetailScreen>(s));

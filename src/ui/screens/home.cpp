@@ -5,6 +5,7 @@
 #include "core/settings.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/autofix.h"
 #include "sys/partitions.h"
 
 namespace tw {
@@ -13,7 +14,7 @@ namespace {
 
 class HomeScreen : public Screen {
 public:
-    std::string title() const override { return "TWRP v2"; }
+    std::string title() const override { return "FMRRE"; }
     bool hasHeader() const override { return false; }
 
     void onShow(App&) override { refresh(); }
@@ -39,11 +40,11 @@ public:
         Rect logo(top.x + pad, top.cy() - ui.dp(22), ui.dp(44), ui.dp(44));
         c.fillRoundRect(logo, ui.dp(14), th.accent);
         c.radialGlowRR(logo.r(), logo.b(), ui.dp(50), withAlpha(th.accent2, 0.9f), logo, ui.dp(14));
-        font::drawIn(c, Face::Bold, ui.dp(17), logo.offset(0, -ui.dp(1)), "TW", th.onAccent, AlignCenter);
+        drawLogoText(c, logo.offset(0, -ui.dp(1)), ui.dp(17), th.onAccent);
         float tx = logo.r() + ui.dp(12);
-        font::drawIn(c, Face::Bold, ui.dp(24), Rect(tx, top.cy() - ui.dp(23), ui.dp(200), ui.dp(30)), "TWRP v2", th.text);
+        font::drawIn(c, Face::Bold, ui.dp(24), Rect(tx, top.cy() - ui.dp(23), ui.dp(200), ui.dp(30)), "FMRRE", th.text);
         font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(tx, top.cy() + ui.dp(5), ui.dp(200), ui.dp(18)),
-                     "Custom recovery 2.0.0", th.textDim);
+                     "FMR Recovery Environment", th.textDim);
         float bx = top.r() - pad - ui.dp(44);
         if (ui.iconButton(ui.id("q_power"), Rect(bx, top.cy() - ui.dp(22), ui.dp(44), ui.dp(44)), Icon::Power, th.text, true))
             app.push(makeRebootScreen());
@@ -90,11 +91,16 @@ public:
         Rect bar(hx, hero.b() - ui.dp(46), hero.w - ui.dp(40), ui.dp(8));
         c.fillRoundRect(bar, ui.dp(4), rgba(255, 255, 255, 40));
         if (frac > 0) c.fillRoundRect(Rect(bar.x, bar.y, std::max(bar.h, bar.w * frac), bar.h), ui.dp(4), heroText);
-        std::string st = encrypted_ ? "Data is encrypted \xE2\x80\xA2 internal storage unavailable"
+        // After a failed boot the card says so, in place of the storage line (same layout), and opens auto repair.
+        bool bootFailed = autofix::lastBootFailed();
+        std::string st = bootFailed ? "Last boot failed \xE2\x80\xA2 tap here for auto repair"
+                         : encrypted_ ? "Data is encrypted \xE2\x80\xA2 internal storage unavailable"
                          : dataMounted_ ? ("Internal storage  " + util::humanSize(dataUsed_) + " / " + util::humanSize(dataSize_))
                                         : "Data not mounted";
-        font::drawIn(c, Face::SemiBold, ui.dp(12.5f), Rect(hx, hero.b() - ui.dp(32), hero.w - ui.dp(40), ui.dp(20)), st, heroText);
-        if (dataSize_ && !encrypted_) {
+        if (bootFailed) icons::drawCentered(c, Icon::Warning, hx + ui.dp(8), hero.b() - ui.dp(22), ui.dp(15), rgb(0xFFD166));
+        font::drawIn(c, Face::SemiBold, ui.dp(12.5f), Rect(hx + (bootFailed ? ui.dp(22) : 0), hero.b() - ui.dp(32), hero.w - ui.dp(40), ui.dp(20)),
+                     st, bootFailed ? rgb(0xFFD166) : heroText);
+        if (dataSize_ && !encrypted_ && !bootFailed) {
             char pct[16];
             snprintf(pct, sizeof(pct), "%d%%", int(frac * 100 + 0.5f));
             font::drawIn(c, Face::Bold, ui.dp(12.5f), Rect(hx, hero.b() - ui.dp(32), hero.w - ui.dp(40), ui.dp(20)), pct, heroText,
@@ -102,7 +108,7 @@ public:
         }
         int heroRes = ui.clickable(ui.id("hero"), hero);
         ui.drawPressFx(ui.id("hero"), hero, rad, rgb(0xFFFFFF));
-        if (heroRes & Clicked) app.push(makeAboutScreen());
+        if (heroRes & Clicked) app.push(bootFailed ? makeAutoRepairScreen() : makeAboutScreen());
         y = hero.b() + ui.dp(20);
 
         // Main action grid
@@ -116,10 +122,13 @@ public:
             {Icon::Folder, "Files", "Browse & manage", th.accent2, 5},
             {Icon::Terminal, "Terminal", "Root shell", rgb(0x94A3B8), 6},
             {Icon::Advanced, "Advanced", "Power tools", rgb(0xC084FC), 7},
+            {Icon::Phone, "GSI", "Flash system images", rgb(0x2DD4BF), 8},
+            {Icon::Key, "Root", "Magisk & modules", rgb(0xFBBF24), 9},
         };
+        const int nTiles = int(sizeof(tiles) / sizeof(tiles[0]));
         float gap = ui.dp(12);
         float tw = (inner.w - gap) / 2, tH = ui.dp(124);
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < nTiles; i++) {
             Rect r(inner.x + (i % 2) * (tw + gap), y + (i / 2) * (tH + gap), tw, tH);
             // staggered entrance
             float appear = ui.anim(ui.id("tile_in", i), 1.f, 9.f - i * 0.6f);
@@ -134,10 +143,12 @@ public:
                     case 5: app.push(makeFilesScreen()); break;
                     case 6: app.push(makeTerminalScreen()); break;
                     case 7: app.push(makeAdvancedScreen()); break;
+                    case 8: app.push(makeGsiScreen()); break;
+                    case 9: app.push(makeRootScreen()); break;
                 }
             }
         }
-        y += 4 * (tH + gap) + ui.dp(4);
+        y += ((nTiles + 1) / 2) * (tH + gap) + ui.dp(4);
 
         // Wide rows: Settings & Reboot
         Rect sRow(inner.x, y, inner.w, ui.dp(72));

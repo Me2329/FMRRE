@@ -110,6 +110,42 @@ bool setProp(const std::string& key, const std::string& value) {
 
 const Info& info() { return g_info; }
 
+const char* buildAbi() {
+#if defined(__aarch64__)
+    return "arm64-v8a";
+#elif defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 7
+    return "armeabi-v7a";
+#elif defined(__arm__)
+    return "armeabi";
+#elif defined(__x86_64__)
+    return "x86_64";
+#elif defined(__i386__)
+    return "x86";
+#elif defined(__riscv) && __riscv_xlen == 64
+    return "riscv64";
+#elif defined(__mips__) && !defined(__mips64)
+    return "mips";
+#else
+    return "unknown";
+#endif
+}
+
+bool animationsByDefault() { return std::string(buildAbi()) != "armeabi"; }
+
+std::string machine() {
+    struct utsname u;
+    return uname(&u) == 0 ? u.machine : "";
+}
+
+std::string abiAdvice() {
+    std::string m = machine(), b = buildAbi();
+    bool kernel64 = m == "aarch64" || m == "armv8l" || m == "armv8b" || m == "x86_64";
+    if (kernel64 && (b == "armeabi-v7a" || b == "armeabi")) return "64-bit CPU: the arm64 build is faster and works where 32-bit apps are not supported";
+    if (m == "x86_64" && b == "x86") return "64-bit CPU: the x86_64 build is faster";
+    if ((m == "armv7l" || m == "armv8l") && b == "armeabi") return "ARMv7 CPU: the armeabi-v7a build is much faster (hardware floating point)";
+    return "";
+}
+
 static std::string psDir() {
     std::string base = path("/sys/class/power_supply");
     for (auto n : {"battery", "Battery", "BAT0", "bms"})
@@ -131,6 +167,12 @@ Battery battery() {
         b.voltageMv = 4123;
         b.currentMa = 980;
         b.health = "Good";
+        if (const char* e = getenv("TW_SIM_BATTERY")) {  // e.g. 5: a nearly empty battery, not charging
+            b.percent = atoi(e);
+            b.charging = false;
+            b.status = "Discharging";
+            b.currentMa = -350;
+        }
         return b;
     }
     static std::string dir = psDir();
@@ -302,22 +344,42 @@ void reboot(const std::string& target) {
     }
 }
 
+int bootloaderUnlocked(std::string* how) {
+    std::string fl = prop("ro.boot.flash.locked"), st = prop("ro.boot.vbmeta.device_state"), vbs = prop("ro.boot.verifiedbootstate");
+    if (how) {
+        how->clear();
+        for (auto& [k, v] : {std::pair<const char*, std::string>{"flash.locked", fl}, {"vbmeta.device_state", st}, {"verifiedbootstate", vbs}})
+            if (!v.empty()) *how += (how->empty() ? "" : ", ") + std::string(k) + "=" + v;
+    }
+    if (fl == "0" || st == "unlocked" || vbs == "orange") return 1;
+    if (fl == "1" || st == "locked" || vbs == "green" || vbs == "yellow") return 0;
+    return -1;
+}
+
 bool switchSlot(std::string& msg) {
     const Info& i = info();
     if (!i.ab) { msg = "This device is not A/B"; return false; }
-    int target = i.slot == "_a" ? 1 : 0;
-    if (g_sim) {
-        g_info.slot = target ? "_b" : "_a";
-        msg = std::string("Active slot set to ") + (target ? "B" : "A");
+    return setActiveSlot(i.slot == "_a" ? "_b" : "_a", msg);
+}
+
+bool setActiveSlot(const std::string& suffix, std::string& msg) {
+    const Info& i = info();
+    if (!i.ab) { msg = "This device is not A/B"; return false; }
+    if (suffix != "_a" && suffix != "_b") { msg = "Unknown slot " + suffix; return false; }
+    int target = suffix == "_b" ? 1 : 0;
+    std::string name = target ? "B" : "A";
+    if (g_sim) {  // like a real phone: the booted slot stays current until the next boot
+        util::writeFile(path("/sim_next_slot"), suffix + "\n");
+        msg = "Next boot will use slot " + name;
         return true;
     }
     std::string out;
     int rc = util::runCapture("bootctl set-active-boot-slot " + std::to_string(target), out);
     if (rc != 0) {
-        msg = "bootctl failed: " + util::trim(out);
+        msg = "bootctl failed (" + util::trim(out) + "). From a computer: fastboot set_active " + std::string(target ? "b" : "a");
         return false;
     }
-    msg = std::string("Next boot will use slot ") + (target ? "B" : "A");
+    msg = "Next boot will use slot " + name;
     return true;
 }
 

@@ -6,6 +6,10 @@ namespace tw {
 
 // Persistent key=value settings. Stored on /persist or /cache when available
 // (so they survive a data wipe), otherwise in /tmp for the current session.
+// The PIN is stored as SHA-256(pin + kPinSalt). Part of the settings format (settings from before the rename
+// are taken over): never change it.
+constexpr const char kPinSalt[] = ":twrpv2";
+
 class Settings {
 public:
     static Settings& get();

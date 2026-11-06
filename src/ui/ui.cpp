@@ -1,5 +1,7 @@
 #include "ui/ui.h"
 
+#include "core/i18n.h"
+
 #include <cmath>
 #include <cstring>
 
@@ -584,8 +586,8 @@ void Ui::ring(float cx, float cy, float rad, float width, float frac, Color col,
 }
 
 void Ui::sectionHeader(const Rect& r, const std::string& s) {
-    std::string up;
-    for (char ch : s) up += (char)toupper((unsigned char)ch);
+    // Translate first, then upper-case (Romanian too: "Opțiuni" -> "OPȚIUNI").
+    std::string up = i18n::upper(i18n::tr(s));
     font::drawIn(*c, Face::Bold, dp(12), Rect(r.x + dp(6), r.y, r.w, r.h), up, th.accent);
 }
 
@@ -794,6 +796,12 @@ bool Ui::keyboard(Id kid, const Rect& r, std::string& text) {
     if (res & Clicked) enter = true;
     popId();
     return enter;
+}
+
+void drawLogoText(Canvas& c, const Rect& r, float maxPx, Color col) {
+    float px = maxPx, w = font::measure(Face::Bold, px, kLogoText);
+    if (w > r.w * 0.72f) px *= r.w * 0.72f / w;  // keep a margin inside the square
+    font::drawIn(c, Face::Bold, px, r, kLogoText, col, AlignCenter);
 }
 
 }  // namespace tw

@@ -64,6 +64,10 @@ public:
     Rect clipLocal() const;        // current clip in local coords
     void setAlpha(float a) { alpha_ = std::clamp(a, 0.f, 1.f); alpha256_ = int(alpha_ * 256); }
     float alpha() const { return alpha_; }
+    // Low-detail mode (slow phones): soft shadows and live radial glows are skipped - the heaviest per-frame work at
+    // high resolution. Cards keep their outline, so nothing becomes invisible.
+    void setLowDetail(bool low) { lowDetail_ = low; }
+    bool lowDetail() const { return lowDetail_; }
 
     void clear(Color c);
     void fillRect(const Rect& r, Color c);
@@ -103,6 +107,7 @@ private:
     std::vector<uint32_t> px_;
     float ox_ = 0, oy_ = 0, alpha_ = 1;
     int alpha256_ = 256;
+    bool lowDetail_ = false;
     std::vector<IRect> clips_;
 };
 
