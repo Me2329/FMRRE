@@ -29,6 +29,7 @@ void Ui::beginFrame(Canvas& canvas, const std::vector<InputEvent>& evs, int64_t 
     animating_ = false;
     ambient_ = false;
     activateFocus_ = false;
+    focusSeen_ = focusRingDrawn_ = false;
     idStack_.clear();
     float slop = dp(9);
     for (auto& e : evs) {
@@ -77,6 +78,18 @@ void Ui::beginFrame(Canvas& canvas, const std::vector<InputEvent>& evs, int64_t 
 }
 
 void Ui::endFrame() {
+    if (focusVisible_ && focusSeen_ && !focusRingDrawn_ && c) {
+        // The focused widget drew itself without a ring: draw one over it (inside the clip it was drawn in).
+        float ox = c->ox(), oy = c->oy();
+        c->setOrigin(0, 0);
+        c->pushClip(focusClip_);
+        float pulse = 0.65f + 0.35f * std::sin(now / 180.0f);
+        float rad = std::min(dp(18), std::min(focusRect_.w, focusRect_.h) / 2);
+        c->strokeRoundRect(focusRect_.inset(dp(1)), rad, dp(2.5f), withAlpha(th.accent, pulse));
+        c->popClip();
+        c->setOrigin(ox, oy);
+        ambient_ = true;
+    }
     prevFocusCount_ = focusCount_;
     if (focusIndex_ >= focusCount_) focusIndex_ = focusCount_ ? focusCount_ - 1 : -1;
     if (released_) {
@@ -154,6 +167,10 @@ int Ui::clickable(Id i, const Rect& r, bool focusable) {
         int idx = focusCount_++;
         if (idx == focusIndex_ && focusVisible_) {
             focusedId_ = i;
+            focusSeen_ = true;
+            focusRect_ = Rect(r.x + c->ox(), r.y + c->oy(), r.w, r.h);
+            Rect cl = c->clipLocal();
+            focusClip_ = Rect(cl.x + c->ox(), cl.y + c->oy(), cl.w, cl.h);
             if (activateFocus_) {
                 res |= Clicked;
                 activateFocus_ = false;
@@ -216,6 +233,7 @@ void Ui::drawPressFx(Id i, const Rect& r, float radius, Color tint) {
 
 void Ui::drawFocusRing(Id i, const Rect& r, float radius) {
     if (!isFocused(i)) return;
+    focusRingDrawn_ = true;
     float pulse = 0.65f + 0.35f * std::sin(now / 180.0f);
     c->strokeRoundRect(r.inset(-dp(2)), radius + dp(2), dp(2.5f), withAlpha(th.accent, pulse));
     ambient_ = true;

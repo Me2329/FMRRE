@@ -31,11 +31,19 @@ public:
         ui.label(Rect(hero.x + ui.dp(78), hero.y + ui.dp(22), hero.w - ui.dp(90), ui.dp(26)), "Factory reset", ui.dp(19), th.text, Face::Bold);
         ui.label(Rect(hero.x + ui.dp(78), hero.y + ui.dp(48), hero.w - ui.dp(90), ui.dp(20)), "Data, Cache and ART/Dalvik cache", ui.dp(13),
                  th.textDim);
+        // Encrypted data can't be read here: a reset that keeps internal storage is impossible, and FMRRE never
+        // formats as a side effect - Format Data (below) is the explicit way.
+        const bool enc = Partitions::get().dataEncrypted();
         ui.textBlock(hero.x + ui.dp(20), hero.y + ui.dp(84), hero.w - ui.dp(40),
-                     "Apps and settings are removed. Internal storage (photos, downloads, backups) is kept.", ui.dp(13.5f),
-                     th.textDim);
-        if (ui.slideToConfirm(ui.id("factory"), Rect(hero.x + ui.dp(16), hero.b() - ui.dp(74), hero.w - ui.dp(32), ui.dp(58)),
-                              "Swipe to factory reset", th.danger)) {
+                     enc ? "Data is encrypted and can't be read here, so a reset can't keep your files. Use Format Data below, or reset "
+                           "from Android's Settings."
+                         : "Apps and settings are removed. Internal storage (photos, downloads, backups) is kept.",
+                     ui.dp(13.5f), enc ? th.warn : th.textDim);
+        Rect slide(hero.x + ui.dp(16), hero.b() - ui.dp(74), hero.w - ui.dp(32), ui.dp(58));
+        if (enc) {
+            ui.c->fillRoundRect(slide, slide.h / 2, th.surface2);
+            ui.label(slide, "Not available: data is encrypted", ui.dp(14.5f), th.textFaint, Face::SemiBold, AlignCenter);
+        } else if (ui.slideToConfirm(ui.id("factory"), slide, "Swipe to factory reset", th.danger)) {
             app.runTask("Factory reset", Icon::Wipe, [](Task& t) {
                 auto& P = Partitions::get();
                 bool ok = true;

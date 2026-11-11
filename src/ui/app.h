@@ -61,6 +61,7 @@ public:
     void confirm(const std::string& title, const std::string& msg, const std::string& slide,
                  std::function<void()> yes, bool danger = true, Icon icon = Icon::Warning);
     void toast(const std::string& msg, Icon icon = Icon::Info, Color tint = 0);
+    void saveLogs();  // recovery log + kernel log + SELinux report to /cache/recovery, a card, readable storage
     void runTask(const std::string& title, Icon icon, Task::Fn fn);
     void toggleConsole() { consoleOpen_ = !consoleOpen_; }
 

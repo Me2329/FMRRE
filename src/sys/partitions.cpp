@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/statvfs.h>
+#include <sys/vfs.h>
 #include <strings.h>
 #include <unistd.h>
 
@@ -305,6 +306,13 @@ void Partitions::load() {
     std::string st = Settings::get().str("storage", "/data");
     storage_ = find(st) ? st : "/data";
     refresh();
+    if (storage_ == "/data") {
+        // Encrypted internal storage can't hold backups: start on a card or USB disk when there is one.
+        Partition* d = find("/data");
+        if (d && d->present && !mount(*d) && dataEncrypted())
+            for (auto& p : parts_)
+                if (p.removable && p.storage && p.present) { storage_ = p.mountPoint; break; }
+    }
     for (auto& p : parts_)
         LOGI("  %-14s %-6s %s%s", p.mountPoint.c_str(), p.fsType.c_str(), p.blockDev.c_str(), p.present ? "" : " (missing)");
 }
@@ -353,6 +361,8 @@ void Partitions::refresh() {
     }
 }
 
+static bool looksEncrypted(const std::string& dev);
+
 bool Partitions::mount(Partition& p, std::string* err) {
     if (p.isImage()) { if (err) *err = "raw image partitions cannot be mounted"; return false; }
     if (p.removable && std::string(diskKind(p.blockDev)) == "internal") {  // never put backups on the phone's own LUNs
@@ -361,6 +371,11 @@ bool Partitions::mount(Partition& p, std::string* err) {
     }
     if (isMounted(p)) return true;
     if (device::isSim()) {
+        // The sandbox's "partitions" are files: one filled with noise plays an encrypted /data that can't be mounted.
+        if (p.mountPoint == "/data" && looksEncrypted(p.blockDev)) {
+            if (err) *err = "no filesystem found (encrypted?)";
+            return false;
+        }
         util::mkdirs(p.contentPath());
         simMounted_.push_back(p.mountPoint);
         p.mounted = true;
@@ -463,14 +478,24 @@ bool Partitions::wipe(Partition& p, Task& t) {
             return done == sz;
         }
         t.print("Wiping %s...", p.displayName.c_str());
+        if (p.mountPoint == "/data" && dataEncrypted()) {
+            // The reset keeps internal storage - impossible here: the files can't be read, and removing the rest
+            // (the keys with it) would leave them behind as unreadable leftovers. Never format as a side effect.
+            t.print("  /data is encrypted and can't be read here, so a reset can't keep your photos and files.");
+            t.print("  Use Format Data to erase everything, or reset the phone from Android's Settings.");
+            return false;
+        }
         if (!mount(p)) {
             t.print("  %s can't be mounted - formatting instead", p.displayName.c_str());
             return format(p, t);
         }
-        std::vector<std::string> keep;
-        if (p.mountPoint == "/data") keep = {"media"};  // never wipe internal storage on a factory reset
-        if (p.mountPoint == "/data") t.print("  (internal storage /data/media is preserved)");
-        bool ok = util::removeTree(p.contentPath(), keep.empty() ? std::vector<std::string>{"lost+found"} : std::vector<std::string>{"media", "lost+found"});
+        std::vector<std::string> keep = {"lost+found"};
+        if (p.mountPoint == "/data") {
+            keep.push_back("media");  // never wipe internal storage on a factory reset
+            t.print("  (internal storage /data/media is preserved)");
+        }
+        if (p.mountPoint == "/cache") keep.push_back("fmrre");  // FMRRE's settings, when /data is encrypted
+        bool ok = util::removeTree(p.contentPath(), keep);
         t.print(ok ? "  done" : "  some files could not be removed");
         return ok;
     }();
@@ -667,32 +692,78 @@ bool Partitions::wipeDalvik(Task& t) {
 
 std::vector<Partition*> Partitions::storages() {
     std::vector<Partition*> v;
+    bool enc = dataEncrypted();
     for (auto& p : parts_)
-        if (p.storage && p.present) v.push_back(&p);
+        if (p.storage && p.present && !(enc && p.mountPoint == "/data")) v.push_back(&p);  // unreadable /data holds nothing
     return v;
 }
 
 std::string Partitions::storagePath() {
     Partition* p = find(storage_);
-    if (!p) return device::path("/tmp");
-    mount(*p);
-    if (p->mountPoint == "/data") {
+    if (p && mount(*p)) {
+        if (p->mountPoint != "/data") return p->contentPath();
         std::string media = device::path("/data/media/0");
         if (util::isDir(media)) return media;
-        // File-based encryption without decryption: don't litter /data, use RAM.
-        if (dataEncrypted()) return device::path("/tmp");
-        if (util::isDir(device::path("/data/media"))) return device::path("/data/media");
+        if (!dataEncrypted()) return util::isDir(device::path("/data/media")) ? device::path("/data/media") : p->contentPath();
+        // File-based encryption without decryption: the names under /data are scrambled - don't litter it.
     }
-    return p->contentPath();
+    // The chosen storage can't be used (encrypted /data, no card in the slot): a card or USB disk that mounts, else
+    // RAM. Never the bare mount point: that is RAM as well, and looks like storage.
+    for (auto& o : parts_)
+        if (o.removable && o.storage && o.present && &o != p && mount(o)) return o.contentPath();
+    return device::path("/tmp");
+}
+
+bool Partitions::onRam(const std::string& path) {
+    struct statfs sf;
+    if (statfs(path.c_str(), &sf) != 0) return false;
+    return sf.f_type == 0x01021994 /* tmpfs */ || sf.f_type == 0x858458f6 /* ramfs, the ramdisk's rootfs */;
 }
 
 std::string Partitions::appDir() { return storagePath() + "/FMRRE"; }
 
 std::string Partitions::legacyDir() { return storagePath() + "/TWRP"; }
 
+std::string Partitions::configDir() {
+    std::string sp = storagePath(), tmp = device::path("/tmp");
+    // Next to the backups when internal storage is readable (or where an earlier boot already put them).
+    if (sp != tmp && (util::startsWith(sp, device::path("/data")) || util::exists(sp + "/FMRRE/.fmrre.conf"))) return sp + "/FMRRE";
+    // Encrypted /data: /cache is not encrypted and survives reboots on the phones that have one (the Galaxy S8 era).
+    if (Partition* c = find("/cache"))
+        if (!c->isImage() && c->present && mount(*c) && util::mkdirs(c->contentPath() + "/fmrre")) return c->contentPath() + "/fmrre";
+    return sp == tmp ? tmp : sp + "/FMRRE";  // a card, else RAM (settings last until the reboot)
+}
+
+// Full-disk encryption (Android 5-9 phones such as the Galaxy S8) and metadata encryption: the whole partition is
+// ciphertext, so no filesystem is found on it. Told apart from an erased partition by its first blocks not being blank.
+static bool looksEncrypted(const std::string& dev) {
+    int fd = open(dev.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    uint8_t b[4096];
+    ssize_t n = pread(fd, b, sizeof b, 0);
+    close(fd);
+    if (n < 2048) return false;
+    if (b[1080] == 0x53 && b[1081] == 0xEF) return false;                                        // ext2/3/4
+    if (b[1024] == 0x10 && b[1025] == 0x20 && b[1026] == 0xF5 && b[1027] == 0xF2) return false;  // f2fs
+    int blank = 0;
+    for (ssize_t i = 0; i < n; i++) blank += b[i] == 0x00 || b[i] == 0xFF;
+    return blank < n / 2;  // ciphertext is noise; an erased partition is all 00 (or FF)
+}
+
 bool Partitions::dataEncrypted() {
     Partition* d = find("/data");
-    if (!d || !isMounted(*d)) return false;
+    if (!d) return false;
+    if (!isMounted(*d)) {
+        // Can't be mounted and holds no filesystem: encrypted as a whole. Looked at again every few seconds only
+        // (screens ask on every frame).
+        int64_t now = util::nowMs();
+        if (encDev_ != d->blockDev || now - encChecked_ > 3000) {
+            encDev_ = d->blockDev;
+            encChecked_ = now;
+            encWhole_ = d->present && looksEncrypted(d->blockDev);
+        }
+        return encWhole_;
+    }
     if (util::isDir(device::path("/data/media/0"))) return false;
     // Encrypted directories exist but their names are scrambled (no "0").
     return util::isDir(device::path("/data/media")) || device::prop("ro.crypto.state") == "encrypted";

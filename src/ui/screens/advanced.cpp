@@ -47,7 +47,7 @@ public:
             {"Tools",
              {{Icon::Folder, "File manager", "Browse, copy, move, chmod", th.warn, 4},
               {Icon::Terminal, "Terminal", "Run shell commands as root", rgb(0x94A3B8), 5},
-              {Icon::Download, "Copy log to storage", "Save recovery.log for bug reports", th.accent2, 6},
+              {Icon::Download, "Copy log to storage", "Recovery log, kernel log, SELinux report", th.accent2, 6},
               {Icon::Camera, "Take screenshot", "Saved to Pictures/Screenshots", th.accent, 7},
               {Icon::Shield, "Fix storage contexts", "restorecon on internal storage", th.info, 8},
               {Icon::Usb, "Restart ADB", "Restart the adbd service", th.ok, 9},
@@ -74,7 +74,6 @@ public:
     }
 
     void act(App& app, int code) {
-        Theme& th = app.ui.th;
         switch (code) {
             case 1: app.push(makeMonitorScreen()); break;
             case 20: app.push(makeSuperScreen()); break;
@@ -94,12 +93,7 @@ public:
             case 13: app.push(makeDisplayTestScreen()); break;
             case 4: app.push(makeFilesScreen()); break;
             case 5: app.push(makeTerminalScreen()); break;
-            case 6: {
-                std::string dst = Partitions::get().storagePath() + "/recovery_" + util::dateStamp() + ".log";
-                if (util::copyFile(log::filePath(), dst)) app.toast("Saved " + util::basename(dst), Icon::Check, th.ok);
-                else app.toast("Couldn't copy the log", Icon::Warning, th.danger);
-                break;
-            }
+            case 6: app.saveLogs(); break;
             case 7: app.screenshot(); break;
             case 8:
                 app.runTask("Fixing contexts", Icon::Shield, [](Task& t) {

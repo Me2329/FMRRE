@@ -8,6 +8,7 @@
 #include "core/i18n.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/logsave.h"
 #include "sys/partitions.h"
 
 namespace tw {
@@ -18,7 +19,18 @@ class DeviceInfoScreen : public Screen {
 public:
     std::string title() const override { return "Device info"; }
     std::string subtitle() const override { return "What FMRRE detected about this phone"; }
-    void onShow(App&) override { Partitions::get().refresh(); }
+    void onShow(App&) override {
+        Partitions::get().refresh();
+        // SELinux: FMRRE runs in the stock recovery's domain; what it was refused (from the kernel log) is the first
+        // thing to look at when something doesn't work on a new phone. Read once - the kernel log is big.
+        std::string mode = logsave::selinuxMode();
+        selinux_.clear();
+        if (!mode.empty()) {
+            size_t n = logsave::selinuxDenials(logsave::kernelLog()).size();
+            selinux_ = i18n::tr(mode);
+            if (n) selinux_ += "  \xE2\x80\xA2  " + std::to_string(n) + " " + i18n::tr("refused (see the log)");
+        }
+    }
 
     void draw(Ui& ui, App& app, Rect area) override {
         Theme& th = ui.th;
@@ -67,6 +79,7 @@ public:
             {"Security patch", in.patch},
             {"Partitions", ab},
             {"Data", enc},
+            {"SELinux", selinux_},
         });
         // CPU / build.
         std::string build = std::string(device::buildAbi()) + " build";
@@ -103,6 +116,9 @@ public:
         y += pi.h + ui.dp(18);
         ui.endScroll(y);
     }
+
+private:
+    std::string selinux_;  // "enforcing - 3 refused (see the log)"
 };
 
 }  // namespace

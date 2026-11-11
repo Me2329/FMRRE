@@ -21,7 +21,7 @@ std::string clean(std::string s) {
 }  // namespace
 
 std::string path() {
-    std::string dir = Partitions::get().appDir();
+    std::string dir = Partitions::get().configDir();
     if (util::mkdirs(dir)) return dir + "/history.txt";
     return device::path("/tmp/fmrre-history.txt");
 }

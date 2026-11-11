@@ -27,6 +27,7 @@
 #include "sim.h"
 #include "sys/autofix.h"
 #include "sys/mtp.h"
+#include "sys/logsave.h"
 #include "sys/ors.h"
 #include "sys/pathcheck.h"
 #include "sys/partitions.h"
@@ -53,6 +54,37 @@ static Key keyByName(const std::string& n) {
     if (n == "voldown") return Key::VolDown;
     if (n == "power") return Key::Power;
     return Key::None;
+}
+
+// Neither DRM nor fbdev gave a screen. Leaving would only make init start FMRRE again, for ever and silently: say
+// what the kernel offers, keep the logs where they can be read, buzz three times, and let the keys restart the phone.
+static int noDisplay() {
+    LOGE("No usable display (DRM and fbdev failed)");
+    for (auto dir : {"/dev/dri", "/dev/graphics", "/sys/class/graphics", "/sys/class/drm", "/sys/class/backlight"}) {
+        std::string names;
+        for (auto& e : util::listDir(dir)) names += e.name + " ";
+        LOGI("  %s: %s", dir, names.empty() ? "(none)" : names.c_str());
+    }
+    LOGE("Keys: Power = restart Android, Volume Up = restart recovery, Volume Down = Download / bootloader mode");
+    auto where = logsave::save("no display", logsave::Removable::Mount);
+    for (auto& w : where) LOGI("Logs saved in %s", w.c_str());
+    for (int i = 0; i < 3; i++) {
+        device::vibrate(150);
+        usleep(400000);
+    }
+    EvdevInput keys;
+    keys.open(1080, 1920);
+    InputQueue q;
+    for (;;) {
+        keys.poll(q, 1000);
+        for (auto& e : q.drain()) {
+            if (e.type != EvType::KeyDown) continue;
+            if (e.key == Key::Power) device::reboot("");
+            else if (e.key == Key::VolUp) device::reboot("recovery");
+            else if (e.key == Key::VolDown) device::reboot(util::toLower(device::info().manufacturer) == "samsung" ? "download" : "bootloader");
+        }
+    }
+    return 1;
 }
 
 static int runScript(App& app, const std::string& file, const std::string& outDir) {
@@ -217,7 +249,7 @@ int main(int argc, char** argv) {
     Partitions::get().refresh();
 
     // Settings live next to backups (like TWRP's .twrps) so they survive reboots.
-    std::string cfgDir = Partitions::get().appDir();
+    std::string cfgDir = Partitions::get().configDir();
     if (!util::mkdirs(cfgDir)) cfgDir = device::path("/tmp");
     // Renamed from TWRP v2: take over its settings and flash history once.
     std::string legacy = Partitions::get().legacyDir();
@@ -246,11 +278,12 @@ int main(int argc, char** argv) {
             headless = true;
         }
     } else {
+        device::setBeforeReboot([] { logsave::save("reboot", logsave::Removable::IfMounted); });
         display = openHardwareDisplay();
-        if (!display) {
-            LOGE("No usable display (DRM and fbdev failed)");
-            return 1;
-        }
+        if (!display) return noDisplay();
+        // One short buzz: FMRRE is running. (A black screen with the buzz is a display problem; without it, the
+        // program never started.)
+        if (Settings::get().flag("vibrate", true)) device::vibrate(70);
         input = std::make_unique<EvdevInput>();
         input->open(display->width(), display->height());
         int b = Settings::get().integer("brightness", -1);
@@ -260,7 +293,10 @@ int main(int argc, char** argv) {
     LOGI("display: %s %dx%d", display->name(), display->width(), display->height());
 
     App app(display.get(), input.get(), &queue);
-    app.idleHook = orsIdle;
+    app.idleHook = [](App& a) {
+        orsIdle(a);
+        logsave::tick();  // the logs go to /cache/recovery and a card: no adb is needed to get them off a new phone
+    };
     util::mkdirs(util::dirname(ors::uiPidFile()));
     util::writeFile(ors::uiPidFile(), std::to_string(getpid()) + "\n");
     ors::Script pending;

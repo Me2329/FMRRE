@@ -20,9 +20,11 @@ public:
     // Backends that are also input sources (X11 window) push events here.
     virtual void pumpEvents(InputQueue& q) { (void)q; }
     void setRotate180(bool r) { rotate180_ = r; }
+    // Some drivers report the red and blue channels the wrong way round (Exynos fbdev is known for it).
+    void setSwapRB(bool s) { swapRB_ = s; }
 
 protected:
-    bool rotate180_ = false;
+    bool rotate180_ = false, swapRB_ = false;
 };
 
 std::unique_ptr<Display> createDrmDisplay();

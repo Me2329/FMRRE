@@ -94,6 +94,12 @@ public:
         y += ui.dp(30);
         float cx = x;
         auto storages = Partitions::get().storages();
+        if (storages.empty()) {
+            ui.textBlock(x + ui.dp(6), y, w - ui.dp(12),
+                         "No storage for backups: internal storage is encrypted and there is no microSD or USB disk. Put one in, then "
+                         "Mount > rescan.", ui.dp(13), th.warn);
+            y += ui.dp(44);
+        }
         for (size_t i = 0; i < storages.size(); i++) {
             float cw = ui.chipWidth(storages[i]->displayName, Icon::Storage);
             if (ui.chip(ui.id("st", (int)i), Rect(cx, y, cw, ui.dp(40)), storages[i]->displayName,

@@ -1,8 +1,12 @@
-// Display test: full-screen solid colours, a smooth gradient and a fine grid, to check a panel for dead or stuck
-// pixels, burn-in (AMOLED), uniformity and touch. Tap to step through; back to leave. Useful on a used phone.
+// Display test: first three named colour bands (does the panel show red where FMRRE draws red? - some display
+// drivers swap red and blue, fixed with one button), then full-screen solid colours, a smooth gradient and a fine
+// grid, to check a panel for dead or stuck pixels, burn-in (AMOLED), uniformity and touch. Tap to step through;
+// back to leave. Useful on a used phone, and on a phone FMRRE has never run on.
 #include "ui/screens/screens.h"
 
 #include "core/i18n.h"
+#include "core/settings.h"
+#include "ui/app.h"
 
 namespace tw {
 
@@ -15,20 +19,44 @@ public:
     bool hasHeader() const override { return false; }  // cover the whole viewport, no header
 
     void draw(Ui& ui, App& app, Rect area) override {
-        (void)app;
         Canvas& c = *ui.c;
         Rect full(area.x, 0 - c.oy(), area.w, (float)c.height());  // the whole panel in this screen's coordinate space
-        for (auto& e : ui.events())
-            if (e.type == EvType::TouchUp) step_ = (step_ + 1) % kSteps;
+        Rect swapBtn(full.x + ui.dp(36), full.y + full.h * 0.5f + ui.dp(18), full.w - ui.dp(72), ui.dp(52));
+        for (auto& e : ui.events()) {
+            if (e.type != EvType::TouchUp) continue;
+            if (step_ == 0 && swapBtn.contains(e.x - c.ox(), e.y - c.oy())) continue;  // the button, not "next"
+            step_ = (step_ + 1) % kSteps;
+        }
 
         struct S { const char* name; Color col; };
         static const S solids[] = {{"White", rgb(0xFFFFFF)}, {"Black", rgb(0x000000)}, {"Red", rgb(0xFF0000)},
                                    {"Green", rgb(0x00FF00)}, {"Blue", rgb(0x0000FF)}, {"Grey 50%", rgb(0x808080)}};
         int nSolid = 6;
-        if (step_ < nSolid) {
-            c.fillRect(full, solids[step_].col);
-            label(c, ui, full, solids[step_].name, solids[step_].col);
-        } else if (step_ == nSolid) {  // horizontal greyscale gradient - banding / colour-cast check
+        if (step_ == 0) {  // each band must show the colour it names
+            static const S bands[] = {{"RED", rgb(0xFF0000)}, {"GREEN", rgb(0x00FF00)}, {"BLUE", rgb(0x0000FF)}};
+            float bh = full.h / 3;
+            for (int i = 0; i < 3; i++) {
+                Rect b(full.x, full.y + bh * i, full.w, bh);
+                c.fillRect(b, bands[i].col);
+                i18n::NoTranslate raw;  // the names stay in English, like the colours they stand for
+                font::drawIn(c, Face::Bold, ui.dp(26), Rect(b.x, b.y + b.h * 0.5f - ui.dp(i == 1 ? 58 : 18), b.w, ui.dp(34)), bands[i].name,
+                             i == 1 ? rgb(0x000000) : rgb(0xFFFFFF), AlignCenter);
+            }
+            // A dark panel behind the button and its hint: readable on any band, and with the colours swapped.
+            c.fillRoundRect(Rect(swapBtn.x - ui.dp(12), swapBtn.y - ui.dp(12), swapBtn.w + ui.dp(24), swapBtn.h + ui.dp(56)), ui.dp(22),
+                            rgb(0x0B0F17));
+            if (ui.button(ui.id("dt_swap"), swapBtn, "Names don't match? Swap red / blue", Icon::Refresh, BtnStyle::Tonal)) {
+                Settings& st = Settings::get();
+                st.setFlag("swap_rb", !st.flag("swap_rb"));
+                st.save();
+                app.applySettings();
+            }
+            font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(full.x, swapBtn.b() + ui.dp(10), full.w, ui.dp(20)),
+                         "Tap elsewhere to continue, Back to leave", withAlpha(rgb(0xFFFFFF), 0.7f), AlignCenter);
+        } else if (step_ <= nSolid) {
+            c.fillRect(full, solids[step_ - 1].col);
+            label(c, ui, full, solids[step_ - 1].name, solids[step_ - 1].col);
+        } else if (step_ == nSolid + 1) {  // horizontal greyscale gradient - banding / colour-cast check
             c.gradientH(full, rgb(0x000000), rgb(0xFFFFFF));
             label(c, ui, full, "Gradient", rgb(0x808080));
         } else {  // fine grid on dark - geometry / stuck pixels
@@ -54,7 +82,7 @@ private:
         font::drawIn(c, Face::Regular, ui.dp(12.5f), Rect(full.x, cy + ui.dp(10), full.w, ui.dp(20)),
                      "Tap to change, Back to leave", withAlpha(fg, 0.5f), AlignCenter);
     }
-    static constexpr int kSteps = 8;  // 6 solids + gradient + grid
+    static constexpr int kSteps = 9;  // colour order + 6 solids + gradient + grid
     int step_ = 0;
 };
 

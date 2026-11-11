@@ -71,6 +71,7 @@ static Key mapKey(int code) {
         case KEY_VOLUMEDOWN: return Key::VolDown;
         case KEY_POWER: return Key::Power;
         case KEY_BACK: case KEY_ESC: return Key::Back;
+        case 0x2bf: return Key::Back;  // KEY_WINK in Samsung's kernels: the Bixby key (S8 - Note 10 have no Back key)
         case KEY_HOME: case KEY_HOMEPAGE: return Key::Home;
         case KEY_MENU: return Key::Menu;
         case KEY_ENTER: case KEY_OK: case KEY_SELECT: return Key::Enter;

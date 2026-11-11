@@ -11,6 +11,7 @@
 #include "core/util.h"
 #include "gfx/png.h"
 #include "platform/device.h"
+#include "sys/logsave.h"
 #include "sys/partitions.h"
 #include "ui/screens/screens.h"
 
@@ -50,7 +51,14 @@ void App::applySettings() {
     topInset = ui.dp((float)s.integer("inset_top", device::isSim() ? 0 : 24));
     bottomInset = ui.dp((float)s.integer("inset_bottom", device::isSim() ? 0 : 8));
     display_->setRotate180(s.flag("rotate180"));
+    display_->setSwapRB(s.flag("swap_rb"));
     if (input_) input_->setTransform(s.flag("touch_swap"), s.flag("touch_flipx"), s.flag("touch_flipy"));
+}
+
+void App::saveLogs() {
+    auto where = logsave::save("asked", logsave::Removable::Mount);
+    if (where.empty()) toast("Couldn't save the log", Icon::Warning, ui.th.danger);
+    else toast("Logs saved in " + where.back(), Icon::Check, ui.th.ok);  // the last place is the easiest to reach
 }
 
 void App::vibrate(int ms) {
@@ -355,7 +363,10 @@ void App::frame(const std::vector<InputEvent>& evs) {
                 changed = true;
             }
         }
-        if (changed) startTransition(forward);
+        if (changed) {
+            startTransition(forward);
+            ui.resetFocus();
+        }
     }
     if (!transitioning_) graveyard_.clear();
     if (wasTaskRunning_ && !opRunning) vibrate(60);
@@ -610,9 +621,7 @@ void App::drawConsole() {
     if (ui.iconButton(ui.id("con_close"), Rect(head.r() - ui.dp(40), head.y, ui.dp(40), ui.dp(40)), Icon::Close, rgb(0xCBD5E1), true))
         consoleOpen_ = false;
     if (ui.iconButton(ui.id("con_save"), Rect(head.r() - ui.dp(88), head.y, ui.dp(40), ui.dp(40)), Icon::Download, rgb(0xCBD5E1), true)) {
-        std::string dst = Partitions::get().storagePath() + "/recovery_" + util::dateStamp() + ".log";
-        if (util::copyFile(log::filePath(), dst)) toast("Log saved to " + util::basename(dst), Icon::Check, th.ok);
-        else toast("Couldn't save the log", Icon::Warning, th.danger);
+        saveLogs();
     }
     Rect body(sheet.x + ui.dp(12), head.b() + ui.dp(8), sheet.w - ui.dp(24), h - ui.dp(80) - bottomInset);
     Id sid = ui.id("console_scroll");

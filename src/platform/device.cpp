@@ -324,12 +324,16 @@ void vibrate(int ms) {
     }
 }
 
+static std::function<void()> g_beforeReboot;
+void setBeforeReboot(std::function<void()> fn) { g_beforeReboot = std::move(fn); }
+
 void reboot(const std::string& target) {
     LOGI("Rebooting to '%s'", target.empty() ? "system" : target.c_str());
     if (g_sim) {
         LOGI("(simulator) reboot request ignored");
         return;
     }
+    if (g_beforeReboot) g_beforeReboot();
     sync();
     std::string arg = target == "poweroff" ? "shutdown," : ("reboot," + target);
     // The Android way: ask init (works for every target incl. fastbootd).

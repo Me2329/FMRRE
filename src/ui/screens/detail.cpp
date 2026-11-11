@@ -25,12 +25,16 @@ public:
         float x = area.x + pad, w = area.w - pad * 2, y = area.y;
         int cur = Settings::get().integer("detail", -1);
 
-        Rect intro(x, y, w, ui.dp(72));
+        Rect intro(x, y, w, ui.dp(firstRun_ ? 98 : 72));
         ui.card(intro, ui.dp(18));
         ui.label(Rect(intro.x + ui.dp(16), intro.y + ui.dp(14), intro.w - ui.dp(32), ui.dp(22)),
                  "Older phones draw faster with less detail.", ui.dp(13), th.text, Face::SemiBold);
         ui.label(Rect(intro.x + ui.dp(16), intro.y + ui.dp(40), intro.w - ui.dp(32), ui.dp(22)),
                  "You can change this any time in Settings.", ui.dp(12.5f), th.textDim, Face::Regular);
+        // First boot on a new phone: touch may not answer yet, and the volume keys always do.
+        if (firstRun_)
+            ui.label(Rect(intro.x + ui.dp(16), intro.y + ui.dp(66), intro.w - ui.dp(32), ui.dp(22)),
+                     "No touch? Volume keys move, Power selects.", ui.dp(12.5f), th.accent, Face::SemiBold);
         y += intro.h + ui.dp(14);
 
         auto choice = [&](const char* name, const char* sub, Icon icon, Color tint, int value) {

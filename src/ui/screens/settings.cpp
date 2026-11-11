@@ -125,7 +125,7 @@ public:
         // ---- Display
         ui.sectionHeader(Rect(x, y, w, ui.dp(24)), "Display");
         y += ui.dp(30);
-        Rect dc(x, y, w, ui.dp(176) + ui.dp(68) * 3);
+        Rect dc(x, y, w, ui.dp(176) + ui.dp(68) * 4);
         ui.card(dc);
         icons::drawCentered(c, Icon::Sun, dc.x + ui.dp(28), dc.y + ui.dp(28), ui.dp(20), th.textDim);
         font::drawIn(c, Face::SemiBold, ui.dp(15), Rect(dc.x + ui.dp(50), dc.y + ui.dp(16), w, ui.dp(22)),
@@ -146,11 +146,15 @@ public:
             tx += tcw + ui.dp(5);
         }
         yy = dc.y + ui.dp(172);
-        bool h24 = s.flag("clock24", true), fh = s.flag("fahrenheit"), rot = s.flag("rotate180");
+        bool h24 = s.flag("clock24", true), fh = s.flag("fahrenheit"), rot = s.flag("rotate180"), rb = s.flag("swap_rb");
         if (ui.toggleRow(ui.id("h24"), rowRect(yy), Icon::Timer, "24-hour clock", "", h24)) s.setFlag("clock24", h24);
         if (ui.toggleRow(ui.id("fh"), rowRect(yy), Icon::Thermo, "Fahrenheit", "Temperature unit in the status bar", fh)) s.setFlag("fahrenheit", fh);
         if (ui.toggleRow(ui.id("rot"), rowRect(yy), Icon::Refresh, "Rotate 180\xC2\xB0", "For upside-down panels", rot)) {
             s.setFlag("rotate180", rot);
+            changed = true;
+        }
+        if (ui.toggleRow(ui.id("swaprb"), rowRect(yy), Icon::Eye, "Swap red and blue", "If red shows as blue", rb)) {
+            s.setFlag("swap_rb", rb);
             changed = true;
         }
         y += dc.h + ui.dp(10);

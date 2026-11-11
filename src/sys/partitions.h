@@ -66,11 +66,15 @@ public:
     std::string storagePath();  // e.g. /data/media/0
     std::string appDir();       // <storage>/FMRRE: backups, history, settings, saved stock images
     std::string legacyDir();    // <storage>/TWRP: classic TWRP backups (and what TWRP v2 saved before the rename)
+    // Settings and history: appDir() when internal storage is readable, else /cache/fmrre (survives reboots when
+    // /data is encrypted), else a card, else RAM.
+    std::string configDir();
     void setStorage(const std::string& mountPoint);
     std::string currentStorage() const { return storage_; }
     // /data is mounted but internal storage is not readable (FBE, not decrypted).
     bool dataEncrypted();
 
+    static bool onRam(const std::string& path);  // tmpfs / the ramdisk: gone at the next reboot
     static std::string byNameDir();
     static std::string byName(const std::string& name);  // by-name/<name>, any letter case; "" if absent
     static uint64_t blockSize(const std::string& dev);
@@ -88,6 +92,9 @@ private:
     std::vector<Partition> parts_;
     std::string fstabPath_;
     std::string storage_ = "/data";
+    std::string encDev_;       // dataEncrypted(): the whole-partition check is cached for a few seconds
+    int64_t encChecked_ = 0;
+    bool encWhole_ = false;
     std::vector<std::string> simMounted_;
 };
 

@@ -234,6 +234,13 @@ bool create(const Options& oIn, Task& t) {
         t.print("Cannot create backup folder %s", dir.c_str());
         return false;
     }
+    if (!device::isSim() && Partitions::onRam(dir)) {
+        // Encrypted /data and no card: the only place left is RAM, which a backup would fill and a reboot would empty.
+        rmdir(dir.c_str());
+        t.print("There is nowhere to keep a backup: internal storage is encrypted and there is no microSD or USB disk.");
+        t.print("Put one in, then Mount > rescan, and pick it as the storage.");
+        return false;
+    }
     t.print("Backup folder: %s", dir.c_str());
     // A FAT (FAT32) card can't hold a file of 4 GiB or more: split automatically so the backup fits. exFAT and the
     // Linux filesystems have no such limit.

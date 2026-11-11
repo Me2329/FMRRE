@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,8 @@ void vibrate(int ms);
 
 // target: "" (system), recovery, bootloader, fastboot, edl, download, poweroff
 void reboot(const std::string& target);
+// Runs right before a reboot or power-off (the logs are saved to storage there: /tmp does not survive it).
+void setBeforeReboot(std::function<void()> fn);
 bool switchSlot(std::string& msg);
 // Bootloader lock state from the boot properties (ro.boot.flash.locked, vbmeta.device_state,
 // verifiedbootstate): 1 unlocked, 0 locked, -1 not reported. `how` gets the evidence ("verifiedbootstate=orange").

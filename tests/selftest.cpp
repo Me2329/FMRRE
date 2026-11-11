@@ -40,6 +40,7 @@
 #include "sys/history.h"
 #include "sys/imagesrc.h"
 #include "sys/installer.h"
+#include "sys/logsave.h"
 #include "sys/partitions.h"
 #include "sys/ors.h"
 #include "sys/pathcheck.h"
@@ -763,6 +764,103 @@ static void testRemovableSafety(const std::string& dir) {
     util::removeTree(root);
     device::init(true, dir + "/sim");  // back to the shared sandbox for the tests that follow
     P.load();
+}
+
+// A phone whose /data is encrypted as a whole (full-disk encryption: the Galaxy S8 era) - it can't be mounted here.
+// Nothing may then be written to the bare /data mount point (that is RAM): storage falls back to a card or RAM,
+// settings go to /cache, and a factory reset - which promises to keep internal storage - refuses instead of formatting.
+static void testEncryptedData(const std::string& dir) {
+    std::string root = dir + "/fde";
+    sim::ensureRoot(root);
+    device::init(true, root);
+    Partitions& P = Partitions::get();
+    P.unmountAll();
+    std::string noise(8192, '\0');
+    uint32_t seed = 99;
+    for (auto& ch : noise) { seed = seed * 1103515245 + 12345; ch = char(seed >> 16); }
+    std::string userdata = root + "/dev/block/by-name/userdata";
+    CHECK(util::writeFile(userdata, noise));
+    unlink((root + "/dev/block/mmcblk1p1").c_str());  // no microSD in the slot, for now
+    P.load();
+    Partition* data = P.find("/data");
+    std::string err;
+    CHECK(data && !P.mount(*data, &err) && P.dataEncrypted());
+    CHECK(P.storagePath() == root + "/tmp");  // no card in the slot: RAM, and said so - not /data
+    CHECK(P.configDir() == root + "/cache/fmrre");
+    bool listed = false;
+    for (auto* st : P.storages()) listed |= st->mountPoint == "/data";
+    CHECK(!listed);
+    // Factory reset refuses (it can't keep the files) and formats nothing.
+    CHECK(!runTask("reset-encrypted", [&](Task& t) { return P.wipe(*data, t); }));
+    std::string after;
+    CHECK(util::readFile(userdata, after) && after == noise);
+    // Wiping /cache keeps FMRRE's settings there.
+    util::writeFile(root + "/cache/fmrre/.fmrre.conf", "detail=0\n");
+    util::writeFile(root + "/cache/junk.bin", "x");
+    Partition* cache = P.find("/cache");
+    CHECK(cache && runTask("wipe-cache", [&](Task& t) { return P.wipe(*cache, t); }));
+    CHECK(util::exists(root + "/cache/fmrre/.fmrre.conf") && !util::exists(root + "/cache/junk.bin"));
+    // With a microSD present, backups and screenshots go there (and it is the storage picked at start).
+    util::writeFile(root + "/dev/block/mmcblk1p1", "");
+    P.unmountAll();
+    P.load();
+    CHECK(P.currentStorage() == "/external_sd" && P.storagePath() == root + "/external_sd");
+    CHECK(P.appDir() == root + "/external_sd/FMRRE" && P.configDir() == root + "/cache/fmrre");
+    // An erased partition (zeros) is not "encrypted": it mounts in the sandbox and a reset proceeds.
+    CHECK(util::writeFile(userdata, std::string(8192, '\0')));
+    P.unmountAll();
+    P.load();
+    data = P.find("/data");
+    CHECK(data && P.mount(*data) && !P.dataEncrypted());
+
+    util::removeTree(root);
+    device::init(true, dir + "/sim");  // back to the shared sandbox
+    P.unmountAll();
+    P.load();
+    P.mountAllStorage();
+    P.refresh();
+}
+
+// Logs without adb: the recovery log, the kernel log and what SELinux refused FMRRE are written where a person can
+// reach them - /cache/recovery (the stock recovery's log viewer), a card, readable internal storage.
+static void testLogSave(const std::string& dir) {
+    std::string root = dir + "/sim";
+    std::string avc = "audit: type=1400 audit(1.2:3): avc:  denied  { write } for  pid=311 comm=\"recovery\" name=\"brightness\" "
+                      "dev=\"sysfs\" ino=4711 scontext=u:r:recovery:s0 tcontext=u:object_r:sysfs_leds:s0 tclass=file permissive=0\n";
+    std::string kmsg = "<5>[   10.1] " + avc + "<5>[   10.9] " + avc +  // the same refusal twice: listed once
+                       "<5>[   11.0] audit: type=1400 audit(1.3:4): avc:  denied  { read open } for  pid=311 comm=\"recovery\" "
+                       "path=\"/dev/block/sda3\" dev=\"tmpfs\" ino=99 scontext=u:r:recovery:s0 tcontext=u:object_r:efs_block_device:s0 "
+                       "tclass=blk_file permissive=0\n"
+                       "<5>[   12.0] audit: type=1400 audit(1.4:5): avc:  denied  { search } for  pid=77 comm=\"vold\" name=\"x\" "
+                       "scontext=u:r:vold:s0 tcontext=u:object_r:foo:s0 tclass=dir permissive=0\n"  // another program's: not ours
+                       "<6>[   13.0] decon: unrelated line\n";
+    auto den = logsave::selinuxDenials(kmsg);
+    CHECK(den.size() == 2);
+    CHECK(den.size() == 2 && den[0] == "write file brightness  (sysfs_leds)");
+    CHECK(den.size() == 2 && den[1] == "read open blk_file /dev/block/sda3  (efs_block_device)");
+    CHECK(logsave::selinuxDenials("nothing here\n").empty());
+
+    util::mkdirs(root + "/proc");
+    util::mkdirs(root + "/cache/recovery");
+    CHECK(util::writeFile(root + "/proc/kmsg.txt", kmsg));
+    CHECK(util::writeFile(root + "/cache/recovery/last_log", "older session\n"));
+    LOGI("logsave marker line");
+    auto where = logsave::save("test", logsave::Removable::Mount);
+    CHECK(std::find(where.begin(), where.end(), "/cache/recovery") != where.end());
+    std::string got;
+    CHECK(util::readFile(root + "/cache/recovery/last_log", got) && got.find("logsave marker line") != std::string::npos &&
+          got.find("2 kind(s) of action refused") != std::string::npos && got.find("--- saved: test ---") != std::string::npos);
+    CHECK(util::readFile(root + "/cache/recovery/last_log.1", got) && got == "older session\n");  // rotated like AOSP's
+    CHECK(util::readFile(root + "/cache/recovery/last_kmsg", got) && got == kmsg);
+    CHECK(util::readFile(root + "/external_sd/FMRRE/logs/selinux.txt", got) && got.find("sysfs_leds") != std::string::npos);
+    CHECK(util::readFile(root + "/external_sd/FMRRE/logs/kernel.log", got) && got == kmsg);
+    CHECK(util::exists(root + "/data/media/0/FMRRE/logs/recovery.log"));
+    // Later saves in the same run rewrite this run's files: the older session is not pushed out again.
+    LOGI("logsave second marker");
+    logsave::save("again", logsave::Removable::No);
+    CHECK(util::readFile(root + "/cache/recovery/last_log.1", got) && got == "older session\n");
+    CHECK(util::readFile(root + "/cache/recovery/last_log", got) && got.find("logsave second marker") != std::string::npos);
+    unlink((root + "/proc/kmsg.txt").c_str());
 }
 
 static void testSplitBackup(const std::string& dir) {
@@ -2146,6 +2244,8 @@ int main() {
     testSplitBackup(dir);
     testSamsungAp(dir);
     testRemovableSafety(dir);
+    testEncryptedData(dir);
+    testLogSave(dir);
     testLegacyFolders();
     testPathcheck(dir);
     testCrypt();

@@ -61,20 +61,38 @@ safer choice for the first boot.
    recovery back on that boot (harmless: flash again).
 
 ## 4. First boot - what to check
+- **One short buzz** right at the start means FMRRE itself is running. A black screen *with* the buzz is a display
+  problem; **three buzzes** mean FMRRE found no display at all (then Power restarts Android, Volume Up restarts
+  recovery, Volume Down goes to Download mode). No buzz at all: the program never started.
 - FMRRE first asks **Low detail / High detail**: **Low** is the smooth choice on the 2017 SoC (Settings changes it).
-- **Advanced > Device info**: Samsung, dreamlte (SM-G950F), A-only, Exynos 8895, Android 9.
+- **Touch doesn't answer?** The **volume keys move** the highlight, **Power selects**, and the **Bixby key is Back**.
+  Every screen works that way.
+- **Advanced > Display test**: the first page shows three bands named RED, GREEN and BLUE. If a name doesn't match
+  its colour (Exynos display drivers are known to report red and blue the wrong way round), press the button on that
+  page - or Settings > Swap red and blue.
+- **Advanced > Input test** - if touches land in the wrong place, use its calibration chips (Swap X/Y, Flip X, Flip Y).
+- **Advanced > Device info**: Samsung, dreamlte (SM-G950F), A-only, Exynos 8895, Android 9, **Data: encrypted**,
+  and **SELinux** with the number of actions it refused FMRRE.
 - **Mount**: each partition with its block device under `/dev/block/platform/11120000.ufs/by-name/` (capitals).
-- **Advanced > Display test** (1440x2960 panel) and **Input test** - if touches land in the wrong place, use its
-  touch calibration chips (Swap X/Y, Flip X, Flip Y).
-- On the PC: `adb devices` lists the phone as `recovery`; `adb shell fmrre help`; `adb pull /tmp/recovery.log`.
-  Send that log if anything misbehaves - Samsung's kernel keeps SELinux enforcing in recovery, so a "Permission
-  denied" there is the first thing to look at for this port.
 - Don't wipe or format anything on this first test: the point is to see FMRRE run.
 
+### Getting the log out (no adb needed)
+A stock Samsung ramdisk has no `adb shell`, so FMRRE keeps its logs where you can reach them - a few seconds after
+it starts, after that as the log grows, and right before any reboot (also by hand: **Advanced > Copy log to storage**,
+or the download icon in the Console):
+- **microSD** (the easy way - put one in before the test): `FMRRE/logs/recovery.log`, `kernel.log` and
+  `selinux.txt` (what SELinux refused, one line per kind). Read them on the PC.
+- **/cache/recovery/last_log** and **last_kmsg**: flash `stock-recovery.tar.md5` back and open the stock recovery's
+  **View recovery logs**.
+Samsung's kernel keeps SELinux enforcing in recovery and FMRRE does not change the policy, so `selinux.txt` is the
+first thing to send if a feature fails with "Permission denied".
+
 ## Good to know
-- **/data encryption**: when Android encrypted /data (Secure startup, or a forced encryption), FMRRE cannot read it
-  - it detects that and keeps backups and settings on the microSD or in RAM. **Format Data** works and leaves the
-  encryption footer at the end of the partition free, so Android can encrypt again on its next boot.
+- **/data encryption**: the S8 encrypts /data as a whole (full-disk encryption) and FMRRE cannot read it. It says so
+  (*Data: encrypted*), keeps its settings on `/cache`, offers the microSD for backups (never RAM: without a card a
+  backup is refused), and **Factory reset is not offered** - it promises to keep your photos, which is impossible
+  here. **Format Data** (erases everything, asks first) works and leaves the encryption footer at the end of the
+  partition free, so Android can encrypt again on its next boot.
 - **Android puts the stock recovery back** on its first boot after a flash (`recovery-from-boot.p`). For a test
   that is fine; keeping FMRRE for good needs that file disabled, which FMRRE doesn't do yet.
 - **Back to stock**: recovery only - Odin AP = `stock-recovery.tar.md5`. Everything - Odin with BL + AP + CP +
