@@ -7,7 +7,11 @@
     default        fastboot boot  - runs FMRRE once, writes NOTHING
     -Permanent     flash it (recovery, vendor_boot or boot - detected)
   Samsung:
-    -Samsung       build an Odin package (AP slot) with recovery.img + a disabled vbmeta
+    -Samsung       build an Odin package (AP slot) with recovery.img, plus a disabled vbmeta when the image has
+                   an AVB footer (phones launched with Android 9+; the Galaxy S8 and older have no vbmeta)
+
+  No image yet? Build it from YOUR phone's stock recovery (or the whole Samsung AP file) - Python only:
+    python pc\fmrre_mkrecovery.py AP_....tar.md5      (or recovery.img / recovery.img.lz4)
 
   Options: -Partition NAME, -BothSlots, -Vbmeta stock_vbmeta.img, -DisableVbmeta, -NoVbmeta, -Yes, -DryRun
   Fastboot phones need Android platform-tools (fastboot.exe, adb.exe) in PATH and the Google USB driver.
@@ -70,6 +74,16 @@ function Set-VbmetaDisabled([string]$src, [string]$dst) {
     $b[123] = [byte]($b[123] -bor 3)
     [IO.File]::WriteAllBytes($dst, $b)
 }
+function Test-AvbFooter([string]$path) {
+    $f = [IO.File]::OpenRead($path)
+    try {
+        if ($f.Length -lt 64) { return $false }
+        [void]$f.Seek(-64, [IO.SeekOrigin]::End)
+        $h = New-Object byte[] 4
+        [void]$f.Read($h, 0, 4)
+    } finally { $f.Close() }
+    return ([Text.Encoding]::ASCII.GetString($h) -eq "AVBf")
+}
 function Get-Magic([string]$path) {
     $f = [IO.File]::OpenRead($path)
     try { $h = New-Object byte[] 8; [void]$f.Read($h, 0, 8) } finally { $f.Close() }
@@ -81,7 +95,7 @@ if (-not $Image) {
     foreach ($c in "fmrre-recovery.img", "fmrre-boot.img", "fmrre-vendor_boot.img") { if (Test-Path $c) { $Image = $c; break } }
 }
 if (-not $Image -or -not (Test-Path $Image)) {
-    Die "No FMRRE image. Build fmrre-recovery.img from YOUR phone's stock recovery/boot image first (see README), then: scripts\install.ps1 -Image fmrre-recovery.img"
+    Die "No FMRRE image. Build it from YOUR phone's stock recovery first:  python pc\fmrre_mkrecovery.py recovery.img  (Samsung: the AP_....tar.md5 itself), then: scripts\install.ps1 -Image fmrre-recovery.img"
 }
 $Image = (Resolve-Path $Image).Path
 $magic = Get-Magic $Image
@@ -94,6 +108,10 @@ if ($Samsung) {
     $dir = "out\samsung"
     New-Item -ItemType Directory -Force $dir | Out-Null
     $out = Join-Path $dir "fmrre-recovery-odin.tar.md5"
+    if (-not $Vbmeta -and -not $DisableVbmeta -and -not $NoVbmeta -and -not (Test-AvbFooter $Image)) {
+        $NoVbmeta = $true
+        Say "No AVB footer on the image: this phone has no vbmeta partition - packaging the recovery only."
+    }
     $py = Get-Command python -ErrorAction SilentlyContinue
     if ($py -and (Native $py.Source @("--version")) -notmatch "Python 3") { $py = $null }   # Microsoft Store stub
     if ($py) {
@@ -126,7 +144,9 @@ if ($Samsung) {
     Write-Host @"
 
    Odin:
-     1. Phone: power off, hold Volume Up + Volume Down, plug in the USB cable, press Volume Up (Download mode).
+     1. Phone: Download mode. Since 2019: power off, hold Volume Up + Volume Down, plug in the USB cable.
+        Galaxy S8/S9/Note 8/Note 9 and older: power off, hold Volume Down + Bixby (or Home) + Power.
+        Then press Volume Up to continue.
         The bootloader must be unlocked (OEM unlocking ON) and the KG state must not be 'Prenormal'.
      2. Odin: AP = $out   Options: UNTICK 'Auto Reboot', then Start.
      3. When it says PASS: hold Volume Down + Power until the screen goes black, then IMMEDIATELY

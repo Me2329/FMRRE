@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Samsung packaging for FMRRE (and a disabled vbmeta for any device).
 
-  odin_pack.py tar   --recovery fmrre-recovery.img [--vbmeta FILE | --vbmeta-disabled] -o fmrre.tar.md5
+  odin_pack.py tar   --recovery fmrre-recovery.img [--vbmeta FILE | --vbmeta-disabled | --no-vbmeta] -o fmrre.tar.md5
   odin_pack.py vbmeta-disabled -o vbmeta_disabled.img
   odin_pack.py vbmeta-patch    stock_vbmeta.img -o vbmeta_patched.img
   odin_pack.py check  fmrre.tar.md5
 
 The .tar.md5 goes into Odin's AP slot (Windows). On Linux/macOS use Heimdall
-(scripts/install.sh does both). A Samsung with Android 9+ needs vbmeta with
-verification disabled next to a custom recovery, or it refuses to boot it.
+(scripts/install.sh does both). A Samsung that launched with Android 9+ needs vbmeta
+with verification disabled next to a custom recovery, or it refuses to boot it. By
+default the package carries one only when the recovery image has an AVB footer (those
+phones); older ones such as the Galaxy S8 have no vbmeta partition and Odin would fail.
 """
 import argparse
 import hashlib
@@ -41,6 +43,16 @@ def vbmeta_patch(data):
     flags = struct.unpack_from(">I", out, 120)[0] | 3
     struct.pack_into(">I", out, 120, flags)
     return bytes(out)
+
+
+def has_avb_footer(path):
+    """Images verified by AVB end with a footer ("AVBf" in the last 64 bytes)."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        if f.tell() < 64:
+            return False
+        f.seek(-64, 2)
+        return f.read(4) == b"AVBf"
 
 
 def boot_magic(path):
@@ -98,7 +110,8 @@ def main():
     t.add_argument("--recovery", required=True)
     g = t.add_mutually_exclusive_group()
     g.add_argument("--vbmeta", help="stock vbmeta.img: verification is disabled in the copy that goes in the tar")
-    g.add_argument("--vbmeta-disabled", action="store_true", help="add a generated disabled vbmeta (default)")
+    g.add_argument("--vbmeta-disabled", action="store_true",
+                   help="add a generated disabled vbmeta (default when the recovery has an AVB footer)")
     g.add_argument("--no-vbmeta", action="store_true", help="recovery only")
     t.add_argument("-o", "--out", default="fmrre-recovery.tar.md5")
     v = sub.add_parser("vbmeta-disabled")
@@ -124,8 +137,11 @@ def main():
         images = [("recovery.img", open(a.recovery, "rb").read())]
         if a.vbmeta:
             images.append(("vbmeta.img", vbmeta_patch(open(a.vbmeta, "rb").read())))
-        elif not a.no_vbmeta:
+        elif a.vbmeta_disabled or (not a.no_vbmeta and has_avb_footer(a.recovery)):
             images.append(("vbmeta.img", vbmeta_disabled()))
+        elif not a.no_vbmeta:
+            print("No AVB footer on the recovery: this phone has no vbmeta to disable - recovery only "
+                  "(--vbmeta-disabled forces one)")
         md5 = make_tar(images, a.out)
         print("==>", a.out, f"({', '.join(n for n, _ in images)}; md5 {md5})")
 

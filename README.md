@@ -111,12 +111,13 @@ src/
   sim.cpp     fake device sandbox for desktop development
 tests/        host self-tests, installer tests (fake fastboot/adb/heimdall), A/B OTA tests (payload_test.py),
               fastbootd tests with the real fastboot client (fastboot_test.sh), PC rescue tests (pc_rescue_test.sh)
-device/       example twrp.fstab and device-tree snippet
+device/       example twrp.fstab and device-tree snippet; dreamlte/ = Galaxy S8 (SM-G950F): fstab + step-by-step guide
 scripts/      build (7 architectures), test them on emulated CPUs, make a recovery image, install it
               (fastboot / Samsung), try on a device
 tools/        odin_pack.py (Odin .tar.md5, disabled vbmeta), elf_abi.py (which build fits a phone),
               resource embedding, Zig toolchain
-pc/           PC rescue tool (fmrre_rescue.py + a Windows launcher): fix a phone that doesn't start, from a computer
+pc/           PC rescue tool (fmrre_rescue.py + a Windows launcher): fix a phone that doesn't start, from a computer;
+              fmrre_mkrecovery.py: build the FMRRE image from a stock recovery / Samsung AP on any OS (Python only)
 ```
 
 ---
@@ -191,11 +192,24 @@ You need **an unlocked bootloader**, and an FMRRE image built from **your phone'
 `recovery.img` (or `boot.img` / `vendor_boot.img` on phones without a recovery partition). Get the stock
 image from your firmware package; for Samsung it's inside the `AP_*.tar.md5`.
 
-**1. Build the image** by swapping the recovery binary in the stock ramdisk (needs `magiskboot`, which you
-can take from the Magisk APK):
+**1. Build the image**: FMRRE's binary replaces the stock recovery program inside the stock ramdisk, so the
+phone's own kernel, device tree and boot header stay as they were.
+
+*Any OS, Python only* (Windows included - no magiskboot, no WSL). The binaries are in the **fmrre-installer-kit**
+artifact of the latest green [Actions](https://github.com/Me2329/FMRRE/actions) run, or build them with
+`scripts/build.sh arm64`:
 ```bash
-scripts/build.sh arm64
+python pc/fmrre_mkrecovery.py recovery.img
 ```
+The stock image can also be `recovery.img.lz4` or a whole Samsung **`AP_....tar.md5`** (MD5 checked, the recovery
+taken out, LZ4 undone by the tool itself). It reads boot image headers v0-v4, Samsung's DT blob, the
+`SEANDROIDENFORCE` tail and AVB footers; ramdisks in gzip, LZ4, xz, lzma, bzip2 or plain cpio; refuses a binary
+for the wrong CPU; and reads its own output back before you flash it. For a Samsung it also writes
+`fmrre-recovery.tar.md5` for Odin's **AP** slot and `stock-recovery.tar.md5`, which puts the stock recovery back.
+`--device dreamlte` / `--fstab FILE` add a twrp.fstab. Galaxy S8 step by step:
+[device/dreamlte](device/dreamlte/README.md).
+
+*With magiskboot* (Linux / macOS; also handles `vendor_boot` images):
 ```bash
 scripts/make_recovery_img.sh recovery.img auto device/example/twrp.fstab
 ```
@@ -209,7 +223,7 @@ phone in fastboot, Download mode or plain Android (USB debugging), and reboots i
 |---|---|---|
 | **Fastboot** (Pixel, Xiaomi, OnePlus, Motorola, Nothing, Sony...) | `scripts/install.sh` | **Test boot** (`fastboot boot`): FMRRE runs once from RAM, **nothing is written** |
 | | `scripts/install.sh --permanent` | Flashes it: to `recovery`, or to `boot` / `vendor_boot` on phones without a recovery partition (with a warning). `--both-slots`, `--vbmeta stock_vbmeta.img` or `--disable-vbmeta` as needed |
-| **Samsung** (Download mode) | `scripts/install.sh` | Builds an **Odin package** (`out/samsung/fmrre-recovery-odin.tar.md5`: recovery.img + a vbmeta with verification disabled) and flashes it with **Heimdall** |
+| **Samsung** (Download mode) | `scripts/install.sh` | Builds an **Odin package** (`out/samsung/fmrre-recovery-odin.tar.md5`: recovery.img, plus a vbmeta with verification disabled **when the image has an AVB footer** - phones launched with Android 9+; older ones like the Galaxy S8 have no vbmeta partition and the flash would fail on it) and flashes it with **Heimdall** |
 | | Windows: `scripts\install.ps1 -Samsung` | Builds the same package: put it in Odin's **AP** slot, untick **Auto Reboot**, Start |
 | Windows, fastboot | `scripts\install.ps1` / `-Permanent` | Same as the first two rows |
 
@@ -277,7 +291,7 @@ ask; Format Data / `-w` always needs `ERASE` typed):
 | Bootloader, no image | Tries the installed recovery (`fastboot reboot recovery`): if it is FMRRE, Auto repair runs there |
 | Android | Restarts to recovery and runs Auto repair (when FMRRE is installed) |
 | FMRRE | Shows Auto repair's diagnosis (`autofix --dry-run`), then repairs |
-| Samsung Download mode | `--recovery`: flashes FMRRE to RECOVERY + a vbmeta with verification disabled (Heimdall), you start recovery with the keys, Auto repair runs. `--ap AP_....tar.md5`: flashes the **stock** boot / init_boot / vendor_boot / recovery / vbmeta / dtbo from your firmware - the `.lz4` images inside are unpacked by the tool (pure Python LZ4), partition names come from the phone's PIT |
+| Samsung Download mode | `--recovery`: flashes FMRRE to RECOVERY, plus a vbmeta with verification disabled on phones that have one (Heimdall), you start recovery with the keys, Auto repair runs. `--ap AP_....tar.md5`: flashes the **stock** boot / init_boot / vendor_boot / recovery / vbmeta / dtbo from your firmware - the `.lz4` images inside are unpacked by the tool (pure Python LZ4), partition names come from the phone's PIT |
 
 **Reinstall the official firmware** (`factory husky-....-factory.zip`, or the window's *Reinstall firmware...*): a
 Pixel-style factory image is flashed like its `flash-all` script - bootloader, radio, then `fastboot update` - but
@@ -399,6 +413,15 @@ fastboot -s tcp:127.0.0.1:5554 getvar all
   `/dev/usb-ffs/fastboot` FunctionFS mount that recovery ramdisks since Android 10 have; without it FMRRE tries to
   set the gadget up itself. `snapshot-update cancel|merge` is not supported (finish the OTA in Android first), and,
   as with AOSP's fastbootd, `fastboot boot` and `flashing unlock` need the bootloader.
+- **The image builder's output hasn't booted a real phone yet** (first target: the Galaxy S8,
+  [device/dreamlte](device/dreamlte/README.md)). `pc/fmrre_mkrecovery.py` is checked against independent readers
+  (the official lz4 library, GNU cpio, bsdtar) and reads its own image back before writing it, but the bootloader is
+  the final judge. It doesn't handle `vendor_boot` images (use `scripts/make_recovery_img.sh`).
+- **SELinux is left as the stock recovery has it.** FMRRE runs in the stock ramdisk's recovery domain and doesn't
+  patch the policy; on phones whose kernel enforces it in recovery (Samsung), something the stock recovery never
+  needed may be denied - `/tmp/recovery.log` shows it.
+- **Samsung: stock Android puts its own recovery back** on the first boot after a flash (`recovery-from-boot.p`).
+  FMRRE doesn't disable that (it would mean changing a verified `/system`): boot straight into recovery after Odin.
 - Root: FMRRE installs and manages Magisk / KernelSU / APatch; it has no `su` of its own.
 - **ADB sideload over USB hasn't met a computer yet** (the protocol is tested with the real `adb` client over TCP,
   reading the package through FUSE and storing it first). Where the kernel has no FUSE the package is stored first

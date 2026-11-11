@@ -105,6 +105,7 @@ open(T + "/lz4_fails", "w").write(str(bad))
 # images
 img = bytearray(1 << 16); img[0:8] = b"ANDROID!"
 open(T + "/fmrre-recovery.img", "wb").write(img)
+img[-64:-60] = b"AVBf"; open(T + "/fmrre-recovery-avb.img", "wb").write(img)  # verified by AVB (Android 9+ phone)
 open(T + "/fmrre-vendor_boot.img", "wb").write(b"VNDRBOOT" + bytes(4096))
 open(T + "/junk.img", "wb").write(b"\0" * 4096)
 vb = bytearray(4096); vb[0:4] = b"AVB0"
@@ -476,10 +477,16 @@ scenario "Samsung: install FMRRE, then Auto repair"
 touch "$T/download_on"
 run fix --yes --unlocked --recovery "$IMG" --workdir "$T/w2"
 rc_is "exit 0" 0
-called "recovery + vbmeta" "heimdall flash --RECOVERY $IMG --VBMETA $T/w2/vbmeta.img --no-reboot"
+called "recovery only: no AVB footer, so no vbmeta partition (Galaxy S8 era)" "heimdall flash --RECOVERY $IMG --no-reboot"
+not_called "no VBMETA" "--VBMETA"
+called "auto repair after FMRRE came up" "fmrre autofix --allow-slot-switch --reboot"
+
+scenario "Samsung with AVB (Android 9+): recovery + disabled vbmeta"
+touch "$T/download_on"
+run samsung-fmrre "$T/fmrre-recovery-avb.img" --yes --unlocked --workdir "$T/w4"
+called "recovery + vbmeta" "heimdall flash --RECOVERY $T/fmrre-recovery-avb.img --VBMETA $T/w4/vbmeta.img --no-reboot"
 python3 -c "import struct; d=open('$T/flashed_VBMETA','rb').read(); exit(0 if struct.unpack_from('>I',d,120)[0]==3 else 1)" \
   && pass "vbmeta flashed with flags 3" || fail "vbmeta flags"
-called "auto repair after FMRRE came up" "fmrre autofix --allow-slot-switch --reboot"
 
 scenario "Samsung: stock images from an AP .tar.md5 (lz4)"
 touch "$T/download_on"

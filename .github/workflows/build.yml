@@ -68,6 +68,8 @@ jobs:
           python-version: "3.12"
       - name: Fake adb / fastboot / heimdall, the window
         run: python tests/pc_rescue_unit.py
+      - name: Recovery image builder (S8 AP + LZ4, AVB, header v0-v4, pure Python)
+        run: python tests/mkrecovery_unit.py
 
   android:
     name: ${{ matrix.arch }}
@@ -117,7 +119,7 @@ jobs:
           cp scripts/install.sh scripts/install.ps1 scripts/make_recovery_img.sh scripts/try_on_device.sh scripts/build.sh kit/scripts/
           cp tools/odin_pack.py tools/elf_abi.py kit/tools/
           cp -r pc kit/
-          cp -r device/example kit/device/
+          cp -r device/. kit/device/
           cp README.md LICENSE kit/
           find kit -type f | sort
       - uses: actions/upload-artifact@v4

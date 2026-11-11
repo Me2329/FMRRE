@@ -18,6 +18,8 @@
 #   --vbmeta FILE                  also flash this stock vbmeta.img with verification disabled
 #   --disable-vbmeta               also flash a generated empty vbmeta (flags 3) - GSI/Samsung style
 #   --no-vbmeta                    Samsung: don't put vbmeta in the package
+#                                  (Samsung default: a disabled vbmeta only if the image has an AVB footer -
+#                                  phones launched with Android 9+; the Galaxy S8 and older have no vbmeta)
 #   --build-from STOCK.img         first build the image from your stock recovery/boot/vendor_boot image
 #                                  (the CPU architecture is detected from it; TW_BINARY=out/<arch>/recovery overrides)
 #   --odin-only                    Samsung: only build the .tar.md5, don't flash
@@ -132,6 +134,12 @@ if [ "$MODE" = samsung ]; then
   [ "$KIND" = boot ] || die "Samsung needs a recovery.img (build it from the stock recovery.img in your firmware's AP file)."
   mkdir -p out/samsung
   TAR="out/samsung/fmrre-recovery-odin.tar.md5"
+  # vbmeta only where it exists: phones whose recovery is verified by AVB carry its footer at the image's end.
+  if [ "$NO_VBMETA" = 0 ] && [ -z "$VBMETA" ] && [ "$DISABLE_VBMETA" = 0 ] &&
+     [ "$(tail -c 64 "$IMG" 2>/dev/null | head -c 4)" != AVBf ]; then
+    NO_VBMETA=1
+    echo "No AVB footer on the image: this phone has no vbmeta partition - flashing the recovery only."
+  fi
   VBARG=(--vbmeta-disabled)
   [ -n "$VBMETA" ] && VBARG=(--vbmeta "$VBMETA")
   [ "$NO_VBMETA" = 1 ] && VBARG=(--no-vbmeta)

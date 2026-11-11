@@ -28,7 +28,7 @@ it explains how to unlock it, and which official tool restores the firmware inst
   fmrre_rescue.py autofix            run FMRRE's Auto repair over adb
   fmrre_rescue.py switch-slot | cancel-update | disable-vbmeta [--vbmeta STOCK.img] [--both-slots]
   fmrre_rescue.py flash PARTITION IMAGE
-  fmrre_rescue.py samsung-fmrre IMG  Download mode: FMRRE to RECOVERY + vbmeta disabled
+  fmrre_rescue.py samsung-fmrre IMG  Download mode: FMRRE to RECOVERY (+ vbmeta disabled on AVB phones)
   fmrre_rescue.py samsung-stock AP.tar.md5 [--parts boot,vbmeta,...]
   fmrre_rescue.py sideload OTA.zip   install an OTA / ROM with adb sideload - official OTAs work on LOCKED phones
   fmrre_rescue.py factory FACTORY.zip [--wipe]   reinstall the official firmware (Pixel-style factory image),
@@ -771,7 +771,7 @@ def diagnose(r, ph, image=None):
                              "is tried.", "reboot_recovery"))
     elif m == "download":
         f.append(Finding(0, "Samsung Download mode",
-                         "Install FMRRE (recovery + vbmeta with verification disabled) and let its Auto repair fix the phone, or flash "
+                         "Install FMRRE to recovery (vbmeta disabled where the phone has one) and let its Auto repair fix the phone, or flash "
                          "the stock boot / vbmeta / recovery from your firmware's AP file to undo a bad change.", "samsung_fmrre"))
     elif m == "android":
         f.append(Finding(0, "Android starts", "When it misbehaves: the tool can reboot to recovery and run FMRRE's Auto repair "
@@ -817,6 +817,17 @@ def vbmeta_disabled(size=4096):
     rel = b"avbtool 1.3.0 (fmrre)"
     h[128:128 + len(rel)] = rel
     return bytes(h) + bytes(size - len(h))
+
+
+def has_avb_footer(path):
+    """Images verified by AVB end with its footer: phones launched with Android 9+. Older ones (Galaxy S8) have
+    no vbmeta partition at all - Heimdall and Odin fail on one that isn't there."""
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        if f.tell() < 64:
+            return False
+        f.seek(-64, 2)
+        return f.read(4) == b"AVBf"
 
 
 def vbmeta_patch(data):
@@ -1337,18 +1348,24 @@ class Rescue:
         self.need_mode("download")
         self.need_unlocked("installing FMRRE")
         if image_kind(image) != "boot":
-            raise Refused("Samsung needs a recovery.img (build it from the stock recovery.img in your firmware's AP file: "
-                          "scripts/install.sh --build-from recovery.img).")
-        vb = os.path.join(self.workdir(), "vbmeta.img")
-        with open(vb, "wb") as f:
-            if self.o.vbmeta:
-                with open(self.o.vbmeta, "rb") as s:
-                    f.write(vbmeta_patch(s.read()))
-            else:
-                f.write(vbmeta_disabled())
-        if not self.ask("Flash FMRRE to RECOVERY and a vbmeta with verification disabled to VBMETA?"):
+            raise Refused("Samsung needs a recovery.img: build it from your firmware's AP file with "
+                          "python pc/fmrre_mkrecovery.py AP_....tar.md5 (Windows, Linux, macOS).")
+        args = ["flash", "--RECOVERY", image]
+        if self.o.vbmeta or has_avb_footer(image):
+            vb = os.path.join(self.workdir(), "vbmeta.img")
+            with open(vb, "wb") as f:
+                if self.o.vbmeta:
+                    with open(self.o.vbmeta, "rb") as s:
+                        f.write(vbmeta_patch(s.read()))
+                else:
+                    f.write(vbmeta_disabled())
+            args += ["--VBMETA", vb]
+            question = "Flash FMRRE to RECOVERY and a vbmeta with verification disabled to VBMETA?"
+        else:
+            question = "Flash FMRRE to RECOVERY? (No AVB footer: this phone has no vbmeta to disable.)"
+        if not self.ask(question):
             return False
-        if not self.r.write("heimdall", "flash", "--RECOVERY", image, "--VBMETA", vb, "--no-reboot"):
+        if not self.r.write("heimdall", *args, "--no-reboot"):
             raise Refused("Heimdall failed - see above. (Odin on Windows: scripts/install.sh --odin-only builds the AP package.)")
         self.log("Flashed. Now start STRAIGHT into recovery, or stock Android replaces FMRRE on its first boot:\n"
                  "   1. hold Volume Down + Power until the screen goes black\n"

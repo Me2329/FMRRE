@@ -47,6 +47,13 @@ scripts/install.sh --permanent fmrre-recovery.img
 
 Samsung: `scripts/install.sh` face pachetul pentru Odin și îl instalează cu Heimdall. Pe Windows: `scripts\install.ps1`.
 
+**Pe orice sistem, doar cu Python** (și pe Windows - fără magiskboot, fără WSL): `python pc/fmrre_mkrecovery.py
+recovery.img` face imaginea FMRRE din recovery-ul original al telefonului. Merge și direct cu `recovery.img.lz4` sau
+cu tot fișierul Samsung `AP_....tar.md5` (verifică MD5-ul, scoate recovery-ul, desface LZ4 singur). Pentru Samsung
+scrie și `fmrre-recovery.tar.md5` (Odin, slotul **AP**) și `stock-recovery.tar.md5`, care pune recovery-ul original
+înapoi. Binarele sunt în artefactul **fmrre-installer-kit** de la ultimul build verde din
+[Actions](https://github.com/Me2329/FMRRE/actions). Galaxy S8 pas cu pas: [device/dreamlte](device/dreamlte/README.md).
+
 ## De pe calculator: telefonul nu mai pornește
 
 `pc/fmrre_rescue.py` (pe Windows: dublu-clic pe `pc\fmrre_rescue.bat`) e pentru telefoane în bootloop, blocate la o

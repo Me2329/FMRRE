@@ -244,9 +244,9 @@ RO = {
         "Cu --recovery fmrre-recovery.img (făcută din imaginea recovery sau boot a acestui telefon) pornește din RAM și "
         "Repararea automată verifică telefonul din interior. Fără ea: se încearcă recovery-ul instalat pe telefon.",
     "Samsung Download mode": "Modul Download Samsung",
-    "Install FMRRE (recovery + vbmeta with verification disabled) and let its Auto repair fix the phone, or flash the stock "
-    "boot / vbmeta / recovery from your firmware's AP file to undo a bad change.":
-        "Instalează FMRRE (recovery + vbmeta cu verificarea oprită) și lasă Repararea automată să repare telefonul, sau "
+    "Install FMRRE to recovery (vbmeta disabled where the phone has one) and let its Auto repair fix the phone, or flash "
+    "the stock boot / vbmeta / recovery from your firmware's AP file to undo a bad change.":
+        "Instalează FMRRE în recovery (cu vbmeta oprit unde telefonul are unul) și lasă Repararea automată să repare telefonul, sau "
         "instalează boot / vbmeta / recovery originale din fișierul AP al firmware-ului ca să anulezi o modificare greșită.",
     "Android starts": "Android pornește",
     "When it misbehaves: the tool can reboot to recovery and run FMRRE's Auto repair (when FMRRE is the installed recovery).":
@@ -319,10 +319,12 @@ RO = {
         "Nimic de reparat pentru Repararea automată. Detalii: 'fmrre_rescue.py logs' salvează jurnalele telefonului.",
     "Run these repairs on the phone and restart it?": "Rulezi aceste reparații pe telefon și îl repornești?",
     "Run these repairs on the phone?": "Rulezi aceste reparații pe telefon?",
-    "Samsung needs a recovery.img (build it from the stock recovery.img in your firmware's AP file: scripts/install.sh "
-    "--build-from recovery.img).":
-        "Samsung are nevoie de un recovery.img (fă-l din recovery.img original din fișierul AP al firmware-ului: "
-        "scripts/install.sh --build-from recovery.img).",
+    "Samsung needs a recovery.img: build it from your firmware's AP file with python pc/fmrre_mkrecovery.py "
+    "AP_....tar.md5 (Windows, Linux, macOS).":
+        "Samsung are nevoie de un recovery.img: fă-l din fișierul AP al firmware-ului cu python pc/fmrre_mkrecovery.py "
+        "AP_....tar.md5 (Windows, Linux, macOS).",
+    "Flash FMRRE to RECOVERY? (No AVB footer: this phone has no vbmeta to disable.)":
+        "Instalezi FMRRE în RECOVERY? (Fără semnătură AVB: telefonul nu are vbmeta de oprit.)",
     "Flash FMRRE to RECOVERY and a vbmeta with verification disabled to VBMETA?":
         "Instalezi FMRRE în RECOVERY și un vbmeta cu verificarea oprită în VBMETA?",
     "Heimdall failed - see above. (Odin on Windows: scripts/install.sh --odin-only builds the AP package.)":

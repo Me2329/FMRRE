@@ -16,6 +16,7 @@ python3 - "$T" <<'EOF'
 import sys
 T = sys.argv[1]
 b = bytearray(1 << 20); b[0:8] = b"ANDROID!"; open(T + "/fmrre-recovery.img", "wb").write(b)
+b[-64:-60] = b"AVBf"; open(T + "/fmrre-recovery-avb.img", "wb").write(b)  # a recovery verified by AVB (Android 9+)
 v = bytearray(b"VNDRBOOT") + bytearray(4096); open(T + "/fmrre-vendor_boot.img", "wb").write(v)
 m = bytearray(4096); m[0:4] = b"AVB0"; open(T + "/vbmeta.img", "wb").write(m)
 open(T + "/junk.img", "wb").write(b"\0" * 4096)
@@ -104,12 +105,24 @@ touch "$T/adb_on"; FB_SLOT= ADB_MAN=Xiaomi inst "$IMG"
 expect_call "reboots to bootloader" "adb reboot bootloader"
 expect_call "then test boots" "fastboot boot $IMG"
 
-scenario "Samsung on adb -> Download mode -> Heimdall RECOVERY + VBMETA"
-touch "$T/adb_on"; ADB_MAN=samsung inst -y "$IMG"
+scenario "Samsung (AVB, Android 9+) on adb -> Download mode -> Heimdall RECOVERY + VBMETA"
+AVBIMG="$T/fmrre-recovery-avb.img"
+touch "$T/adb_on"; ADB_MAN=samsung inst -y "$AVBIMG"
 expect_call "reboots to download" "adb reboot download"
-expect_call "heimdall flash" "heimdall flash --RECOVERY $IMG --VBMETA out/samsung/vbmeta.img --no-reboot"
+expect_call "heimdall flash" "heimdall flash --RECOVERY $AVBIMG --VBMETA out/samsung/vbmeta.img --no-reboot"
 python3 tools/odin_pack.py check out/samsung/fmrre-recovery-odin.tar.md5 > "$T/chk" && pass "Odin package md5 valid" || fail "Odin package invalid"
 grep -q "recovery.img" "$T/chk" && grep -q "vbmeta.img" "$T/chk" && pass "package has recovery.img + vbmeta.img" || fail "package content"
+
+scenario "Samsung without AVB (Galaxy S8 era) -> recovery only, no VBMETA"
+touch "$T/adb_on"; ADB_MAN=samsung inst -y "$IMG"
+expect_call "heimdall flashes the recovery alone" "heimdall flash --RECOVERY $IMG --no-reboot"
+expect_no_call "no VBMETA (the phone has no such partition)" "--VBMETA"
+python3 tools/odin_pack.py check out/samsung/fmrre-recovery-odin.tar.md5 > "$T/chk" && ! grep -q vbmeta "$T/chk" && pass "Odin package: recovery.img only" || fail "S8 package content"
+grep -q "no vbmeta partition" "$T/out" && pass "says why" || fail "no explanation"
+
+scenario "Samsung without AVB but --disable-vbmeta: forced in"
+HEIMDALL=/nonexistent inst --odin-only --disable-vbmeta "$IMG"
+python3 tools/odin_pack.py check out/samsung/fmrre-recovery-odin.tar.md5 > "$T/chk" && grep -q vbmeta "$T/chk" && pass "vbmeta added on request" || fail "--disable-vbmeta ignored"
 
 scenario "Samsung --odin-only without Heimdall"
 HEIMDALL=/nonexistent inst --odin-only --no-vbmeta "$IMG"
