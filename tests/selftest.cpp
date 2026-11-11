@@ -11,6 +11,7 @@
 #include <map>
 #include <cstring>
 #include <string>
+#include <linux/input.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -31,6 +32,7 @@
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "platform/input.h"
 #include "sim.h"
 #include "sys/autofix.h"
 #include "sys/avb.h"
@@ -861,6 +863,96 @@ static void testLogSave(const std::string& dir) {
     CHECK(util::readFile(root + "/cache/recovery/last_log.1", got) && got == "older session\n");
     CHECK(util::readFile(root + "/cache/recovery/last_log", got) && got.find("logsave second marker") != std::string::npos);
     unlink((root + "/proc/kmsg.txt").c_str());
+}
+
+// Touch decoding with made-up events (no panel needed): what a real driver sends, in each of the three protocols.
+static void testTouchDecode() {
+    auto drain = [](InputQueue& q) {
+        std::string s;
+        for (auto& e : q.drain()) {
+            char b[48];
+            snprintf(b, sizeof b, "%c%d,%d ", e.type == EvType::TouchDown ? 'D' : e.type == EvType::TouchMove ? 'M' : e.type == EvType::TouchUp ? 'U' : '?', e.x, e.y);
+            s += b;
+        }
+        return s;
+    };
+    // Protocol B (slots), as on the Galaxy S8: the first finger lands in slot 3, a second one in slot 0 is ignored.
+    {
+        EvdevInput in;
+        InputQueue q;
+        int d = in.addFake(true, 4095, 4095, 1440, 2960);
+        auto ev = [&](int t, int c, int v) { in.feed(d, t, c, v, q); };
+        ev(EV_ABS, ABS_MT_SLOT, 3);
+        ev(EV_ABS, ABS_MT_TRACKING_ID, 41);
+        ev(EV_ABS, ABS_MT_POSITION_X, 2048);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 0);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "D720,0 ");
+        ev(EV_ABS, ABS_MT_SLOT, 0);  // a second finger
+        ev(EV_ABS, ABS_MT_TRACKING_ID, 42);
+        ev(EV_ABS, ABS_MT_POSITION_X, 100);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 100);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q).empty());  // not followed
+        ev(EV_ABS, ABS_MT_SLOT, 3);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 4095);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "M720,2959 ");
+        ev(EV_ABS, ABS_MT_TRACKING_ID, -1);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "U720,2959 ");
+        // The calibration chips: swap, flip.
+        in.setTransform(false, true, true);
+        ev(EV_ABS, ABS_MT_TRACKING_ID, 43);
+        ev(EV_ABS, ABS_MT_POSITION_X, 0);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 0);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "D1439,2959 ");
+        ev(EV_KEY, BTN_TOUCH, 0);  // "no finger left" lifts it even without a tracking id
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "U1439,2959 ");
+    }
+    // Protocol A (no slots): contacts end with SYN_MT_REPORT; a frame without contacts is the lift.
+    {
+        EvdevInput in;
+        InputQueue q;
+        int d = in.addFake(true, 1079, 1919, 1080, 1920);
+        auto ev = [&](int t, int c, int v) { in.feed(d, t, c, v, q); };
+        auto frame = [&](std::vector<std::pair<int, int>> pts) {
+            for (auto& p : pts) {
+                ev(EV_ABS, ABS_MT_POSITION_X, p.first);
+                ev(EV_ABS, ABS_MT_POSITION_Y, p.second);
+                ev(EV_SYN, SYN_MT_REPORT, 0);
+            }
+            if (pts.empty()) ev(EV_SYN, SYN_MT_REPORT, 0);
+            ev(EV_SYN, SYN_REPORT, 0);
+        };
+        frame({{100, 200}});
+        CHECK(drain(q) == "D100,200 ");
+        frame({{110, 210}, {900, 900}});  // the second contact doesn't drag the first one away
+        CHECK(drain(q) == "M110,210 ");
+        frame({});
+        CHECK(drain(q) == "U110,210 ");
+    }
+    // Single touch: ABS_X / ABS_Y with BTN_TOUCH.
+    {
+        EvdevInput in;
+        InputQueue q;
+        int d = in.addFake(false, 1023, 1023, 480, 800);
+        auto ev = [&](int t, int c, int v) { in.feed(d, t, c, v, q); };
+        ev(EV_ABS, ABS_X, 1023);
+        ev(EV_ABS, ABS_Y, 1023);
+        ev(EV_KEY, BTN_TOUCH, 1);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "D479,799 ");
+        ev(EV_KEY, BTN_TOUCH, 0);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "U479,799 ");
+        // Keys still come through a touch device: Samsung's Bixby key is Back.
+        ev(EV_KEY, 0x2bf, 1);
+        auto evs = q.drain();
+        CHECK(evs.size() == 1 && evs[0].type == EvType::KeyDown && evs[0].key == Key::Back);
+    }
 }
 
 static void testSplitBackup(const std::string& dir) {
@@ -2246,6 +2338,7 @@ int main() {
     testRemovableSafety(dir);
     testEncryptedData(dir);
     testLogSave(dir);
+    testTouchDecode();
     testLegacyFolders();
     testPathcheck(dir);
     testCrypt();

@@ -53,7 +53,12 @@ public:
     void poll(InputQueue& q, int timeoutMs);
     void setTransform(bool swapXY, bool flipX, bool flipY) { swap_ = swapXY; flipX_ = flipX; flipY_ = flipY; }
     int deviceCount() const { return (int)devs_.size(); }
+    bool hasTouch() const;
     std::vector<std::string> deviceNames() const;
+    // Tests: a touch panel that isn't there (multitouch or single touch, with its coordinate range), and raw
+    // events for it, decoded exactly like a real device's.
+    int addFake(bool multitouch, int maxX, int maxY, int screenW, int screenH);
+    void feed(int dev, int type, int code, int value, InputQueue& q);
 
 private:
     struct Dev {
@@ -63,8 +68,10 @@ private:
         int minX = 0, maxX = 0, minY = 0, maxY = 0;
         int curX = 0, curY = 0;
         bool down = false, wasDown = false;
-        int slot = 0;
-        int trackId = -1;
+        int slot = 0;       // protocol B: the slot the events that follow are about
+        int primary = -1;   // protocol B: the slot of the finger being followed (the first one down)
+        bool protoA = false;      // protocol A seen (contacts end with SYN_MT_REPORT, no slots)
+        int contacts = 0;         // protocol A: contacts in the frame so far
         bool moved = false;
     };
     void handle(Dev& d, int type, int code, int value, InputQueue& q);

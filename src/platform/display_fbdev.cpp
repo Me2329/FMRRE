@@ -56,6 +56,9 @@ public:
             LOGW("fbdev: no usable channel layout reported - assuming BGRA (Settings > Swap red and blue if colours are wrong)");
             ro_ = 16, go_ = 8, bo_ = 0;
         }
+        // Some panels (Samsung AMOLED ones among them) stay dark until they have been blanked and unblanked once -
+        // the same path every screen wake-up takes, so it is safe where it isn't needed.
+        ioctl(fd_, FBIOBLANK, FB_BLANK_POWERDOWN);
         ioctl(fd_, FBIOBLANK, FB_BLANK_UNBLANK);
         return true;
     }
