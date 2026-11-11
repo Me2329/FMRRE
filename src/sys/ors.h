@@ -19,6 +19,7 @@ namespace ors {
 struct Script {
     std::string source;              // where it came from (shown to the user)
     std::vector<std::string> lines;  // ORS commands
+    bool erase = false;              // Android asked for "Erase all data": everything goes, and it isn't ours to cancel
 };
 
 // Finds a pending script and consumes it (files deleted, bootloader message cleared)

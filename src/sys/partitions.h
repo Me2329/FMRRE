@@ -53,6 +53,9 @@ public:
     bool wipe(Partition& p, Task& t);
     // Format = mkfs (destroys everything, including /data/media).
     bool format(Partition& p, Task& t, const std::string& newFs = "");
+    // Format Data: /metadata first where there is one (its keys belong to the old /data), then /data - everything,
+    // internal storage included.
+    bool formatData(Task& t);
     bool wipeDalvik(Task& t);
     // Filesystem tools (fsck / resize2fs / resize.f2fs ...). The partition is unmounted first.
     bool repair(Partition& p, Task& t);

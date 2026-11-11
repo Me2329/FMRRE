@@ -1357,7 +1357,8 @@ static void testPathcheck(const std::string& dir) {
     util::writeFile(root + "/dev/block/by-name/misc", misc);
     ors::Script sc;
     CHECK(ors::takePending(sc));
-    CHECK(sc.lines.size() == 1 && sc.lines[0] == "wipe data");
+    // Android's "Erase all data": the whole of /data (not FMRRE's reset, which keeps internal storage), then a restart.
+    CHECK(sc.erase && sc.lines == std::vector<std::string>({"format data", "wipe cache", "reboot"}));
     std::string after;
     util::readFile(root + "/dev/block/by-name/misc", after);
     CHECK(after.size() == 4096 && after[0] == 0 && after[64] == 0 && after[2048] == 'X');
@@ -1726,7 +1727,7 @@ static void testAutofix(const std::string& dir) {
     };
     // Android asked recovery to *offer* a factory reset: never erase on our own.
     CHECK(ors::fromAospArgs({"--prompt_and_wipe_data", "--reason=RescueParty", "--locale=en-US"}) == std::vector<std::string>{"autofix --prompt"});
-    CHECK(ors::fromAospArgs({"--wipe_data"}) == std::vector<std::string>{"wipe data"});
+    CHECK(ors::fromAospArgs({"--wipe_data"}) == std::vector<std::string>({"format data", "wipe cache", "reboot"}));
 
     autofix::Plan p = autofix::diagnose();
     CHECK(p.bootFailed && p.headline.find("Rescue Party") != std::string::npos);

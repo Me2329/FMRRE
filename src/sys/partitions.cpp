@@ -561,6 +561,21 @@ bool Partitions::format(Partition& p, Task& t, const std::string& newFs) {
     return ok_;
 }
 
+bool Partitions::formatData(Task& t) {
+    Partition* d = find("/data");
+    if (!d) {
+        t.print("No /data partition in fstab");
+        return false;
+    }
+    bool ok = true;
+    if (Partition* m = find("/metadata")) {
+        t.setRange(0, 0.2f);
+        ok = format(*m, t) && ok;
+    }
+    t.setRange(0.2f, 0.8f);
+    return format(*d, t) && ok;
+}
+
 namespace {
 int runFs(const std::string& cmd, Task& t) {
     t.print("$ %s", cmd.c_str());

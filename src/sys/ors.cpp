@@ -246,8 +246,13 @@ std::vector<std::string> fromAospArgs(const std::vector<std::string>& args) {
         if (util::startsWith(a, "--update_package=")) {
             if (util::startsWith(v, "@")) out.push_back("print Block-map OTA packages (" + v + ") are not supported - flash the zip from storage.");
             else out.push_back("install " + v);
-        } else if (a == "--wipe_data") {  // the user chose "Erase all data" in Android's settings
-            out.push_back("wipe data");
+        } else if (a == "--wipe_data") {
+            // "Erase all data" in Android's settings, a remote erase (Find My Device) or the device policy: the owner
+            // was promised that everything goes - internal storage too - and that the phone then starts fresh, as
+            // the stock recovery does. Not FMRRE's own reset, which keeps internal storage.
+            out.push_back("format data");
+            out.push_back("wipe cache");
+            out.push_back("reboot");
         } else if (a == "--prompt_and_wipe_data") {
             // Android couldn't start (Rescue Party, /data won't decrypt or mount) and asks recovery to OFFER a
             // factory reset. Never erase on our own: open auto repair, which tries the harmless fixes first.
@@ -291,6 +296,7 @@ bool takePending(Script& out) {
     for (auto& a : args)
         if (prompt && util::startsWith(a, "--reason=")) rescue::setAndroidReason(a.substr(9));
     out.lines = fromAospArgs(args);
+    for (auto& a : args) out.erase |= a == "--wipe_data";
     return !out.lines.empty();
 }
 
@@ -400,7 +406,8 @@ bool run(const std::vector<std::string>& lines, Task& t) {
             ok = doWipe(util::toLower(rest), t);
         } else if (cmd == "format") {
             Partition* p = Partitions::get().find("/" + (rest.empty() ? std::string("data") : rest));
-            ok = p && Partitions::get().format(*p, t);
+            if (p && p->mountPoint == "/data") ok = Partitions::get().formatData(t);  // /metadata too, like the screen
+            else ok = p && Partitions::get().format(*p, t);
             if (!p) t.print("format: unknown partition");
         } else if (cmd == "backup") {
             backup::Options o;

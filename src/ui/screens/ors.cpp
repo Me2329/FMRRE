@@ -38,8 +38,13 @@ public:
         font::drawIn(c, Face::Bold, ui.dp(36), Rect(cx - ui.dp(50), cy - ui.dp(24), ui.dp(100), ui.dp(44)), std::to_string((int)std::ceil(left)),
                      th.text, AlignCenter);
         float y = cy + ui.dp(76);
-        ui.label(Rect(area.x, y, area.w, ui.dp(24)), "Running these commands automatically", ui.dp(15), th.text, Face::SemiBold, AlignCenter);
-        y += ui.dp(36);
+        ui.label(Rect(area.x, y, area.w, ui.dp(24)), s_.erase ? "Android asked to erase this phone" : "Running these commands automatically",
+                 ui.dp(15), th.text, Face::SemiBold, AlignCenter);
+        y += ui.dp(s_.erase ? 28 : 36);
+        if (s_.erase) {
+            ui.label(Rect(area.x, y, area.w, ui.dp(22)), "Everything goes, internal storage included", ui.dp(13), th.warn, Face::Regular, AlignCenter);
+            y += ui.dp(30);
+        }
         Rect box(area.x + pad, y, area.w - pad * 2, bottom.y - y - ui.dp(8));
         ui.card(box, ui.dp(16), th.light ? rgb(0x0F172A) : mix(th.bgBottom, rgb(0x000000), 0.5f), false);
         float ly = box.y + ui.dp(12), lh = font::lineHeight(Face::Mono, ui.dp(12.5f));
@@ -51,6 +56,12 @@ public:
         c.popClip();
         Rect b = bottom.inset(pad, ui.dp(14));
         float bw = (b.w - ui.dp(10)) / 2;
+        if (s_.erase) {
+            // The owner confirmed this in Android (or sent it from afar, for a lost phone): whoever holds the phone
+            // doesn't get to call it off here - the stock recovery wouldn't ask either.
+            if (ui.button(ui.id("ors_run"), b, "Erase now", Icon::Forward, BtnStyle::Danger) && !started_) start(app);
+            return;
+        }
         if (ui.button(ui.id("ors_cancel"), Rect(b.x, b.y, bw, b.h), "Cancel", Icon::Close, BtnStyle::Tonal)) {
             started_ = true;
             app.pop();

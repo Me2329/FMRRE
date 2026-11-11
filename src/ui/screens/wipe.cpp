@@ -149,16 +149,7 @@ public:
             if (ui.button(ui.id("fd_go"), btn, "Format Data now", Icon::Warning, BtnStyle::Danger) || enter) {
                 app.pop();
                 app.runTask("Format Data", Icon::Warning, [](Task& t) {
-                    auto& P = Partitions::get();
-                    Partition* d = P.find("/data");
-                    if (!d) { t.print("No /data partition in fstab"); return false; }
-                    bool r = true;
-                    if (Partition* m = P.find("/metadata")) {
-                        t.setRange(0, 0.2f);
-                        r = P.format(*m, t) && r;
-                    }
-                    t.setRange(0.2f, 0.8f);
-                    r = P.format(*d, t) && r;
+                    bool r = Partitions::get().formatData(t);
                     t.print(r ? "Data formatted. You may need to reboot recovery to use internal storage." : "Format failed.");
                     return r;
                 });

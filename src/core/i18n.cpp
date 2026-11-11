@@ -289,7 +289,8 @@ const Entry kRo[] = {
     {"Thermal zones", "Zone termice"}, {"Core frequencies", "Frecvențele nucleelor"}, {"Voltage / current", "Tensiune / curent"},
     {"Health", "Stare"}, {"Input test", "Test de intrare"}, {"Press keys, draw on the screen", "Apasă taste, desenează pe ecran"},
     {"Press any hardware key...", "Apasă orice tastă fizică..."}, {"Running these commands automatically", "Aceste comenzi rulează automat"},
-    {"Script cancelled", "Script anulat"},
+    {"Script cancelled", "Script anulat"}, {"Android asked to erase this phone", "Android a cerut ștergerea acestui telefon"},
+    {"Everything goes, internal storage included", "Se șterge tot, inclusiv memoria internă"}, {"Erase now", "Șterge acum"},
 
     // files
     {"Flash .img inside zip", "Instalează .img din zip"}, {"Cut - open a folder and paste", "Tăiat - deschide un folder și lipește"},
