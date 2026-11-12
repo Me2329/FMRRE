@@ -804,7 +804,7 @@ def build(a):
         raw = lz4_decode(raw, "recovery image")
 
     img = BootImage(raw)
-    say("Stock recovery: %s (%s)" % (mb(len(raw)), img.describe()))
+    say("Base image: %s (%s)" % (mb(len(raw)), img.describe()))
     if img.id_matches_stock() is False:
         say("  note: its ID field doesn't match its contents (made by another tool) - a correct one is written")
     rd_bytes = img.sections["ramdisk"]
@@ -814,6 +814,15 @@ def build(a):
     cpio, how = ramdisk_unpack(rd_bytes)
     rd = Ramdisk(cpio_read(cpio))
     say("Ramdisk: %s, %d entries, %s unpacked" % (how["kind"], len(rd.entries), mb(len(cpio))))
+    # What it is now: TWRP (its fstab and shell stay and FMRRE uses them), an earlier FMRRE build, or stock.
+    base = "stock"
+    if rd.get("system/bin/recovery.stock") or rd.get("sbin/recovery.stock"):
+        base = "fmrre"
+    elif rd.get("etc/twrp.fstab") or rd.get("system/etc/twrp.fstab") or rd.get("twres") or rd.get("sbin/twrp"):
+        base = "twrp"
+    say({"twrp": "This is TWRP: FMRRE takes its place and uses TWRP's fstab and shell.",
+         "fmrre": "This is already an FMRRE image: only the FMRRE program is replaced.",
+         "stock": "This is a stock recovery."}[base])
 
     phone_arch, seen_in = ramdisk_arch(rd)
     if phone_arch:
@@ -847,7 +856,7 @@ def build(a):
     for n in notes:
         say("  " + n)
     if fstab is None:
-        say("  fstab: the stock recovery's own (pass --device or --fstab to add a twrp.fstab)")
+        say("  fstab: the one already in the image (pass --device or --fstab to add a twrp.fstab)")
 
     new_cpio = cpio_write(rd.entries)
     new_rd = ramdisk_pack(new_cpio, how)
@@ -882,9 +891,19 @@ def build(a):
         tar = os.path.splitext(a.out)[0] + ".tar.md5"
         odin_tar(tar, files)
         say("==> %s  Odin, AP slot (%s)" % (tar, why))
-        back_tar = os.path.join(os.path.dirname(os.path.abspath(a.out)), "stock-recovery.tar.md5")
-        odin_tar(back_tar, [("recovery.img", raw)])
-        say("==> %s  Odin, AP slot: puts the stock recovery back" % back_tar)
+        name = {"twrp": "twrp", "fmrre": "previous"}.get(base, "stock")
+        back_tar = os.path.join(os.path.dirname(os.path.abspath(a.out)), name + "-recovery.tar.md5")
+        # A whole-partition dump (dd) ends in zeros up to the partition's size: keep the image itself (sections,
+        # and the SEANDROIDENFORCE mark), and an AVB image whole (its footer sits at the very end).
+        # Samsung's signature block follows SEANDROIDENFORCE and must stay (the stock image would look custom without
+        # it): only a long run of zeros at the very end - the rest of the partition - is dropped.
+        keep = raw
+        if not img.avb:
+            body = len(raw.rstrip(b"\0"))
+            if len(raw) - body >= (64 << 10):
+                keep = raw[:min(len(raw), max(img.end, pad(body, 4096)))]
+        odin_tar(back_tar, [("recovery.img", keep)])
+        say("==> %s  Odin, AP slot: puts the %s recovery back" % (back_tar, {"twrp": "TWRP", "fmrre": "previous"}.get(base, "stock")))
         say()
         say("Flash with Odin: phone in Download mode, AP = %s, Options: UNTICK Auto Reboot, Start." %
             os.path.basename(tar))

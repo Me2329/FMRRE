@@ -410,6 +410,25 @@ def scenarios(d):
     check(rc == 0 and hv == 4 and secs["sig"] == sig and unnewc(secs["ramdisk"])["system/bin/recovery"][1] == fmrre_bytes,
           "v4: signature section kept, uncompressed ramdisk patched")
 
+    # 5. TWRP already on the phone, dumped with dd: LZMA ramdisk, /etc/twrp.fstab, zeros to the partition's end.
+    twrp_bin = elf(183) + b"TWRP 3.7.0"
+    cp5 = newc([("sbin", 0o40755, b""), ("sbin/recovery", 0o100755, twrp_bin), ("sbin/twrp", 0o100755, b"#!/sbin/sh\n"),
+                ("etc", 0o40755, b""), ("etc/twrp.fstab", 0o100644, b"/data ext4 /dev/block/USERDATA\n"), ("init", 0o100750, arm64)])
+    t5 = bootimg(0, kernel, lzma.compress(cp5, format=lzma.FORMAT_ALONE), page=2048, dt=dt, seandroid=True)
+    p5 = os.path.join(d, "twrp_dump.img")
+    open(p5, "wb").write(t5 + b"\0" * ((8 << 20) - len(t5)))
+    out = os.path.join(d, "t5", "fmrre-recovery.img")
+    os.makedirs(os.path.dirname(out))
+    rc, text = run([p5, "--fmrre", fmrre, "-o", out])
+    files = unnewc(lzma.decompress(parse(open(out, "rb").read())[2]["ramdisk"])) if rc == 0 else {}
+    check(rc == 0 and "This is TWRP" in text and files.get("sbin/recovery", (0, b""))[1] == fmrre_bytes and
+          files.get("etc/twrp.fstab", (0, b""))[1] == b"/data ext4 /dev/block/USERDATA\n" and files["sbin/recovery.stock"][1] == twrp_bin,
+          "TWRP base: recognised, FMRRE in its place, TWRP's fstab kept (LZMA ramdisk)")
+    ok, members, _ = odin_members(os.path.join(d, "t5", "twrp-recovery.tar.md5")) if rc == 0 else (False, {}, "")
+    back = members.get("recovery.img", b"")
+    check(ok and len(back) < (1 << 20) and t5.startswith(back.rstrip(b"\0")) and back.startswith(t5),
+          "TWRP base: twrp-recovery.tar.md5 puts TWRP back (the dd padding dropped, the image whole)")
+
     # Not boot images.
     junk = os.path.join(d, "junk.img")
     open(junk, "wb").write(b"\0" * 4096)

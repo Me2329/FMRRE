@@ -22,6 +22,20 @@ unlocked** (`F` / `FD` = the global model).
 - `lz4` is not needed (the builder has its own LZ4, and uses `lz4` for speed when it is installed). `adb` is handy
   once FMRRE runs: `adb shell fmrre ...`.
 
+## Already have TWRP on the phone? (the short way - no Odin, no firmware download)
+FMRRE can take TWRP's place in TWRP's own image: TWRP's ramdisk already has a shell, a correct `twrp.fstab` for
+the S8 and (usually) a permissive SELinux policy - a good base for the first test. In TWRP, with the cable in:
+```powershell
+adb shell "dd if=/dev/block/platform/11120000.ufs/by-name/RECOVERY of=/tmp/twrp-recovery.img"
+adb pull /tmp/twrp-recovery.img
+python pc\fmrre_mkrecovery.py twrp-recovery.img
+adb push fmrre-recovery.img /tmp/
+adb shell "dd if=/tmp/fmrre-recovery.img of=/dev/block/platform/11120000.ufs/by-name/RECOVERY && sync"
+adb reboot recovery
+```
+(Or copy `fmrre-recovery.img` to the card and use TWRP's **Install > Install Image > Recovery**.)
+To go back: `twrp-recovery.tar.md5` in Odin's AP slot, or the same `dd` with `twrp-recovery.img`.
+
 ## 1. Allow custom binaries (OEM unlocking)
 1. Sign into a Google **and** a Samsung account, connect to Wi-Fi, and leave the phone online.
 2. Settings > About phone > Software information > tap **Build number** 7 times.
