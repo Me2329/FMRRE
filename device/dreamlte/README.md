@@ -77,7 +77,9 @@ safer choice for the first boot.
 - Don't wipe or format anything on this first test: the point is to see FMRRE run.
 
 ### Getting the log out (no adb needed)
-A stock Samsung ramdisk has no `adb shell`, so FMRRE keeps its logs where you can reach them - a few seconds after
+FMRRE has its own adb (a stock Samsung ramdisk has none outside sideload): with the cable in, `adb devices`
+lists the phone as `recovery`, and `adb shell fmrre help`, `adb pull /sdcard/FMRRE/logs` work. In case USB doesn't
+come up on this kernel, FMRRE also keeps its logs where you can reach them without adb - a few seconds after
 it starts, after that as the log grows, and right before any reboot (also by hand: **Advanced > Copy log to storage**,
 or the download icon in the Console):
 - **microSD** (the easy way - put one in before the test): `FMRRE/logs/recovery.log`, `kernel.log` and

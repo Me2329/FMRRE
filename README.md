@@ -425,6 +425,8 @@ fastboot -s tcp:127.0.0.1:5554 getvar all
   needed may be denied - `/tmp/recovery.log` shows it.
 - **Samsung: stock Android puts its own recovery back** on the first boot after a flash (`recovery-from-boot.p`).
   FMRRE doesn't disable that (it would mean changing a verified `/system`): boot straight into recovery after Odin.
+- **FMRRE's own adb (shell, pull, push) hasn't met a computer over USB yet** - tested with the real adb client over
+  TCP. It uses the same USB code as sideload; on kernels without configfs it switches the old android_usb gadget.
 - Root: FMRRE installs and manages Magisk / KernelSU / APatch; it has no `su` of its own.
 - **ADB sideload over USB hasn't met a computer yet** (the protocol is tested with the real `adb` client over TCP,
   reading the package through FUSE and storing it first). Where the kernel has no FUSE the package is stored first
