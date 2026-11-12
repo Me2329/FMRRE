@@ -226,9 +226,18 @@ class WinSerial:
         from ctypes import wintypes
         self.k = ctypes.WinDLL("kernel32", use_last_error=True)
         self.ct, self.wt = ctypes, wintypes
-        self.k.CreateFileW.restype = wintypes.HANDLE
+        k = self.k
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                                  wintypes.DWORD, wintypes.HANDLE]
+        k.ReadFile.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+        k.WriteFile.argtypes = [wintypes.HANDLE, ctypes.c_char_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+        k.ReadFile.restype = k.WriteFile.restype = k.CloseHandle.restype = wintypes.BOOL
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.SetupComm.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD]
+        k.SetCommTimeouts.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
         h = self.k.CreateFileW("\\\\.\\" + port, 0xC0000000, 0, None, 3, 0, None)  # GENERIC_READ|WRITE, OPEN_EXISTING
-        if h in (None, wintypes.HANDLE(-1).value):
+        if h is None or h == ctypes.c_void_p(-1).value:
             raise OdinError("can't open %s (Odin or another program may be using it)" % port)
         self.h = h
         self.k.SetupComm(h, 1 << 20, 1 << 20)
@@ -251,7 +260,7 @@ class WinSerial:
     def write(self, data):
         self._timeouts(1)
         done = self.wt.DWORD(0)
-        if not self.k.WriteFile(self.h, data, len(data), self.ct.byref(done), None) or done.value != len(data):
+        if not self.k.WriteFile(self.h, bytes(data), len(data), self.ct.byref(done), None) or done.value != len(data):
             raise OdinError("writing to %s failed (cable?)" % self.name)
 
     def zlp(self):
