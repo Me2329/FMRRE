@@ -72,6 +72,25 @@ jobs:
         run: python tests/pc_rescue_unit.py
       - name: Recovery image builder (S8 AP + LZ4, AVB, header v0-v4, pure Python)
         run: python tests/mkrecovery_unit.py
+      - name: Built-in Odin (Download mode protocol against a fake bootloader; build + flash flow)
+        run: python tests/odin_unit.py
+
+  pc-build:
+    name: compile FMRRE with pc/fmrre_build.py on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile for arm64 (zig + cmake + ninja from pip)
+        run: python pc/fmrre_build.py arm64 --yes
+      - name: It is a static aarch64 program
+        run: python -c "import struct; b=open('out/arm64/recovery','rb').read(64); assert b[:4]==b'\x7fELF' and b[4]==2 and struct.unpack_from('<H',b,18)[0]==183, b[:20]; print('ok', len(open('out/arm64/recovery','rb').read()))"
 
   android:
     name: ${{ matrix.arch }}

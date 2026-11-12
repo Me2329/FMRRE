@@ -22,6 +22,18 @@ unlocked** (`F` / `FD` = the global model).
 - `lz4` is not needed (the builder has its own LZ4, and uses `lz4` for speed when it is installed). `adb` is handy
   once FMRRE runs: `adb shell fmrre ...`.
 
+## The one-command way (PC tool: compile + flash, no Odin)
+From the project folder (or the installer kit), phone in **TWRP** with the cable in, in PowerShell:
+```powershell
+python pc\fmrre_rescue.py install-samsung
+```
+It compiles FMRRE from the sources when they changed (`pc/fmrre_build.py`: zig + cmake + ninja from pip, asked
+once), reads the recovery the phone runs now over adb, builds FMRRE on it, sends the phone to Download mode and
+flashes RECOVERY itself with the Odin protocol (`pc/odin.py`, through the COM port of Samsung's USB driver - close
+Odin first). Then boot straight into recovery (keys below). The window has the same thing: *Samsung: Build +
+install FMRRE*. From the stock firmware instead: `install-samsung --base AP_G950F....tar.md5` (phone in Download
+mode). `twrp-recovery.tar.md5` (or `stock-recovery.tar.md5`) is left in the work folder to go back.
+
 ## Already have TWRP on the phone? (the short way - no Odin, no firmware download)
 FMRRE can take TWRP's place in TWRP's own image: TWRP's ramdisk already has a shell, a correct `twrp.fstab` for
 the S8 and (usually) a permissive SELinux policy - a good base for the first test. In TWRP, with the cable in:

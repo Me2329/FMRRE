@@ -210,6 +210,12 @@ for the wrong CPU; and reads its own output back before you flash it. For a Sams
 `--device dreamlte` / `--fstab FILE` add a twrp.fstab. Galaxy S8 step by step:
 [device/dreamlte](device/dreamlte/README.md).
 
+*Samsung, all in one* (any OS): `python pc/fmrre_rescue.py install-samsung` compiles FMRRE from this folder
+(`pc/fmrre_build.py` - zig, cmake and ninja from pip, no NDK, works on Windows), builds it on the recovery the phone
+runs now (read over adb from TWRP or FMRRE) or on `--base AP_....tar.md5`, reboots to Download mode and flashes it
+with FMRRE's own **Odin protocol** (`pc/odin.py`: PIT, sequenced parts; on Windows through the COM port of Samsung's
+driver, elsewhere libusb or the serial device) - no Odin, no Heimdall. Also a button in the PC tool's window.
+
 *With magiskboot* (Linux / macOS; also handles `vendor_boot` images):
 ```bash
 scripts/make_recovery_img.sh recovery.img auto device/example/twrp.fstab
@@ -416,6 +422,9 @@ fastboot -s tcp:127.0.0.1:5554 getvar all
   `/dev/usb-ffs/fastboot` FunctionFS mount that recovery ramdisks since Android 10 have; without it FMRRE tries to
   set the gadget up itself. `snapshot-update cancel|merge` is not supported (finish the OTA in Android first), and,
   as with AOSP's fastbootd, `fastboot boot` and `flashing unlock` need the bootloader.
+- **The built-in Odin protocol (`pc/odin.py`) hasn't met a real phone yet.** It follows the protocol Heimdall
+  documented and is tested against a fake bootloader that checks every message; nothing is written before the
+  phone has given its PIT and every file has a partition, and bootloader partitions are never touched.
 - **The image builder's output hasn't booted a real phone yet** (first target: the Galaxy S8,
   [device/dreamlte](device/dreamlte/README.md)). `pc/fmrre_mkrecovery.py` is checked against independent readers
   (the official lz4 library, GNU cpio, bsdtar) and reads its own image back before writing it, but the bootloader is

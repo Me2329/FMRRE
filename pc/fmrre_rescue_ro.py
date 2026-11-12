@@ -2,6 +2,34 @@
 (it is translated too when it is a known message), "{w}" for one word. Used by fmrre_rescue.T()."""
 
 RO = {
+    "(dry run: nothing flashed)": "(simulare: nu s-a scris nimic)",
+    "Phone off: hold Volume Down + Bixby + Power (since 2019: Volume Up + Down with the cable), then Volume Up.":
+        "Cu telefonul oprit: ține Volum jos + Bixby + Pornire (de la 2019: Volum sus + jos cu cablul), apoi Volum sus.",
+    "Couldn't read the phone's recovery partition over adb (needs a custom recovery - TWRP or FMRRE - running on the phone). "
+    "Or give the stock firmware: install-samsung --base AP_....tar.md5":
+        "Partiția recovery nu a putut fi citită prin adb (trebuie să ruleze un recovery modificat - TWRP sau FMRRE). "
+        "Sau dă firmware-ul original: install-samsung --base AP_....tar.md5",
+    "Flashing failed: {}\nThe phone still has its previous recovery unless the screen says otherwise. Odin with {} does the same job.":
+        "Scrierea a eșuat: {}\nTelefonul are încă recovery-ul de dinainte, dacă ecranul nu spune altceva. Odin cu {} face același lucru.",
+    "Heimdall failed - see above": "Heimdall a eșuat - vezi mai sus",
+    "No FMRRE binary at {} - compile it (python pc/fmrre_build.py) or use the installer kit":
+        "Nu există programul FMRRE la {} - compilează-l (python pc/fmrre_build.py) sau folosește kitul de instalare",
+    "The image couldn't be made (see above)": "Imaginea nu a putut fi făcută (vezi mai sus)",
+    "The phone is already in Download mode, so its recovery can't be read. Start it in recovery (TWRP), or give the stock "
+    "firmware: install-samsung --base AP_....tar.md5":
+        "Telefonul e deja în modul Download, deci recovery-ul lui nu poate fi citit. Pornește-l în recovery (TWRP) sau dă "
+        "firmware-ul original: install-samsung --base AP_....tar.md5",
+    "Samsung Download mode": "modul Download Samsung",
+    "Build + install FMRRE": "Compilează + instalează FMRRE",
+    "Restart the phone in Download mode and flash FMRRE to RECOVERY?": "Repornești telefonul în modul Download și instalezi FMRRE în RECOVERY?",
+    "Is the phone showing 'Downloading...' (and OEM LOCK: OFF)?": "Telefonul arată 'Downloading...' (și OEM LOCK: OFF)?",
+    "1. Compiling FMRRE ({}) from {}": "1. Compilez FMRRE ({}) din {}",
+    "1. FMRRE: {}": "1. Programul FMRRE: {}",
+    "2. Reading the phone's current recovery": "2. Citesc recovery-ul actual al telefonului",
+    "2. Base: {}": "2. Baza: {}",
+    "3. Making the FMRRE image": "3. Fac imaginea FMRRE",
+    "4. Download mode": "4. Modul Download",
+    "5. Flashing": "5. Scriu pe telefon",
     # ---- modes, status
     "not found": "negăsit",
     "Android is running (adb)": "Android pornit (adb)",

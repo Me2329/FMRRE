@@ -28,6 +28,9 @@ it explains how to unlock it, and which official tool restores the firmware inst
   fmrre_rescue.py autofix            run FMRRE's Auto repair over adb
   fmrre_rescue.py switch-slot | cancel-update | disable-vbmeta [--vbmeta STOCK.img] [--both-slots]
   fmrre_rescue.py flash PARTITION IMAGE
+  fmrre_rescue.py install-samsung [--base AP.tar.md5|twrp.img]   Samsung, one go: compile FMRRE from this project,
+                                     build it on the phone's recovery (read over adb) or --base, flash it in Download
+                                     mode with the built-in Odin protocol (pc/odin.py) - no Odin, no Heimdall
   fmrre_rescue.py samsung-fmrre IMG  Download mode: FMRRE to RECOVERY (+ vbmeta disabled on AVB phones)
   fmrre_rescue.py samsung-stock AP.tar.md5 [--parts boot,vbmeta,...]
   fmrre_rescue.py sideload OTA.zip   install an OTA / ROM with adb sideload - official OTAs work on LOCKED phones
@@ -47,6 +50,7 @@ standard library only.
 """
 import argparse
 import json
+import io
 import os
 import queue
 import re
@@ -130,7 +134,7 @@ MODE_TEXT = {
     "offline": "connected - but adb sees it as offline",
     "fastboot": "bootloader (fastboot)",
     "fastbootd": "fastbootd (userspace fastboot)",
-    "download": "Samsung Download mode (Heimdall)",
+    "download": "Samsung Download mode",
 }
 
 SAMSUNG_STOCK_PARTS = ("boot", "init_boot", "vendor_boot", "recovery", "vbmeta", "dtbo")
@@ -407,6 +411,18 @@ def lock_from_props(p):
     return None, how or "the phone reports no lock state"
 
 
+def odin_present():
+    """A phone in Download mode, by its USB id (the built-in Odin; nothing is sent to it)."""
+    if os.environ.get("FMRRE_NO_ODIN_PROBE"):
+        return False
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import odin
+        return odin.present()
+    except Exception:
+        return False
+
+
 def detect(r):
     ph = Phone()
     # ---- bootloader / fastbootd
@@ -446,8 +462,9 @@ def detect(r):
         if not ph.model and ph.device in PIXELS:
             ph.manufacturer, ph.model = "Google", PIXELS[ph.device]
         return ph
-    # ---- Samsung Download mode
-    if r.have("heimdall") and r.call("heimdall", "detect", timeout=15)[0] == 0:
+    # ---- Samsung Download mode: Heimdall when installed, else the built-in Odin handshake (Samsung's own COM ports /
+    # USB ids only - nothing else is probed)
+    if (r.have("heimdall") and r.call("heimdall", "detect", timeout=15)[0] == 0) or (not r.have("heimdall") and odin_present()):
         ph.mode = "download"
         ph.manufacturer = "Samsung"
         ph.lock_how = "Download mode doesn't tell the computer - it is on the phone's screen"
@@ -1372,6 +1389,125 @@ class Rescue:
                  "   2. at once switch to Volume Up + Power (+ Bixby on older models) and hold until FMRRE appears")
         return True
 
+    # ---- one flow: compile, take the phone's recovery, make the image, Download mode, flash (built-in Odin)
+    RECOVERY_PATHS = ("/dev/block/by-name/recovery", "/dev/block/bootdevice/by-name/recovery",
+                      "/dev/block/platform/11120000.ufs/by-name/RECOVERY",       # Galaxy S8 / S8+ / Note 8 (Exynos)
+                      "/dev/block/platform/13d60000.ufs/by-name/RECOVERY",       # Galaxy S9 / Note 9 (Exynos)
+                      "/dev/block/platform/155a0000.ufs/by-name/RECOVERY",       # Exynos 7/8 series
+                      "/dev/block/platform/soc/1d84000.ufshc/by-name/recovery",
+                      "/dev/block/platform/13540000.dwmmc0/by-name/RECOVERY")    # older Exynos eMMC phones
+
+    def pull_recovery(self):
+        """The phone's current recovery partition, read over adb (a phone in TWRP or FMRRE: adb runs as root)."""
+        rc, out = self.r.call("adb", "shell", "for p in /dev/block/by-name/recovery /dev/block/bootdevice/by-name/recovery "
+                              "/dev/block/platform/*/by-name/RECOVERY /dev/block/platform/*/by-name/recovery "
+                              "/dev/block/platform/*/*/by-name/recovery; do [ -e $p ] && echo $p && break; done", timeout=20)
+        found = [l.strip() for l in out.splitlines() if l.strip().startswith("/dev/block/")]
+        dst = os.path.join(self.workdir(), "current-recovery.img")
+        for path in found[:1] + [p for p in self.RECOVERY_PATHS if p not in found[:1]]:
+            if os.path.exists(dst):
+                os.remove(dst)
+            rc, out = self.r.call("adb", "pull", path, dst, timeout=300)
+            if rc == 0 and os.path.isfile(dst) and os.path.getsize(dst) > 4096:
+                with open(dst, "rb") as f:
+                    if f.read(8) == b"ANDROID!":
+                        self.log("   %s -> %s (%.1f MB)" % (path, os.path.basename(dst), os.path.getsize(dst) / 1048576.0))
+                        return dst
+        raise Refused("Couldn't read the phone's recovery partition over adb (needs a custom recovery - TWRP or FMRRE - "
+                      "running on the phone). Or give the stock firmware: install-samsung --base AP_....tar.md5")
+
+    def install_samsung(self, base=None, rebuild=False, fmrre_bin=None, use_heimdall=False):
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, here)
+        import fmrre_build
+        import fmrre_mkrecovery
+        import odin
+        m = self.phone.mode
+        if not base and m == "download":
+            raise Refused("The phone is already in Download mode, so its recovery can't be read. Start it in recovery (TWRP), "
+                          "or give the stock firmware: install-samsung --base AP_....tar.md5")
+        # 1. FMRRE for the phone's CPU, compiled from this project when the sources are newer.
+        arch = "arm64"
+        if m in ("android", "recovery"):
+            rc, out = self.r.call("adb", "shell", "getprop ro.product.cpu.abi", timeout=15)
+            arch = {"armeabi-v7a": "arm", "armeabi": "arm", "x86": "x86", "x86_64": "x86_64"}.get(out.strip(), "arm64")
+        binary = fmrre_bin or os.path.join(fmrre_build.ROOT, "out", arch, "recovery")
+        have_src = os.path.isdir(os.path.join(fmrre_build.ROOT, "src"))
+        if not fmrre_bin and have_src and (rebuild or not fmrre_build.up_to_date(arch)):
+            self.log("1. Compiling FMRRE (%s) from %s" % (arch, fmrre_build.ROOT))
+            try:
+                if not self.o.dry_run:
+                    binary = fmrre_build.build(arch, ask=self.ask, log=lambda t: self.log("   " + t))
+            except fmrre_build.BuildError as e:
+                raise Refused(str(e))
+        else:
+            self.log("1. FMRRE: %s" % binary)
+        if not os.path.isfile(binary) and not self.o.dry_run:
+            raise Refused("No FMRRE binary at %s - compile it (python pc/fmrre_build.py) or use the installer kit" % binary)
+        # 2. What to build on: given, or the recovery the phone runs now.
+        if not base:
+            self.need_mode("recovery")
+            self.log("2. Reading the phone's current recovery")
+            base = self.pull_recovery() if not self.o.dry_run else "current-recovery.img"
+        else:
+            self.log("2. Base: %s" % base)
+        # 3. The image (and its Odin package: vbmeta only where the phone verifies with AVB).
+        img = os.path.join(self.workdir(), "fmrre-recovery.img")
+        self.log("3. Making the FMRRE image")
+        if not self.o.dry_run:
+            buf = io.StringIO()
+            old = sys.stdout
+            sys.stdout = buf
+            try:
+                rc = fmrre_mkrecovery.main([base, "--fmrre", binary, "-o", img, "--odin", "yes"])
+            finally:
+                sys.stdout = old
+            for line in buf.getvalue().splitlines():
+                if line.strip() and not line.startswith(("Flash with", "When it", "  hold", "  (Volume")):
+                    self.log("   " + line)
+            if rc != 0:
+                raise Refused("The image couldn't be made (see above)")
+        package = img[:-4] + ".tar.md5"
+        # 4. Download mode.
+        self.log("4. Download mode")
+        if m in ("android", "recovery"):
+            if not self.ask("Restart the phone in Download mode and flash FMRRE to RECOVERY?"):
+                return False
+            self.r.write("adb", "reboot", "download")
+        else:
+            self.log("   Phone off: hold Volume Down + Bixby + Power (since 2019: Volume Up + Down with the cable), "
+                     "then Volume Up.")
+            if not self.ask("Is the phone showing 'Downloading...' (and OEM LOCK: OFF)?"):
+                return False
+        if self.o.dry_run:
+            self.log("   (dry run: nothing flashed)")
+            return True
+        # 5. Flash: the built-in Odin protocol (Heimdall if asked).
+        self.log("5. Flashing")
+        if use_heimdall:
+            ok = self.r.wait_for("download") and self.r.write("heimdall", "flash", "--RECOVERY", img, "--no-reboot")
+            if not ok:
+                raise Refused("Heimdall failed - see above")
+        else:
+            end = time.time() + float(os.environ.get("FMRRE_WAIT", "90"))
+            session = None
+            while session is None:
+                try:
+                    session = odin.connect(log=lambda t: self.log("   " + t))
+                except odin.OdinError as e:
+                    if time.time() > end:
+                        raise Refused(str(e))
+                    time.sleep(2)
+            try:
+                odin.flash_files(odin.images_from(package), log=lambda t: self.log("   " + t), odin=session)
+            except odin.OdinError as e:
+                raise Refused("Flashing failed: %s\nThe phone still has its previous recovery unless the screen says otherwise. "
+                              "Odin with %s does the same job." % (e, os.path.basename(package)))
+        self.log("Flashed. Now start STRAIGHT into recovery, or stock Android replaces FMRRE on its first boot:\n"
+                 "   1. hold Volume Down + Power until the screen goes black\n"
+                 "   2. at once switch to Volume Up + Power (+ Bixby on older models) and hold until FMRRE appears")
+        return True
+
     def samsung_stock(self, ap):
         self.need_mode("download")
         self.need_unlocked("flashing")
@@ -1575,6 +1711,12 @@ def main(argv=None):
     p = sub.add_parser("samsung-fmrre")
     p.add_argument("image")
     p.add_argument("--vbmeta")
+    p = sub.add_parser("install-samsung", help="Samsung: compile FMRRE, build it on the phone's recovery (or --base), flash it in "
+                       "Download mode - all from here, no Odin")
+    p.add_argument("--base", help="stock AP_....tar.md5 / recovery.img / twrp.img (default: read from the phone in recovery)")
+    p.add_argument("--rebuild", action="store_true", help="compile FMRRE even when it looks up to date")
+    p.add_argument("--fmrre", help="a ready FMRRE binary instead of compiling")
+    p.add_argument("--heimdall", action="store_true", help="flash with Heimdall instead of the built-in Odin protocol")
     p = sub.add_parser("samsung-stock")
     p.add_argument("ap")
     p.add_argument("--parts", default=",".join(SAMSUNG_STOCK_PARTS))
@@ -1652,6 +1794,8 @@ def main(argv=None):
             ok = rs.samsung_fmrre(a.image)
         elif a.cmd == "samsung-stock":
             ok = rs.samsung_stock(a.ap)
+        elif a.cmd == "install-samsung":
+            ok = rs.install_samsung(a.base, a.rebuild, a.fmrre, a.heimdall)
         elif a.cmd == "sideload":
             ok = rs.sideload(a.zip)
         elif a.cmd == "factory":
@@ -1857,6 +2001,10 @@ def run_gui(a):
     row2b = ttk.Frame(act)
     row2b.pack(fill="x", pady=4)
     ttk.Label(row2b, text=T("Samsung:")).pack(side="left")
+    # One click: compile FMRRE from this project, build it on the phone's recovery (or the AP / image given above),
+    # Download mode, flash with the built-in Odin protocol.
+    btn(row2b, "Build + install FMRRE",
+        lambda: rs.install_samsung(ap_var.get().strip() or img_var.get().strip() or None)).pack(side="left", padx=2)
     btn(row2b, "Install FMRRE", lambda: rs.samsung_fmrre(img_var.get().strip())).pack(side="left", padx=2)
     btn(row2b, "Stock boot / vbmeta / recovery from AP", lambda: rs.samsung_stock(ap_var.get().strip())).pack(side="left", padx=2)
     row3 = ttk.Frame(act)
