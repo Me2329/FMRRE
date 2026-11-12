@@ -190,7 +190,6 @@ def flow_test():
     """pc/fmrre_rescue.py install-samsung end to end: a phone in TWRP (fake adb), the built-in Odin (fake bootloader)."""
     import lzma
     import tempfile
-    import types
     import fmrre_mkrecovery as mk
     import fmrre_rescue as fr
 
@@ -240,7 +239,7 @@ def flow_test():
                 calls.append((tool,) + args)
                 return True
 
-        opts = types.SimpleNamespace(yes=True, dry_run=False, workdir=d, unlocked=False)
+        opts = fr.Options(yes=True, workdir=d)  # the tool's own options (a stand-in hid a missing attribute once)
         rs = fr.Rescue(FakeRunner(), opts)
         rs.phone.mode = "recovery"
         sessions = []
@@ -268,6 +267,19 @@ def flow_test():
         check(files.get("sbin/recovery").data == open(binary, "rb").read() and files.get("etc/twrp.fstab") is not None,
               "install-samsung: FMRRE in TWRP's place, TWRP's fstab kept")
         check(os.path.isfile(os.path.join(d, "twrp-recovery.tar.md5")), "install-samsung: TWRP kept as an Odin package to go back")
+
+        # The real command line, as typed in PowerShell (no phone, --dry-run): no unexpected error anywhere on the way.
+        import contextlib
+        os.environ["FMRRE_NO_ODIN_PROBE"] = "1"
+        base = os.path.join(d, "twrp.img")
+        open(base, "wb").write(twrp)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = fr.main(["install-samsung", "--dry-run", "--yes", "--base", base, "--fmrre", binary, "--workdir",
+                          os.path.join(d, "cli"), "--lang", "en"])
+        text = out.getvalue()
+        check(rc == 0 and "Unexpected error" not in text and "Traceback" not in text and "dry run" in text,
+              "install-samsung from the command line (--dry-run) runs through" + ("" if rc == 0 else ": " + text[-800:]))
 
 
 def main():

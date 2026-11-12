@@ -1436,25 +1436,25 @@ class Rescue:
         if not fmrre_bin and have_src and (rebuild or not fmrre_build.up_to_date(arch)):
             self.log("1. Compiling FMRRE (%s) from %s" % (arch, fmrre_build.ROOT))
             try:
-                if not self.o.dry_run:
+                if not self.r.dry:
                     binary = fmrre_build.build(arch, ask=self.ask, log=lambda t: self.log("   " + t))
             except fmrre_build.BuildError as e:
                 raise Refused(str(e))
         else:
             self.log("1. FMRRE: %s" % binary)
-        if not os.path.isfile(binary) and not self.o.dry_run:
+        if not os.path.isfile(binary) and not self.r.dry:
             raise Refused("No FMRRE binary at %s - compile it (python pc/fmrre_build.py) or use the installer kit" % binary)
         # 2. What to build on: given, or the recovery the phone runs now.
         if not base:
             self.need_mode("recovery")
             self.log("2. Reading the phone's current recovery")
-            base = self.pull_recovery() if not self.o.dry_run else "current-recovery.img"
+            base = self.pull_recovery() if not self.r.dry else "current-recovery.img"
         else:
             self.log("2. Base: %s" % base)
         # 3. The image (and its Odin package: vbmeta only where the phone verifies with AVB).
         img = os.path.join(self.workdir(), "fmrre-recovery.img")
         self.log("3. Making the FMRRE image")
-        if not self.o.dry_run:
+        if not self.r.dry:
             buf = io.StringIO()
             old = sys.stdout
             sys.stdout = buf
@@ -1479,7 +1479,7 @@ class Rescue:
                      "then Volume Up.")
             if not self.ask("Is the phone showing 'Downloading...' (and OEM LOCK: OFF)?"):
                 return False
-        if self.o.dry_run:
+        if self.r.dry:
             self.log("   (dry run: nothing flashed)")
             return True
         # 5. Flash: the built-in Odin protocol (Heimdall if asked).
