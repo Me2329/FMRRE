@@ -11,6 +11,7 @@
 #include "core/util.h"
 #include "gfx/png.h"
 #include "platform/device.h"
+#include "sys/adbserver.h"
 #include "sys/logsave.h"
 #include "sys/partitions.h"
 #include "ui/screens/screens.h"
@@ -263,6 +264,7 @@ void App::frame(const std::vector<InputEvent>& evs) {
     struct timespec ts0;
     clock_gettime(CLOCK_MONOTONIC, &ts0);
     handleGlobalKeys(evs);
+    adbserver::setLocked(locked_);  // no adb shell or file transfer while the PIN lock is on
     updateStatus();
     tickIdle();
     ui.beginFrame(canvas, evs, now);

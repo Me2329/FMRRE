@@ -41,6 +41,8 @@ jobs:
         run: python3 tests/adb_sideload_test.py out/sim/fmrre
       - name: adb sideload tests as root (the package read through FUSE as it installs, and stored first)
         run: sudo env "PATH=$PATH" python3 tests/adb_sideload_test.py out/sim/fmrre
+      - name: adb shell / pull / push (the real adb client against FMRRE's own adb, over TCP)
+        run: python3 tests/adb_shell_test.py out/sim/fmrre
       - name: tar tests (FMRRE's tar against GNU tar, both ways; archives that try to escape)
         run: python3 tests/tar_test.py out/sim/fmrre
       - name: Backup tests (gzip made on every core, read by zlib / gzip; several members; damaged archives)

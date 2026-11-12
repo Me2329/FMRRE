@@ -1,4 +1,5 @@
 #include "sys/fastboot.h"
+#include "sys/adbserver.h"
 
 #include <algorithm>
 #include <atomic>
@@ -287,6 +288,7 @@ public:
     std::string peer() const override { return "USB"; }
 
     bool open(std::string& err) {
+        adbserver::pause();  // the USB gadget is fastboot's now; FMRRE's adb gets it back in restore()
         prevConfig_ = device::prop("sys.usb.config");
         if (!prevConfig_.empty() && prevConfig_ != "none") {
             device::setProp("sys.usb.config", "none");  // stops adbd, unbinds the gadget
@@ -437,6 +439,7 @@ private:
         if (!udc.empty() && util::writeFile(g + "/UDC", udc)) manualBound_ = true;
     }
     void restore() {
+        adbserver::resume();
         device::setProp("sys.usb.ffs.ready", "0");
         if (!prevConfig_.empty() && prevConfig_ != "fastboot") device::setProp("sys.usb.config", prevConfig_);
     }

@@ -14,6 +14,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "core/log.h"
@@ -25,6 +26,7 @@
 #include "platform/display.h"
 #include "platform/input.h"
 #include "sim.h"
+#include "sys/adbserver.h"
 #include "sys/autofix.h"
 #include "sys/mtp.h"
 #include "sys/logsave.h"
@@ -256,6 +258,13 @@ int main(int argc, char** argv) {
     if (!util::exists(cfgDir + "/.fmrre.conf") && util::exists(legacy + "/.twrpv2.conf")) util::copyFile(legacy + "/.twrpv2.conf", cfgDir + "/.fmrre.conf");
     if (!util::exists(cfgDir + "/history.txt") && util::exists(legacy + "/history.txt")) util::copyFile(legacy + "/history.txt", cfgDir + "/history.txt");
     Settings::get().load(cfgDir + "/.fmrre.conf");
+    if (cli && !cliArgs.empty() && cliArgs[0] == "adbd") {  // fmrre adbd --tcp PORT: FMRRE's adb in the foreground (tests)
+        adbserver::Options o;
+        for (size_t i = 1; i + 1 < cliArgs.size(); i++)
+            if (cliArgs[i] == "--tcp") o.usb = false, o.tcpPort = atoi(cliArgs[i + 1].c_str());
+        log::setConsole(true);
+        return adbserver::serveForeground(o);
+    }
     if (cli) {
         int rc = ors::cliMain(cliArgs);
         Task::get().join();
@@ -293,6 +302,16 @@ int main(int argc, char** argv) {
     LOGI("display: %s %dx%d", display->name(), display->width(), display->height());
 
     App app(display.get(), input.get(), &queue);
+    // FMRRE's own adb: shell, pull, push and reboot over USB, whatever the stock ramdisk offers (Settings can turn it off).
+    if (!sim && Settings::get().flag("adb", true)) adbserver::start({});
+    // `adb shell` and scripts expect /sdcard; many stock recovery ramdisks have none (or an empty folder).
+    if (!sim) {
+        std::string st = Partitions::get().storagePath();
+        struct stat sb;
+        bool emptyDir = lstat("/sdcard", &sb) == 0 && S_ISDIR(sb.st_mode) && util::listDir("/sdcard").empty();
+        if (st != "/tmp" && (emptyDir ? rmdir("/sdcard") == 0 : lstat("/sdcard", &sb) != 0) && symlink(st.c_str(), "/sdcard") == 0)
+            LOGI("/sdcard -> %s", st.c_str());
+    }
     app.idleHook = [](App& a) {
         orsIdle(a);
         logsave::tick();  // the logs go to /cache/recovery and a card: no adb is needed to get them off a new phone
@@ -320,6 +339,7 @@ int main(int argc, char** argv) {
         return rc;
     }
     app.run();
+    adbserver::stop();
     Task::get().join();
     mtp::stop();
     unlink(ors::uiPidFile().c_str());
