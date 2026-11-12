@@ -251,10 +251,12 @@ def flow_test():
             return o
         real = odin.connect
         odin.connect = fake_connect
+        odin._fake = True
         try:
             ok = rs.install_samsung(fmrre_bin=binary)
         finally:
             odin.connect = real
+            odin._fake = False
         phone = sessions[0]
         phone.join(5)
         built = open(os.path.join(d, "fmrre-recovery.img"), "rb").read()

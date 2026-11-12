@@ -2,6 +2,11 @@
 (it is translated too when it is a known message), "{w}" for one word. Used by fmrre_rescue.T()."""
 
 RO = {
+    "waiting for Download mode...": "aștept modul Download...",
+    "No phone in Download mode showed up. Samsung's USB driver installed? Odin closed? Then start Download mode by hand and "
+    "run this again with the phone in Download mode and --base the image it made: {}":
+        "Niciun telefon nu a apărut în modul Download. E instalat driverul USB Samsung? E închis Odin? Apoi pornește modul "
+        "Download de mână și rulează din nou, cu telefonul în modul Download și --base imaginea făcută: {}",
     "(dry run: nothing flashed)": "(simulare: nu s-a scris nimic)",
     "Phone off: hold Volume Down + Bixby + Power (since 2019: Volume Up + Down with the cable), then Volume Up.":
         "Cu telefonul oprit: ține Volum jos + Bixby + Pornire (de la 2019: Volum sus + jos cu cablul), apoi Volum sus.",

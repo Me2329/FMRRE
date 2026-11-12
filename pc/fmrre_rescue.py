@@ -1490,6 +1490,17 @@ class Rescue:
                 raise Refused("Heimdall failed - see above")
         else:
             end = time.time() + float(os.environ.get("FMRRE_WAIT", "90"))
+            # Only talk once the Download-mode device is there and has settled: an "ODIN" sent to a bootloader still
+            # starting could reach it later, in the middle of the real session.
+            if not getattr(odin, "_fake", False):
+                self.log("   waiting for Download mode...")
+                while not odin.present():
+                    if time.time() > end:
+                        raise Refused("No phone in Download mode showed up. Samsung's USB driver installed? Odin closed? "
+                                      "Then start Download mode by hand and run this again with the phone in Download mode "
+                                      "and --base the image it made: %s" % img)
+                    time.sleep(1)
+                time.sleep(2)
             session = None
             while session is None:
                 try:
