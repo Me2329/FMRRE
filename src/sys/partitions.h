@@ -21,6 +21,7 @@ struct Partition {
     bool storage = false;     // can hold backups / be browsed
     bool logical = false;     // dynamic partition (super)
     bool readOnly = false;    // erofs etc.
+    int64_t length = 0;       // fstab length=: <0 leaves that many bytes free at the end (FDE crypto footer), >0 = fs size
 
     bool isImage() const { return fsType == "emmc" || fsType == "mtd"; }
     // Where the content lives right now (mount point, or sandbox in sim mode).
@@ -52,18 +53,39 @@ public:
     bool wipe(Partition& p, Task& t);
     // Format = mkfs (destroys everything, including /data/media).
     bool format(Partition& p, Task& t, const std::string& newFs = "");
+    // Format Data: /metadata first where there is one (its keys belong to the old /data), then /data - everything,
+    // internal storage included.
+    bool formatData(Task& t);
     bool wipeDalvik(Task& t);
+    // Filesystem tools (fsck / resize2fs / resize.f2fs ...). The partition is unmounted first.
+    bool repair(Partition& p, Task& t);
+    bool resizeFs(Partition& p, Task& t);
+    std::string fsInfo(Partition& p);
+    // Detect microSD / USB OTG drives that appeared after boot (also adds a USB OTG entry when the fstab has none).
+    int rescanRemovable();
 
     // Storage handling: where backups and screenshots go.
     std::vector<Partition*> storages();
     std::string storagePath();  // e.g. /data/media/0
+    std::string appDir();       // <storage>/FMRRE: backups, history, settings, saved stock images
+    std::string legacyDir();    // <storage>/TWRP: classic TWRP backups (and what TWRP v2 saved before the rename)
+    // Settings and history: appDir() when internal storage is readable, else /cache/fmrre (survives reboots when
+    // /data is encrypted), else a card, else RAM.
+    std::string configDir();
     void setStorage(const std::string& mountPoint);
     std::string currentStorage() const { return storage_; }
     // /data is mounted but internal storage is not readable (FBE, not decrypted).
     bool dataEncrypted();
 
+    static bool onRam(const std::string& path);  // tmpfs / the ramdisk: gone at the next reboot
     static std::string byNameDir();
+    static std::string byName(const std::string& name);  // by-name/<name>, any letter case; "" if absent
     static uint64_t blockSize(const std::string& dev);
+    // What kind of disk a block device is on: "usb", "sd" (SD card), "internal" (UFS LUN / eMMC - never removable),
+    // or "unknown" (no sysfs entry). Removable storage is only used when it is really USB or SD.
+    static const char* diskKind(const std::string& dev);
+    // The mkfs command line for a partition (honours fstab length=); "" for an unknown filesystem.
+    static std::string mkfsCommand(const Partition& p, const std::string& fs, uint64_t partitionBytes, bool haveMke2fs);
 
 private:
     void addFromTwrpLine(const std::vector<std::string>& f);
@@ -73,6 +95,9 @@ private:
     std::vector<Partition> parts_;
     std::string fstabPath_;
     std::string storage_ = "/data";
+    std::string encDev_;       // dataEncrypted(): the whole-partition check is cached for a few seconds
+    int64_t encChecked_ = 0;
+    bool encWhole_ = false;
     std::vector<std::string> simMounted_;
 };
 

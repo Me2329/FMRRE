@@ -30,7 +30,7 @@ public:
         if (!dpy_) return false;
         int scr = DefaultScreen(dpy_);
         win_ = XCreateSimpleWindow(dpy_, RootWindow(dpy_, scr), 0, 0, w_, h_, 0, 0, 0);
-        XStoreName(dpy_, win_, "TWRP v2 - simulator");
+        XStoreName(dpy_, win_, "FMRRE - simulator");
         XSelectInput(dpy_, win_, ExposureMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | KeyPressMask |
                                      KeyReleaseMask);
         XSizeHints hints{};

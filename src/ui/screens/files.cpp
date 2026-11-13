@@ -8,8 +8,11 @@
 #include "core/log.h"
 #include "core/sha256.h"
 #include "core/util.h"
+#include "core/i18n.h"
 #include "platform/device.h"
+#include "sys/imagesrc.h"
 #include "sys/installer.h"
+#include "sys/payload.h"
 #include "sys/partitions.h"
 
 namespace tw {
@@ -17,10 +20,14 @@ namespace tw {
 Icon iconForFile(const std::string& name, bool dir) {
     if (dir) return Icon::Folder;
     std::string n = util::toLower(name);
+    if (util::endsWith(n, ".img.xz") || util::endsWith(n, ".img.gz") || util::endsWith(n, ".img.zst") || util::endsWith(n, ".img.lz4"))
+        return Icon::Chip;
     if (util::endsWith(n, ".zip") || util::endsWith(n, ".apk") || util::endsWith(n, ".gz") || util::endsWith(n, ".tar") ||
         util::endsWith(n, ".7z") || util::endsWith(n, ".win") || util::endsWith(n, ".xz"))
         return Icon::Zip;
-    if (util::endsWith(n, ".img") || util::endsWith(n, ".bin") || util::endsWith(n, ".mbn")) return Icon::Chip;
+    if (util::endsWith(n, ".img") || util::endsWith(n, ".bin") || util::endsWith(n, ".mbn") || util::endsWith(n, ".img.xz") ||
+        util::endsWith(n, ".img.gz") || util::endsWith(n, ".img.zst") || util::endsWith(n, ".img.lz4"))
+        return Icon::Chip;
     if (util::endsWith(n, ".png") || util::endsWith(n, ".jpg") || util::endsWith(n, ".jpeg") || util::endsWith(n, ".webp"))
         return Icon::Image;
     if (util::endsWith(n, ".sh") || util::endsWith(n, ".rc") || util::endsWith(n, ".prop")) return Icon::Terminal;
@@ -66,8 +73,8 @@ std::string fmtDate(int64_t t) {
 
 class FilesScreen : public Screen {
 public:
-    FilesScreen(std::string start, std::vector<std::string> filter, PickFn onPick, std::string title)
-        : filter_(std::move(filter)), onPick_(std::move(onPick)), title_(std::move(title)) {
+    FilesScreen(std::string start, std::vector<std::string> filter, PickFn onPick, std::string title, AppFn onCantFind)
+        : filter_(std::move(filter)), onPick_(std::move(onPick)), title_(std::move(title)), onCantFind_(std::move(onCantFind)) {
         cwd_ = start.empty() ? Partitions::get().storagePath() : start;
         if (!util::isDir(cwd_)) cwd_ = device::path("/");
         load();
@@ -121,7 +128,9 @@ public:
 
     void load() {
         entries_ = util::listDir(cwd_, showHidden_);
-        if (!filter_.empty()) {
+        hiddenByFilter_ = 0;
+        if (!filter_.empty() && !showAll_) {
+            size_t before = entries_.size();
             entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
                                           [&](const util::DirEntry& e) {
                                               if (e.dir) return false;
@@ -131,6 +140,7 @@ public:
                                               return true;
                                           }),
                            entries_.end());
+            hiddenByFilter_ = int(before - entries_.size());
         }
         int s = sort_;
         std::sort(entries_.begin(), entries_.end(), [s](const util::DirEntry& a, const util::DirEntry& b) {
@@ -149,8 +159,19 @@ public:
         d.message = util::humanSize(e.size) + "  \xE2\x80\xA2  " + fmtDate(e.mtime);
         struct A { Icon i; std::string label; int code; };
         std::vector<A> acts;
-        if (util::endsWith(n, ".zip")) acts.push_back({Icon::Install, "Install zip", 1});
-        if (util::endsWith(n, ".img") || util::endsWith(n, ".bin")) acts.push_back({Icon::Bolt, "Flash image", 2});
+        bool ota = util::endsWith(n, ".zip") && payload::isOtaZip(path);
+        if (util::endsWith(n, ".zip")) acts.push_back({Icon::Install, ota ? "Install A/B ROM / OTA" : "Install zip", 1});
+        if (ota || n == "payload.bin") acts.push_back({Icon::Download, "Extract images from payload", 13});
+        if (img::isImageName(n)) acts.push_back({Icon::Bolt, "Flash image", 2});
+        if (util::endsWith(n, ".zip") && !img::inspect(path).zipImages.empty()) acts.push_back({Icon::Bolt, "Flash .img inside zip", 2});
+        if (img::isImageName(n) || util::endsWith(n, ".zip")) acts.push_back({Icon::Phone, "Flash as GSI (system)", 11});
+        if (img::isImageName(n) && !util::endsWith(n, ".zip")) {  // boot.img.lz4 -> boot.img (Magisk patches plain images)
+            img::Info zi = img::inspect(path);
+            if (zi.ok && zi.comp != img::Compression::None) acts.push_back({Icon::Download, "Decompress to " + util::basename(img::unpackedName(path)), 14});
+        } else if (util::endsWith(n, ".zip") && !ota && !img::inspect(path).zipImages.empty()) {
+            acts.push_back({Icon::Download, "Extract " + util::basename(img::unpackedName(path)), 14});
+        }
+        acts.push_back({Icon::Terminal, "dd command for this file", 12});
         acts.push_back({Icon::Eye, "View", 3});
         acts.push_back({Icon::Hash, "SHA-256 checksum", 4});
         acts.push_back({Icon::Copy, "Copy", 5});
@@ -166,13 +187,22 @@ public:
             App& a = *app_;
             switch (acts[idx].code) {
                 case 1: {
-                    installer::InstallOptions o;
+                    if (payload::isOtaZip(path)) { a.push(makePayloadScreen(path)); break; }
+                    installer::InstallOptions o = installer::optionsFromSettings();  // signatures, CRC: as in Install
                     a.runTask("Flashing " + util::basename(path), Icon::Install,
                               [path, o](Task& t) { return installer::installZip(path, o, t); });
                     break;
                 }
                 case 2: a.push(makeFlashImageScreen(path)); break;
                 case 3: a.push(makeTextViewerScreen(path)); break;
+                case 11: a.push(makeGsiScreen(path)); break;
+                case 12: a.push(makeManualFlashScreen(path)); break;
+                case 13: a.push(makePayloadScreen(path)); break;
+                case 14: {
+                    std::string out = img::unpackedName(path);
+                    a.runTask("Unpacking " + util::basename(path), Icon::Download, [path, out](Task& t) { return img::unpack(path, out, t); });
+                    break;
+                }
                 case 4:
                     a.runTask("SHA-256 of " + util::basename(path), Icon::Hash, [path](Task& t) {
                         t.setStatus("Hashing " + util::basename(path));
@@ -234,8 +264,16 @@ public:
                              {"tmp", device::path("/tmp"), Icon::Folder}};
         if (auto* sd = Partitions::get().find("/external_sd"))
             if (sd->present) qs.push_back({"MicroSD", sd->contentPath(), Icon::Sd});
-        qs.push_back({"Backups", Partitions::get().storagePath() + "/TWRP", Icon::Backup});
+        qs.push_back({"Backups", Partitions::get().appDir(), Icon::Backup});
         float qx = pad;
+        if (!filter_.empty()) {
+            float w = ui.chipWidth("All files", Icon::Eye);
+            if (ui.chip(ui.id("q_all"), Rect(qx, qr.y + ui.dp(4), w, ui.dp(36)), "All files", showAll_, Icon::Eye)) {
+                showAll_ = !showAll_;
+                load();
+            }
+            qx += w + ui.dp(8);
+        }
         for (size_t i = 0; i < qs.size(); i++) {
             float w = ui.chipWidth(qs[i].label, qs[i].icon);
             if (ui.chip(ui.id("q", (int)i), Rect(qx, qr.y + ui.dp(4), w, ui.dp(36)), qs[i].label, util::startsWith(cwd_, qs[i].path) && i != 1, qs[i].icon)) {
@@ -256,6 +294,15 @@ public:
         float y = area.y + ui.dp(4);
         float rowH = ui.dp(64);
         float x = area.x + ui.dp(8), w = area.w - ui.dp(16);
+        if (hiddenByFilter_ > 0) {
+            Rect hb(x + ui.dp(4), y, w - ui.dp(8), ui.dp(40));
+            c.fillRoundRect(hb, ui.dp(12), th.accentSoft);
+            int hr = ui.clickable(ui.id("f_hidden"), hb);
+            font::drawIn(c, Face::SemiBold, ui.dp(12.5f), hb.inset(ui.dp(14), 0),
+                         std::to_string(hiddenByFilter_) + " other file(s) hidden by the type filter - tap to show all", th.accent);
+            if (hr & Clicked) { showAll_ = true; load(); }
+            y += ui.dp(48);
+        }
         if (entries_.empty()) {
             icons::drawCentered(c, Icon::Folder, area.cx(), y + ui.dp(70), ui.dp(48), th.textFaint);
             ui.label(Rect(area.x, y + ui.dp(108), area.w, ui.dp(24)), filter_.empty() ? "This folder is empty" : "No matching files here",
@@ -290,6 +337,14 @@ public:
                     fileActions(app, e);
                 }
             }
+        }
+        if (onCantFind_) {
+            Rect cf(x + ui.dp(4), y + ui.dp(8), w - ui.dp(8), ui.dp(66));
+            ui.card(cf, ui.dp(18), th.surface2, false);
+            if (ui.listItem(ui.id("f_cantfind"), cf.inset(ui.dp(2)), Icon::Search, "Can't find your file?",
+                            "Type its path - get a checked dd command", "", th.warn) & Clicked)
+                onCantFind_(app);
+            y += ui.dp(82);
         }
         ui.endScroll(y + ui.dp(8));
 
@@ -372,8 +427,11 @@ private:
     std::vector<std::string> filter_;
     PickFn onPick_;
     std::string title_;
+    AppFn onCantFind_;
     std::set<std::string> sel_;
     int sort_ = 0;
+    bool showAll_ = false;
+    int hiddenByFilter_ = 0;
     bool showHidden_ = true;
     bool scrollReset_ = false;
     App* app_ = nullptr;
@@ -423,6 +481,7 @@ public:
     }
 
     void draw(Ui& ui, App&, Rect area) override {
+        i18n::NoTranslate raw;  // file contents
         Theme& th = ui.th;
         Rect box = area.inset(ui.dp(12), ui.dp(4));
         ui.card(box, ui.dp(18), th.light ? rgb(0xFFFFFF) : mix(th.bgBottom, rgb(0x000000), 0.3f), false);
@@ -466,7 +525,10 @@ public:
         Rect kb = area.cutBottom(ui.keyboardHeight());
         Rect f(area.x + pad, area.y + ui.dp(8), area.w - pad * 2, ui.dp(58));
         std::string shown = password_ ? std::string(text_.size(), '*') : text_;
-        ui.textField(ui.id("ti_field"), f, shown, hint_, true);
+        {
+            i18n::NoTranslate raw;
+            ui.textField(ui.id("ti_field"), f, shown, hint_, true);
+        }
         float bw = (area.w - pad * 2 - ui.dp(10)) / 2;
         bool done = false;
         if (ui.button(ui.id("ti_cancel"), Rect(area.x + pad, f.b() + ui.dp(16), bw, ui.dp(50)), "Cancel", Icon::Close, BtnStyle::Tonal))
@@ -490,8 +552,8 @@ private:
 }  // namespace
 
 std::unique_ptr<Screen> makeFilesScreen(const std::string& start, std::vector<std::string> filter, PickFn onPick,
-                                        const std::string& title) {
-    return std::make_unique<FilesScreen>(start, std::move(filter), std::move(onPick), title);
+                                        const std::string& title, AppFn onCantFind) {
+    return std::make_unique<FilesScreen>(start, std::move(filter), std::move(onPick), title, std::move(onCantFind));
 }
 std::unique_ptr<Screen> makeTextViewerScreen(const std::string& path) { return std::make_unique<TextViewerScreen>(path); }
 std::unique_ptr<Screen> makeTextInputScreen(const std::string& title, const std::string& hint, const std::string& initial,

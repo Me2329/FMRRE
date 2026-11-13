@@ -1,4 +1,6 @@
 #include "gfx/font.h"
+
+#include "core/i18n.h"
 #include "gfx/embedded_res.h"
 
 #include <cmath>
@@ -89,7 +91,8 @@ float lineHeight(Face f, float px) {
     return std::round(px * 1.25f);
 }
 
-float draw(Canvas& c, Face f, float fpx, float x, float y, const std::string& s, Color col) {
+float draw(Canvas& c, Face f, float fpx, float x, float y, const std::string& s0, Color col) {
+    const std::string& s = i18n::tr(s0);
     int px = std::max(4, (int)std::lround(fpx));
     float base = std::round(y + (lineHeight(f, px) - px) / 2 + ascentPx(f, px));
     float pen = x;
@@ -103,7 +106,8 @@ float draw(Canvas& c, Face f, float fpx, float x, float y, const std::string& s,
     return pen - x;
 }
 
-float measure(Face f, float fpx, const std::string& s) {
+float measure(Face f, float fpx, const std::string& s0) {
+    const std::string& s = i18n::tr(s0);
     int px = std::max(4, (int)std::lround(fpx));
     float w = 0;
     size_t i = 0;
@@ -111,7 +115,8 @@ float measure(Face f, float fpx, const std::string& s) {
     return w;
 }
 
-std::string ellipsize(Face f, float px, const std::string& s, float maxW) {
+std::string ellipsize(Face f, float px, const std::string& s0, float maxW) {
+    const std::string s = i18n::tr(s0);  // a copy: measuring the pieces below may translate other text
     if (measure(f, px, s) <= maxW) return s;
     std::string ell = "\xE2\x80\xA6";
     float ew = measure(f, px, ell);
@@ -141,7 +146,8 @@ void drawIn(Canvas& c, Face f, float px, const Rect& r, const std::string& s, Co
     draw(c, f, px, x, y, t, col);
 }
 
-std::vector<std::string> wrap(Face f, float px, const std::string& s, float maxW) {
+std::vector<std::string> wrap(Face f, float px, const std::string& s0, float maxW) {
+    const std::string s = i18n::tr(s0);
     std::vector<std::string> lines;
     for (auto& para : [&] {
              std::vector<std::string> p;

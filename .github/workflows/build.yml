@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  host:
+    name: simulator, self-tests, installer tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -16,24 +17,133 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libx11-dev
-          pip install ziglang
-      - name: Simulator build + UI smoke test
+          sudo apt-get install -y cmake libx11-dev xz-utils zstd fastboot adb python3-tk xvfb
+      - name: Simulator build + self-tests + UI tour
         run: |
           scripts/build.sh sim
-          build-host/twrpv2_selftest
-          out/sim/twrpv2 --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
-      - name: Android arm64 (static)
-        run: scripts/build.sh arm64
-      - name: Android armv7 (static)
-        run: scripts/build.sh arm
-      - uses: actions/upload-artifact@v4
-        with:
-          name: twrpv2-recovery
-          path: |
-            out/arm64/recovery
-            out/arm/recovery
+          build-host/fmrre_selftest
+          out/sim/fmrre --sim --sim-root /tmp/sim --headless --script tools/scripts/tour.txt --out shots
+      - name: Installer tests (fake fastboot / adb / heimdall / magiskboot)
+        run: tests/install_test.sh
+      - name: A/B OTA tests (payload.bin built with real bzip2 / xz, verity, refusals)
+        run: |
+          python3 tests/payload_test.py out/sim/fmrre
+          out/sim/fmrre --sim --sim-root /tmp/sim --headless --script tools/scripts/payload.txt --out shots
+      - name: fastbootd tests (the real fastboot client over TCP)
+        run: tests/fastboot_test.sh out/sim/fmrre
+      - name: MTP tests (an independent MTP initiator over TCP)
+        run: python3 tests/mtp_test.py out/sim/fmrre
+      - name: Zip signature tests (signapk-format zips, keys made with openssl)
+        run: python3 tests/zipsig_test.py out/sim/fmrre
+      - name: Zstandard tests (the zstd tool's output at every level, decoded by FMRRE)
+        run: python3 tests/zstd_test.py out/sim/fmrre
+      - name: adb sideload tests (the real adb client against FMRRE's own adb, over TCP; the package stored first)
+        run: python3 tests/adb_sideload_test.py out/sim/fmrre
+      - name: adb sideload tests as root (the package read through FUSE as it installs, and stored first)
+        run: sudo env "PATH=$PATH" python3 tests/adb_sideload_test.py out/sim/fmrre
+      - name: adb shell / pull / push (the real adb client against FMRRE's own adb, over TCP)
+        run: python3 tests/adb_shell_test.py out/sim/fmrre
+      - name: tar tests (FMRRE's tar against GNU tar, both ways; archives that try to escape)
+        run: python3 tests/tar_test.py out/sim/fmrre
+      - name: Backup tests (gzip made on every core, read by zlib / gzip; several members; damaged archives)
+        run: python3 tests/backup_test.py out/sim/fmrre
+      - name: PC rescue tests (fake adb / fastboot / heimdall, the window under Xvfb)
+        run: tests/pc_rescue_test.sh
       - uses: actions/upload-artifact@v4
         with:
           name: screenshots
           path: shots/
+
+  pc-tool:
+    name: PC rescue tool on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners stopped starting for this repository (every run's macOS job sat in the queue until it was
+        # cancelled, which turned whole runs red): they run when the workflow is started by hand.
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-24.04", "windows-latest", "macos-latest"]' || '["ubuntu-24.04", "windows-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fake adb / fastboot / heimdall, the window
+        run: python tests/pc_rescue_unit.py
+      - name: Recovery image builder (S8 AP + LZ4, AVB, header v0-v4, pure Python)
+        run: python tests/mkrecovery_unit.py
+      - name: Built-in Odin (Download mode protocol against a fake bootloader; build + flash flow)
+        run: python tests/odin_unit.py
+
+  pc-build:
+    name: compile FMRRE with pc/fmrre_build.py on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile for arm64 (zig + cmake + ninja from pip)
+        run: python pc/fmrre_build.py arm64 --yes
+      - name: It is a static aarch64 program
+        run: python -c "import struct; b=open('out/arm64/recovery','rb').read(64); assert b[:4]==b'\x7fELF' and b[4]==2 and struct.unpack_from('<H',b,18)[0]==183, b[:20]; print('ok', len(open('out/arm64/recovery','rb').read()))"
+
+  android:
+    name: ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, arm, armv5, x86, x86_64, riscv64, mips]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake qemu-user-static xz-utils fastboot
+          pip install ziglang pillow
+      - name: Build (static, with self-tests)
+        run: TW_SELFTEST=1 scripts/build.sh ${{ matrix.arch }}
+      - name: Host build for the reference screenshot
+        run: cmake -S . -B build-host -DTW_X11=OFF -DCMAKE_BUILD_TYPE=Release && cmake --build build-host -j"$(nproc)" --target fmrre
+      - name: Run on an emulated CPU (self-tests, UI, CLI + GSI flash)
+        run: scripts/test_archs.sh ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fmrre-${{ matrix.arch }}
+          path: |
+            out/${{ matrix.arch }}/recovery
+            out/${{ matrix.arch }}/ABI
+
+  kit:
+    name: installer kit
+    needs: android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fmrre-*
+          path: artifacts
+      - name: Assemble
+        run: |
+          mkdir -p kit/out
+          for d in artifacts/fmrre-*; do a="${d#artifacts/fmrre-}"; mkdir -p "kit/out/$a"; cp "$d"/* "kit/out/$a/"; done
+          mkdir -p kit/scripts kit/tools kit/device
+          cp scripts/install.sh scripts/install.ps1 scripts/make_recovery_img.sh scripts/try_on_device.sh scripts/build.sh kit/scripts/
+          cp tools/odin_pack.py tools/elf_abi.py kit/tools/
+          cp -r pc kit/
+          cp -r device/. kit/device/
+          cp README.md LICENSE kit/
+          find kit -type f | sort
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fmrre-installer-kit
+          path: kit/

@@ -16,6 +16,7 @@ static uint64_t g_gen = 0;
 static FILE* g_file = nullptr;
 static std::string g_path;
 static int g_kmsg = -1;
+static bool g_console = true;
 static const size_t kMaxLines = 4000;
 
 void init(const std::string& logFile) {
@@ -27,6 +28,7 @@ void init(const std::string& logFile) {
 }
 
 std::string filePath() { return g_path; }
+void setConsole(bool on) { g_console = on; }
 
 static const char* tag(LogLevel l) {
     switch (l) {
@@ -53,9 +55,9 @@ void raw(LogLevel lvl, const std::string& text) {
                 fprintf(g_file, "[%s] %s\n", tag(lvl), line.c_str());
                 fflush(g_file);
             }
-            if (lvl != LogLevel::Debug) fprintf(stderr, "[%s] %s\n", tag(lvl), line.c_str());
+            if (g_console && lvl != LogLevel::Debug) fprintf(stderr, "[%s] %s\n", tag(lvl), line.c_str());
             if (g_kmsg >= 0 && lvl != LogLevel::Debug) {
-                std::string k = "<6>twrpv2: " + line + "\n";
+                std::string k = "<6>fmrre: " + line + "\n";
                 ssize_t r = ::write(g_kmsg, k.data(), k.size());
                 (void)r;
             }

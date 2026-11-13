@@ -1,2 +1,2 @@
 #!/bin/sh
-exec ${ZIG:-python3 -m ziglang} c++ -target "${ZIG_TARGET:-aarch64-linux-musl}" "$@"
+exec ${ZIG:-python3 -m ziglang} c++ -target "${ZIG_TARGET:-aarch64-linux-musl}" ${ZIG_CPU:+"-mcpu=$ZIG_CPU"} "$@"

@@ -1,0 +1,29 @@
+# FMRRE fstab for the Samsung Galaxy S8 (SM-G950F / G950FD, codename "dreamlte", Exynos 8895).
+#
+# A-only and not Treble: no slots, no super, no vendor partition. Storage is UFS: the by-name links are under
+# /dev/block/platform/11120000.ufs/by-name/ and their names are capitals (FMRRE matches them in any case).
+#
+# Optional: without it FMRRE reads the stock recovery's own fstab, whose device paths are right by definition. This
+# file adds names, EFS/CP-EFS/modem backups and the microSD. It has not been checked on a real S8 yet: boot FMRRE
+# once and compare with Advanced > Device info and Mount (each partition shows its block device), then fix any line.
+#
+# /data keeps 20 KiB free at its end (length=-20480): full-disk encryption keeps its key there. Formatting over it
+# makes Android's encryption fail on the next boot ("Encryption unsuccessful").
+#
+# No USB OTG line on purpose: on UFS phones /dev/block/sda.. are the phone's own storage. FMRRE finds a USB stick
+# by itself from sysfs (Mount > rescan) and never treats internal storage as removable.
+#
+# Format:  <mount point>  <fs>  <block device>  flags=<flag;flag;...>
+
+/system      ext4  /dev/block/platform/11120000.ufs/by-name/SYSTEM    flags=display="System";backup=1
+/cache       ext4  /dev/block/platform/11120000.ufs/by-name/CACHE     flags=display="Cache";wipeingui
+/data        ext4  /dev/block/platform/11120000.ufs/by-name/USERDATA  flags=display="Data";backup=1;wipeingui;storage;encryptable=footer;length=-20480
+/efs         ext4  /dev/block/platform/11120000.ufs/by-name/EFS       flags=display="EFS (IMEI)";backup=1
+/cpefs       ext4  /dev/block/platform/11120000.ufs/by-name/CPEFS     flags=display="CP EFS (modem)";backup=1
+
+/boot        emmc  /dev/block/platform/11120000.ufs/by-name/BOOT      flags=display="Boot";backup=1;flashimg=1
+/recovery    emmc  /dev/block/platform/11120000.ufs/by-name/RECOVERY  flags=display="Recovery";backup=1;flashimg=1
+/modem       emmc  /dev/block/platform/11120000.ufs/by-name/RADIO     flags=display="Modem";backup=1
+
+# The S8's microSD is mmcblk0 (the internal storage is UFS, not eMMC). FMRRE checks it really is an SD card.
+/external_sd auto  /dev/block/mmcblk0p1  flags=display="MicroSD";storage;wipeingui;removable

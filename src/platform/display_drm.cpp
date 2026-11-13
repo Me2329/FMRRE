@@ -66,11 +66,14 @@ public:
         int w = std::min(c.width(), (int)mode_.hdisplay), h = std::min(c.height(), (int)mode_.vdisplay);
         for (int y = 0; y < h; y++) {
             uint32_t* dst = (uint32_t*)(b.map + size_t(y) * b.pitch);
-            if (!rotate180_) {
+            if (!rotate180_ && !swapRB_) {
                 memcpy(dst, src + size_t(y) * c.width(), size_t(w) * 4);
             } else {
-                const uint32_t* s = src + size_t(c.height() - 1 - y) * c.width();
-                for (int x = 0; x < w; x++) dst[x] = s[c.width() - 1 - x];
+                const uint32_t* s = src + size_t(rotate180_ ? c.height() - 1 - y : y) * c.width();
+                for (int x = 0; x < w; x++) {
+                    uint32_t p = s[rotate180_ ? c.width() - 1 - x : x];
+                    dst[x] = swapRB_ ? (p & 0xFF00FF00u) | ((p >> 16) & 0xFF) | ((p & 0xFF) << 16) : p;
+                }
             }
         }
         setCrtc(b.fbId);

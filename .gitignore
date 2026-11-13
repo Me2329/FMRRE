@@ -3,3 +3,5 @@ out/
 sim_root/
 shots/
 *.o
+__pycache__/
+build-pc-*/

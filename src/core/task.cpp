@@ -20,6 +20,7 @@ bool Task::start(const std::string& title, Fn fn) {
         status_ = "Starting...";
         detail_.clear();
         lines_.clear();
+        totalLines_ = 0;
     }
     progress_ = 0;
     rangeStart_ = 0;
@@ -87,7 +88,7 @@ void Task::print(const char* fmt, ...) {
     va_end(ap);
     log::raw(LogLevel::Print, buf);
     std::lock_guard<std::mutex> lk(mu_);
-    for (auto& l : util::split(buf, '\n', false)) lines_.push_back(l);
+    for (auto& l : util::split(buf, '\n', false)) { lines_.push_back(l); totalLines_++; }
     if (lines_.size() > 500) lines_.erase(lines_.begin(), lines_.begin() + (lines_.size() - 500));
 }
 
@@ -95,6 +96,15 @@ std::vector<std::string> Task::lines(size_t max) const {
     std::lock_guard<std::mutex> lk(mu_);
     size_t n = std::min(max, lines_.size());
     return std::vector<std::string>(lines_.end() - n, lines_.end());
+}
+
+std::vector<std::string> Task::linesSince(size_t& cursor) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    size_t first = totalLines_ - lines_.size();
+    if (cursor < first) cursor = first;
+    std::vector<std::string> out(lines_.begin() + (cursor - first), lines_.end());
+    cursor = totalLines_;
+    return out;
 }
 
 }  // namespace tw

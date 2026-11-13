@@ -1,10 +1,15 @@
 #include "sys/installer.h"
+#include "sys/history.h"
 #include "core/log.h"
 #include "core/sha256.h"
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "sys/imagesrc.h"
 #include "sys/partitions.h"
+#include "sys/payload.h"
+#include "sys/zipsig.h"
+#include "core/settings.h"
 #include "miniz.h"
 
 #include <cerrno>
@@ -38,6 +43,9 @@ ZipInfo inspectZip(const std::string& path) {
         if (n == kUpdaterScript) zi.hasUpdaterScript = true;
         if (n == "module.prop") zi.isMagiskModule = true;
         if (n == "payload.bin") zi.hasPayload = true;
+        if (n == "payload.bin" || n == "system.new.dat" || n == "system.new.dat.br" || n == "system.transfer.list" ||
+            n == "system.img" || n == "super.img" || n == "system.img.lz4" || n == "super.img.lz4")
+            zi.isRom = true;
         if (zi.names.size() < 200) zi.names.push_back(n);
     }
     mz_zip_reader_end(&z);
@@ -146,7 +154,59 @@ static bool simulateInstall(const std::string& path, const ZipInfo& zi, Task& t)
     return true;
 }
 
-bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
+const char kRomSwitchNote[] = "a different ROM than the one installed";
+
+InstallOptions optionsFromSettings() {
+    InstallOptions o;
+    Settings& s = Settings::get();
+    o.verifyZip = s.flag("zip_verify", true);
+    o.wipeCacheAfter = s.flag("zip_wipe_cache", false);
+    o.checkSignature = s.flag("zip_sig", true);
+    o.requireSignature = s.flag("zip_sig_require", false);
+    return o;
+}
+
+bool checkSignature(const std::string& path, const InstallOptions& o, bool isRom, Task& t, std::string& note) {
+    note.clear();
+    if (!o.checkSignature && !o.requireSignature) return true;
+    zipsig::Result r;
+    zipsig::Keys keys = zipsig::loadKeys(zipsig::Sources::current());
+    if (!zipsig::cached(path, r)) {  // the Install screen has usually checked it already
+        t.setStatus("Checking the signature of " + util::basename(path));
+        r = zipsig::verify(path, keys, [&](uint64_t d, uint64_t n) {
+            t.setSubProgress(n ? float(double(d) / double(n)) : 1.0f);
+            return !t.cancelled();
+        });
+        if (t.cancelled()) return false;
+    }
+    for (auto& l : zipsig::report(r)) t.print("%s", l.c_str());
+    note = r.brief();
+    // A/B OTAs: update_engine's own signature inside payload.bin (its metadata vouches for every block's hash).
+    bool payloadTrusted = false;
+    payload::Payload pl;
+    std::string perr;
+    if (payload::isOtaZip(path) && payload::open(path, pl, perr)) {
+        zipsig::PayloadSig ps = zipsig::verifyPayload(payload::signatureRef(pl), keys, r.valid() ? &r.cert : nullptr, false);
+        t.print("  payload.bin: %s", ps.line().c_str());
+        payloadTrusted = ps.trusted();
+        if (!r.trusted() && payloadTrusted) note += "; payload signed with a trusted key";
+    }
+    if (isRom && r.otherThanSystem()) {
+        note += std::string("; ") + kRomSwitchNote;
+        t.print("  This ROM is signed with another key than the system on the phone now. If it is a different ROM, "
+                "wipe data after installing it (Wipe -> Factory reset) - a ROM started on another ROM's data "
+                "usually doesn't get past the boot animation.");
+    }
+    if (o.requireSignature && !r.trusted() && !payloadTrusted) {
+        t.print("Not installed: only zips signed with a trusted key are installed (Settings). Trusted: the installed "
+                "system's keys, this recovery's, and keys you added to FMRRE/keys.");
+        return false;
+    }
+    if (r.state == zipsig::State::Bad) t.print("  Installing anyway: the CRC check still catches damaged files.");
+    return true;
+}
+
+static bool installZipImpl(const std::string& path, const InstallOptions& o, Task& t, std::string& sigNote) {
     t.setStatus("Inspecting " + util::basename(path));
     t.print("Installing zip: %s", path.c_str());
     ZipInfo zi = inspectZip(path);
@@ -157,8 +217,23 @@ bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
     t.print("Type: %s, %d entries, %s", zi.kind.c_str(), zi.entries, util::humanSize(zi.uncompressed).c_str());
     const float rbase = t.rangeStart(), rlen = t.rangeLen();
     float myBase = rbase;
+    if (o.checkSignature || o.requireSignature) {
+        t.setRange(rbase, rlen * 0.05f);
+        if (!checkSignature(path, o, zi.isRom, t, sigNote)) return false;
+        myBase += rlen * 0.05f;
+        t.setRange(myBase, rbase + rlen - myBase);
+    }
+    if (zi.hasPayload && !zi.hasUpdateBinary) {
+        // A/B ROM or OTA: write payload.bin to the inactive slot (each block is checked against its SHA-256).
+        payload::Payload p;
+        std::string err;
+        if (!payload::open(path, p, err)) { t.print("payload.bin: %s", err.c_str()); return false; }
+        payload::InstallOptions po;
+        po.historyNote = sigNote;
+        return payload::install(p, po, t);
+    }
     if (o.verifyZip) {
-        t.setRange(rbase, rlen * 0.1f);
+        t.setRange(myBase, rlen * 0.1f);
         if (!testZip(path, t)) return false;
         myBase += rlen * 0.1f;
     }
@@ -198,7 +273,7 @@ bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
         dup2(outPipe[1], 2);
         std::string fd = std::to_string(cmdPipe[1]);
         setenv("PATH", "/system/bin:/sbin:/bin:/system/xbin:/vendor/bin", 1);
-        setenv("RECOVERY_NAME", "TWRP v2", 1);
+        setenv("RECOVERY_NAME", "FMRRE", 1);
         // Shell-script update-binaries need an interpreter when the shebang path is missing.
         std::string head;
         util::readFile(bin, head, 64);
@@ -257,18 +332,17 @@ bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
     return ok;
 }
 
+bool installZip(const std::string& path, const InstallOptions& o, Task& t) {
+    bool ota = payload::isOtaZip(path);  // A/B OTAs are recorded by payload::install
+    std::string sigNote;
+    bool ok = installZipImpl(path, o, t, sigNote);
+    std::string detail = util::basename(path) + (sigNote.empty() ? "" : " - " + sigNote);
+    if (!ota && !device::isSim()) history::record("Install zip", detail, ok);
+    else if (!ota) history::record("Install zip (simulated)", detail, ok);
+    return ok;
+}
+
 // ---- Android sparse image support -------------------------------------------------
-#pragma pack(push, 1)
-struct SparseHeader {
-    uint32_t magic;
-    uint16_t major, minor, fileHdrSz, chunkHdrSz;
-    uint32_t blkSz, totalBlks, totalChunks, checksum;
-};
-struct ChunkHeader {
-    uint16_t type, reserved;
-    uint32_t chunkSz, totalSz;
-};
-#pragma pack(pop)
 static const uint32_t kSparseMagic = 0xED26FF3A;
 
 bool isSparseImage(const std::string& path) {
@@ -280,116 +354,8 @@ bool isSparseImage(const std::string& path) {
     return r;
 }
 
-static bool readFull(int fd, void* buf, size_t n) {
-    char* p = (char*)buf;
-    while (n) {
-        ssize_t r = read(fd, p, n);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) return false;
-        p += r;
-        n -= r;
-    }
-    return true;
-}
-
-static bool writeFull(int fd, const void* buf, size_t n) {
-    const char* p = (const char*)buf;
-    while (n) {
-        ssize_t r = write(fd, p, n);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) return false;
-        p += r;
-        n -= r;
-    }
-    return true;
-}
-
 bool flashImage(const std::string& image, const std::string& blockDev, Task& t) {
-    t.setStatus("Flashing " + util::basename(image));
-    int in = open(image.c_str(), O_RDONLY | O_CLOEXEC);
-    if (in < 0) { t.print("Cannot open %s: %s", image.c_str(), strerror(errno)); return false; }
-    int out = open(blockDev.c_str(), O_WRONLY | O_CLOEXEC | (device::isSim() ? O_CREAT : 0), 0644);
-    if (out < 0) { t.print("Cannot open %s: %s", blockDev.c_str(), strerror(errno)); close(in); return false; }
-    uint64_t devSize = Partitions::blockSize(blockDev);
-    uint64_t imgSize = util::fileSize(image);
-    std::vector<char> buf(1 << 20);
-    int64_t t0 = util::nowMs();
-    bool ok = true;
-
-    SparseHeader sh{};
-    if (readFull(in, &sh, sizeof(sh)) && sh.magic == kSparseMagic) {
-        uint64_t outSize = uint64_t(sh.totalBlks) * sh.blkSz;
-        t.print("Sparse image: %u chunks, %s expanded", sh.totalChunks, util::humanSize(outSize).c_str());
-        if (!device::isSim() && devSize && outSize > devSize) {
-            t.print("Image (%s) is larger than the partition (%s)!", util::humanSize(outSize).c_str(),
-                    util::humanSize(devSize).c_str());
-            close(in); close(out);
-            return false;
-        }
-        lseek(in, sh.fileHdrSz, SEEK_SET);
-        uint64_t pos = 0;
-        for (uint32_t c = 0; c < sh.totalChunks && ok && !t.cancelled(); c++) {
-            ChunkHeader ch{};
-            if (!readFull(in, &ch, sizeof(ch))) { ok = false; break; }
-            if (sh.chunkHdrSz > sizeof(ch)) lseek(in, sh.chunkHdrSz - sizeof(ch), SEEK_CUR);
-            uint64_t len = uint64_t(ch.chunkSz) * sh.blkSz;
-            switch (ch.type) {
-                case 0xCAC1: {  // raw
-                    lseek(out, pos, SEEK_SET);
-                    uint64_t left = len;
-                    while (left && ok) {
-                        size_t n = std::min<uint64_t>(left, buf.size());
-                        ok = readFull(in, buf.data(), n) && writeFull(out, buf.data(), n);
-                        left -= n;
-                    }
-                    break;
-                }
-                case 0xCAC2: {  // fill
-                    uint32_t v;
-                    ok = readFull(in, &v, 4);
-                    for (size_t i = 0; i < buf.size() / 4; i++) memcpy(&buf[i * 4], &v, 4);
-                    lseek(out, pos, SEEK_SET);
-                    uint64_t left = len;
-                    while (left && ok) {
-                        size_t n = std::min<uint64_t>(left, buf.size());
-                        ok = writeFull(out, buf.data(), n);
-                        left -= n;
-                    }
-                    break;
-                }
-                case 0xCAC3: break;  // don't care
-                case 0xCAC4: lseek(in, 4, SEEK_CUR); len = 0; break;  // crc32
-                default: t.print("Unknown sparse chunk type 0x%x", ch.type); ok = false;
-            }
-            pos += len;
-            t.setSubProgress(float(lseek(in, 0, SEEK_CUR)) / imgSize);
-        }
-    } else {
-        if (!device::isSim() && devSize && imgSize > devSize) {
-            t.print("Image (%s) is larger than the partition (%s)!", util::humanSize(imgSize).c_str(),
-                    util::humanSize(devSize).c_str());
-            close(in); close(out);
-            return false;
-        }
-        lseek(in, 0, SEEK_SET);
-        uint64_t done = 0;
-        while (ok && !t.cancelled()) {
-            ssize_t n = read(in, buf.data(), buf.size());
-            if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) break;
-            ok = writeFull(out, buf.data(), n);
-            done += n;
-            t.setSubProgress(float(done) / imgSize);
-            int64_t el = util::nowMs() - t0;
-            if (el > 0) t.setDetail(util::humanSize(done * 1000 / el) + "/s");
-        }
-    }
-    if (t.cancelled()) { t.print("Cancelled!"); ok = false; }
-    fsync(out);
-    close(in);
-    close(out);
-    t.print(ok ? "Image flashed to %s" : "Flashing to %s FAILED", blockDev.c_str());
-    return ok;
+    return img::flash(image, "", blockDev, {}, t);
 }
 
 }  // namespace tw::installer

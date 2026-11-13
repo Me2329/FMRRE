@@ -5,11 +5,14 @@
 #include <unistd.h>
 
 #include "core/log.h"
+#include "core/i18n.h"
 #include "core/settings.h"
 #include "core/sha256.h"
 #include "core/util.h"
 #include "gfx/png.h"
 #include "platform/device.h"
+#include "sys/adbserver.h"
+#include "sys/logsave.h"
 #include "sys/partitions.h"
 #include "ui/screens/screens.h"
 
@@ -29,17 +32,34 @@ App::App(Display* d, EvdevInput* in, InputQueue* q) : display_(d), input_(in), q
     if (!Settings::get().str("pin_hash").empty()) locked_ = true;
     stack_.push_back(makeHomeScreen());
     stack_.back()->onShow(*this);
+    // First boot: let the user pick display quality before anything else (older phones run smoother on low detail).
+    if (Settings::get().integer("detail", -1) < 0 && !device::isSim()) {
+        stack_.push_back(makeDetailScreen(true));
+        stack_.back()->onShow(*this);
+    }
 }
 
 void App::applySettings() {
     Settings& s = Settings::get();
     ui.th = makeTheme(s.integer("accent", 0), s.integer("style", 0));
-    ui.animations = s.flag("animations", true);
+    i18n::setLanguage(s.str("lang", "en"));
+    // Detail level (slow phones): 0 = low (no shadows, glows or animations), 1 = high, -1 = not chosen yet (full).
+    bool low = s.integer("detail", -1) == 0;
+    canvas.setLowDetail(low);
+    if (low) ui.th.glows = false;
+    ui.animations = !low && s.flag("animations", device::animationsByDefault());
     ui.animSpeed = s.integer("anim_speed", 100) / 100.0f;
     topInset = ui.dp((float)s.integer("inset_top", device::isSim() ? 0 : 24));
     bottomInset = ui.dp((float)s.integer("inset_bottom", device::isSim() ? 0 : 8));
     display_->setRotate180(s.flag("rotate180"));
+    display_->setSwapRB(s.flag("swap_rb"));
     if (input_) input_->setTransform(s.flag("touch_swap"), s.flag("touch_flipx"), s.flag("touch_flipy"));
+}
+
+void App::saveLogs() {
+    auto where = logsave::save("asked", logsave::Removable::Mount);
+    if (where.empty()) toast("Couldn't save the log", Icon::Warning, ui.th.danger);
+    else toast("Logs saved in " + where.back(), Icon::Check, ui.th.ok);  // the last place is the easiest to reach
 }
 
 void App::vibrate(int ms) {
@@ -95,6 +115,21 @@ void App::runTask(const std::string& title, Icon icon, Task::Fn fn) {
         toast("Another operation is still running", Icon::Warning, ui.th.warn);
         return;
     }
+    // A flash cut short by a dead battery can leave the phone unbootable: ask first below 10%.
+    device::Battery b = device::battery();
+    if (!lowBatteryOk_ && b.percent >= 0 && b.percent < 10 && !b.charging) {
+        confirm("Battery is low",
+                "Battery at " + std::to_string(b.percent) + "% and not charging. If the phone dies while flashing, it may not boot any "
+                "more - plug in the charger first.",
+                "Swipe to continue anyway",
+                [this, title, icon, fn] {
+                    lowBatteryOk_ = true;
+                    runTask(title, icon, fn);
+                    lowBatteryOk_ = false;
+                },
+                true, Icon::Battery);
+        return;
+    }
     Task::get().start(title, std::move(fn));
     push(makeOperationScreen(icon));
 }
@@ -109,7 +144,7 @@ void App::lockNow() {
 std::string App::screenshot() {
     std::string dir = Partitions::get().storagePath() + "/Pictures/Screenshots";
     if (!util::mkdirs(dir)) dir = device::path("/tmp");
-    std::string p = dir + "/twrpv2_" + util::dateStamp() + ".png";
+    std::string p = dir + "/fmrre_" + util::dateStamp() + ".png";
     if (savePng(canvas, p)) {
         toast("Screenshot saved", Icon::Camera);
         LOGI("Screenshot: %s", p.c_str());
@@ -159,6 +194,7 @@ void App::run() {
             dimState_ = 2;
             if (Settings::get().flag("lock_on_blank", true)) lockNow();
         }
+        tickIdle();
         if (dimState_ == 2) continue;
 
         // One touch transition per frame so quick taps are never lost.
@@ -177,6 +213,13 @@ void App::run() {
             frame(fe);
         }
     }
+}
+
+void App::tickIdle() {
+    int64_t now = util::nowMs();
+    if (!idleHook || now - lastIdle_ < 300) return;
+    lastIdle_ = now;
+    idleHook(*this);
 }
 
 void App::handleGlobalKeys(const std::vector<InputEvent>& evs) {
@@ -221,7 +264,9 @@ void App::frame(const std::vector<InputEvent>& evs) {
     struct timespec ts0;
     clock_gettime(CLOCK_MONOTONIC, &ts0);
     handleGlobalKeys(evs);
+    adbserver::setLocked(locked_);  // no adb shell or file transfer while the PIN lock is on
     updateStatus();
+    tickIdle();
     ui.beginFrame(canvas, evs, now);
     canvas.setOrigin(0, 0);
     canvas.setAlpha(1);
@@ -320,7 +365,10 @@ void App::frame(const std::vector<InputEvent>& evs) {
                 changed = true;
             }
         }
-        if (changed) startTransition(forward);
+        if (changed) {
+            startTransition(forward);
+            ui.resetFocus();
+        }
     }
     if (!transitioning_) graveyard_.clear();
     if (wasTaskRunning_ && !opRunning) vibrate(60);
@@ -575,9 +623,7 @@ void App::drawConsole() {
     if (ui.iconButton(ui.id("con_close"), Rect(head.r() - ui.dp(40), head.y, ui.dp(40), ui.dp(40)), Icon::Close, rgb(0xCBD5E1), true))
         consoleOpen_ = false;
     if (ui.iconButton(ui.id("con_save"), Rect(head.r() - ui.dp(88), head.y, ui.dp(40), ui.dp(40)), Icon::Download, rgb(0xCBD5E1), true)) {
-        std::string dst = Partitions::get().storagePath() + "/recovery_" + util::dateStamp() + ".log";
-        if (util::copyFile(log::filePath(), dst)) toast("Log saved to " + util::basename(dst), Icon::Check, th.ok);
-        else toast("Couldn't save the log", Icon::Warning, th.danger);
+        saveLogs();
     }
     Rect body(sheet.x + ui.dp(12), head.b() + ui.dp(8), sheet.w - ui.dp(24), h - ui.dp(80) - bottomInset);
     Id sid = ui.id("console_scroll");
@@ -593,6 +639,7 @@ void App::drawConsole() {
     }
     ui.beginScroll(sid, body);
     float y = body.y;
+    i18n::NoTranslate raw;  // log lines
     for (auto& l : lines) {
         Color col = rgb(0xCBD5E1);
         if (l.level == LogLevel::Error) col = th.danger;
@@ -618,8 +665,7 @@ void App::drawLock() {
     time_t tt = time(nullptr);
     struct tm tm;
     localtime_r(&tt, &tm);
-    char date[64];
-    strftime(date, sizeof(date), "%A, %d %B", &tm);
+    std::string date = i18n::longDate(tm.tm_wday, tm.tm_mday, tm.tm_mon);
     float y = topInset + ui.dp(70);
     font::drawIn(canvas, Face::Bold, ui.dp(64), Rect(0, y, (float)W, ui.dp(80)), util::timeString(Settings::get().flag("clock24", true)),
                  th.text, AlignCenter);
@@ -628,7 +674,7 @@ void App::drawLock() {
     y += ui.dp(56);
     icons::drawCentered(canvas, Icon::Lock, W / 2.f, y, ui.dp(26), th.accent);
     y += ui.dp(26);
-    font::drawIn(canvas, Face::SemiBold, ui.dp(15), Rect(0, y, (float)W, ui.dp(24)), "Enter PIN to unlock TWRP v2", th.text, AlignCenter);
+    font::drawIn(canvas, Face::SemiBold, ui.dp(15), Rect(0, y, (float)W, ui.dp(24)), "Enter PIN to unlock FMRRE", th.text, AlignCenter);
     y += ui.dp(40);
     // dots
     float shake = 0;
@@ -664,7 +710,7 @@ void App::drawLock() {
         if (res & Clicked) {
             if (i == 9) { if (!pinEntry_.empty()) pinEntry_.pop_back(); }
             else if (i == 11) {
-                if (Sha256::hexOf(pinEntry_ + ":twrpv2") == Settings::get().str("pin_hash")) {
+                if (Sha256::hexOf(pinEntry_ + kPinSalt) == Settings::get().str("pin_hash")) {
                     locked_ = false;
                     toast("Unlocked", Icon::Lock);
                 } else {
@@ -691,13 +737,12 @@ void App::drawSplash() {
     canvas.shadow(logo, s * 0.28f, ui.dp(30), withAlpha(th.accent, 0.5f), ui.dp(6));
     canvas.fillRoundRect(logo, s * 0.28f, th.accent);
     canvas.radialGlowRR(logo.r(), logo.b(), s, withAlpha(th.accent2, 0.9f), logo, s * 0.28f);
-    font::drawIn(canvas, Face::Bold, s * 0.36f, logo.offset(0, -s * 0.06f), "TW", th.onAccent, AlignCenter);
-    font::drawIn(canvas, Face::SemiBold, s * 0.16f, Rect(logo.x, logo.y + s * 0.62f, logo.w, s * 0.2f), "v2", th.onAccent, AlignCenter);
+    drawLogoText(canvas, logo, s * 0.36f, th.onAccent);
     float sweep = 6.283f * easeInOutCubic(std::min(1.f, t * 1.4f));
     canvas.strokeArc(logo.cx(), logo.cy(), s * 0.78f, ui.dp(3), 0, sweep, withAlpha(th.accent, 0.8f));
-    font::drawIn(canvas, Face::Bold, ui.dp(26), Rect(0, logo.b() + ui.dp(40), (float)W, ui.dp(34)), "TWRP v2", th.text, AlignCenter);
+    font::drawIn(canvas, Face::Bold, ui.dp(26), Rect(0, logo.b() + ui.dp(40), (float)W, ui.dp(34)), "FMRRE", th.text, AlignCenter);
     font::drawIn(canvas, Face::Regular, ui.dp(14), Rect(0, logo.b() + ui.dp(76), (float)W, ui.dp(22)),
-                 std::string("Custom Recovery \xE2\x80\xA2 ") + kVersion, th.textDim, AlignCenter);
+                 std::string("FMR Recovery Environment \xE2\x80\xA2 ") + kVersion, th.textDim, AlignCenter);
     canvas.setAlpha(1);
     ui.keepAnimating();
 }

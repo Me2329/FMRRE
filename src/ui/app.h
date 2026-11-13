@@ -61,6 +61,7 @@ public:
     void confirm(const std::string& title, const std::string& msg, const std::string& slide,
                  std::function<void()> yes, bool danger = true, Icon icon = Icon::Warning);
     void toast(const std::string& msg, Icon icon = Icon::Info, Color tint = 0);
+    void saveLogs();  // recovery log + kernel log + SELinux report to /cache/recovery, a card, readable storage
     void runTask(const std::string& title, Icon icon, Task::Fn fn);
     void toggleConsole() { consoleOpen_ = !consoleOpen_; }
 
@@ -68,6 +69,9 @@ public:
     std::string screenshot();
     void lockNow();
     void vibrate(int ms = 18);
+
+    // Called about three times a second, also while the screen is idle (OpenRecoveryScript / CLI queue).
+    std::function<void(App&)> idleHook;
 
     Ui ui;
     Canvas canvas;
@@ -89,6 +93,8 @@ private:
     void back();
     void startTransition(bool forward);
     void updateStatus();
+    void tickIdle();
+    int64_t lastIdle_ = 0;
 
     Display* display_;
     EvdevInput* input_;
@@ -130,6 +136,7 @@ private:
     bool volDownHeld_ = false, powerHeld_ = false;
     std::vector<InputEvent> pending_;
     bool wasTaskRunning_ = false;
+    bool lowBatteryOk_ = false;  // the user swiped past the low battery warning for this task
 };
 
 }  // namespace tw

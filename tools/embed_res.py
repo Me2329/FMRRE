@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Embed resource files (fonts) into a C++ source file so the recovery binary
 is completely self-contained (no /res or /twres dependency)."""
-import os, sys
+import os
 
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 files = [

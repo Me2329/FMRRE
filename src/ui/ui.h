@@ -69,6 +69,7 @@ public:
     int clickable(Id i, const Rect& r, bool focusable = true);
     bool isPressed(Id i) const { return active_ == i && down_ && !dragActive_; }
     bool isFocused(Id i) const { return focusVisible_ && focusedId_ == i; }
+    void resetFocus() { focusIndex_ = 0; }  // a new screen: key navigation starts from its first control again
     void drawPressFx(Id i, const Rect& r, float radius, Color tint);
     void drawFocusRing(Id i, const Rect& r, float radius);
 
@@ -151,6 +152,10 @@ private:
     std::vector<ScrollCtx> scrollStack_;
     // focus navigation
     int focusIndex_ = -1, focusCount_ = 0, prevFocusCount_ = 0;
+    // Where the focused widget is (absolute), for widgets that draw themselves and never call drawFocusRing():
+    // endFrame() rings them, so volume-key navigation always shows where it is - the fallback when touch is dead.
+    Rect focusRect_, focusClip_;
+    bool focusSeen_ = false, focusRingDrawn_ = false;
     Id focusedId_ = 0;
     bool focusVisible_ = false, activateFocus_ = false;
     // keyboard
@@ -159,6 +164,10 @@ private:
     Canvas bgCache_;
     uint64_t bgKey_ = 0;
 };
+
+// The FMR logo: its letters on the accent square `r`, centred, as large as `maxPx` allows while they fit.
+constexpr const char kLogoText[] = "FMR";
+void drawLogoText(Canvas& c, const Rect& r, float maxPx, Color col);
 
 // Easing helpers
 float easeOutCubic(float t);

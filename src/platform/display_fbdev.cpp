@@ -50,6 +50,15 @@ public:
         doubleBuf_ = vi_.yres_virtual >= vi_.yres * 2 && mapLen_ >= size_t(fi_.line_length) * vi_.yres * 2;
         LOGI("fbdev: %ux%u %ubpp r%u g%u b%u line=%u %s", vi_.xres, vi_.yres, vi_.bits_per_pixel, vi_.red.offset,
              vi_.green.offset, vi_.blue.offset, fi_.line_length, doubleBuf_ ? "double-buffered" : "single");
+        ro_ = vi_.red.offset, go_ = vi_.green.offset, bo_ = vi_.blue.offset;
+        if (vi_.bits_per_pixel == 32 && (ro_ == go_ || go_ == bo_ || ro_ == bo_ || ro_ > 24 || go_ > 24 || bo_ > 24)) {
+            // A driver that doesn't say where the channels are: BGRA is the usual layout.
+            LOGW("fbdev: no usable channel layout reported - assuming BGRA (Settings > Swap red and blue if colours are wrong)");
+            ro_ = 16, go_ = 8, bo_ = 0;
+        }
+        // Some panels (Samsung AMOLED ones among them) stay dark until they have been blanked and unblanked once -
+        // the same path every screen wake-up takes, so it is safe where it isn't needed.
+        ioctl(fd_, FBIOBLANK, FB_BLANK_POWERDOWN);
         ioctl(fd_, FBIOBLANK, FB_BLANK_UNBLANK);
         return true;
     }
@@ -62,7 +71,8 @@ public:
         int page = doubleBuf_ ? back_ : 0;
         uint8_t* base = map_ + size_t(page) * vi_.yres * fi_.line_length;
         int w = std::min(c.width(), (int)vi_.xres), h = std::min(c.height(), (int)vi_.yres);
-        bool native = vi_.bits_per_pixel == 32 && vi_.red.offset == 16 && vi_.green.offset == 8 && vi_.blue.offset == 0;
+        uint32_t ro = swapRB_ ? bo_ : ro_, bo = swapRB_ ? ro_ : bo_, go = go_;
+        bool native = vi_.bits_per_pixel == 32 && ro == 16 && go == 8 && bo == 0;
         for (int y = 0; y < h; y++) {
             int sy = rotate180_ ? c.height() - 1 - y : y;
             const uint32_t* s = c.pixels() + size_t(sy) * c.width();
@@ -76,13 +86,13 @@ public:
                 for (int x = 0; x < w; x++) {
                     uint32_t p = s[rotate180_ ? c.width() - 1 - x : x];
                     uint32_t r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
-                    d[x] = (r << vi_.red.offset) | (g << vi_.green.offset) | (b << vi_.blue.offset) |
-                           (vi_.transp.length ? (255u << vi_.transp.offset) : 0);
+                    d[x] = (r << ro) | (g << go) | (b << bo) | (vi_.transp.length ? (255u << vi_.transp.offset) : 0);
                 }
             } else {
                 uint16_t* d = (uint16_t*)row;
                 for (int x = 0; x < w; x++) {
                     uint32_t p = s[rotate180_ ? c.width() - 1 - x : x];
+                    if (swapRB_) p = (p & 0xFF00FF00u) | ((p >> 16) & 0xFF) | ((p & 0xFF) << 16);
                     d[x] = uint16_t(((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F));
                 }
             }
@@ -95,6 +105,12 @@ public:
                 ioctl(fd_, FBIOPUT_VSCREENINFO, &vi_);
             }
             back_ ^= 1;
+        } else {
+            // One buffer: some drivers (command-mode panels, older Exynos / MSM fbdev) only send it to the panel when
+            // asked. Harmless where the panel refreshes by itself.
+            vi_.yoffset = 0;
+            vi_.activate = FB_ACTIVATE_VBL;
+            ioctl(fd_, FBIOPAN_DISPLAY, &vi_);
         }
     }
 
@@ -108,6 +124,7 @@ private:
     size_t mapLen_ = 0;
     bool doubleBuf_ = false;
     int back_ = 1;
+    uint32_t ro_ = 16, go_ = 8, bo_ = 0;  // where the driver keeps red / green / blue in a 32-bit pixel
 };
 
 class HeadlessDisplay : public Display {

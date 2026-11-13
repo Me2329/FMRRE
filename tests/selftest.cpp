@@ -1,26 +1,386 @@
-// Host self-tests for the parts of TWRP v2 that touch data:
+// Host self-tests for the parts of FMRRE that touch data:
 //   - SHA-256
 //   - real update-binary protocol (ui_print / progress / set_progress) - non-simulated path
 //   - Android sparse image flashing
 //   - backup -> wipe -> restore round trip (tar + gzip + sha256) in the simulator sandbox
+//   - bzip2 / xz decoding, Reed-Solomon, dm-verity hash tree + FEC, A/B OTA payload extraction
+#include <algorithm>
+#include <functional>
+#include <atomic>
 #include <cstdio>
+#include <map>
 #include <cstring>
 #include <string>
+#include <linux/input.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "core/bunzip2.h"
+#include "core/crc32.h"
+#include "core/gzip.h"
+#include "core/crypt.h"
+#include "core/i18n.h"
 #include "core/log.h"
+#include "core/lz4.h"
+#include "core/md5.h"
+#include "core/pubkey.h"
+#include "core/settings.h"
+#include "core/sha1.h"
 #include "core/sha256.h"
+#include "core/x509.h"
+#include "core/zstd.h"
 #include "core/task.h"
 #include "core/util.h"
 #include "platform/device.h"
+#include "platform/input.h"
 #include "sim.h"
+#include "sys/autofix.h"
+#include "sys/avb.h"
 #include "sys/backup.h"
+#include "sys/bootimg.h"
+#include "sys/fusefile.h"
+#include "sys/history.h"
+#include "sys/imagesrc.h"
 #include "sys/installer.h"
+#include "sys/logsave.h"
 #include "sys/partitions.h"
+#include "sys/ors.h"
+#include "sys/pathcheck.h"
+#include "sys/rescue.h"
+#include "sys/samsung.h"
+#include "sys/payload.h"
+#include "sys/super.h"
+#include "sys/tar.h"
+#include "sys/verity.h"
+#include "sys/zipsig.h"
 #include "miniz.h"
+#include "sig_fixtures.h"
+#include "zstd_fixtures.h"
+
+#include <fcntl.h>
+#include <sys/xattr.h>
+#include <vector>
 
 using namespace tw;
+
+// bzip2 -9 and xz (CRC64) of the same 16 KiB test pattern (made with Python's bz2 / lzma modules).
+static const unsigned char kBz2Fixture[] = {
+    0x42,0x5a,0x68,0x39,0x31,0x41,0x59,0x26,0x53,0x59,0xf7,0x57,0x8e,0x0b,0x00,0x09,0xc9,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xd0,0x03,0xde,0x00,0x00,0x00,0x02,0x4c,0x00,
+    0x13,0x00,0x01,0x30,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x26,0x00,0x09,0x80,0x00,0x98,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x93,0x00,0x04,0xc0,0x00,0x4c,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x49,0x80,0x02,0x60,0x00,0x26,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x05,0x54,0xa5,0x13,0x01,0x19,
+    0x3d,0x00,0x13,0x00,0x00,0x4d,0x30,0x08,0xcd,0x00,0x09,0xe8,0x98,0x27,0xa2,0x69,0x88,0xf4,0x9e,0x80,
+    0x98,0x87,0xa9,0x84,0x60,0xd4,0xc0,0x11,0x89,0x82,0x6d,0x41,0x89,0x91,0x82,0x69,0x9a,0x4c,0x11,0x89,
+    0x84,0xd3,0x09,0x80,0x10,0xc4,0x0d,0x34,0xd1,0x88,0xcd,0x41,0x80,0x03,0x44,0xf4,0xe7,0x4a,0xc2,0x09,
+    0x69,0x7a,0x08,0x44,0x84,0x21,0x49,0x97,0x41,0x08,0x4c,0x02,0x62,0x13,0x20,0x99,0x84,0xd0,0x26,0xa1,
+    0x36,0x0f,0x04,0x3c,0x20,0x9b,0x84,0xe0,0x3c,0x30,0x8a,0x09,0xc8,0x4e,0x82,0x76,0x13,0xc0,0x9e,0x84,
+    0xf8,0x27,0xe1,0x40,0x0a,0x08,0x50,0x83,0xc4,0x0a,0x18,0x51,0x02,0x8a,0x14,0x60,0xa3,0x85,0x20,0x2f,
+    0x94,0xa0,0x89,0x08,0x42,0x10,0x84,0x21,0x5a,0x00,0x46,0x80,0x29,0x21,0x4d,0x0a,0x70,0x53,0xc2,0xa0,
+    0x15,0x10,0xa9,0x05,0x4c,0x3c,0x50,0xaa,0x07,0x8c,0x15,0x50,0xab,0x05,0x5c,0x2b,0x01,0x59,0x0a,0xd0,
+    0x61,0x80,0x15,0xc0,0x9d,0x87,0x8e,0x1e,0x40,0x57,0x42,0xbc,0x11,0x61,0x5f,0x0b,0x00,0x58,0x42,0xc4,
+    0x16,0x30,0xb2,0x05,0x94,0x2c,0xc1,0x67,0x0b,0x40,0x5a,0x43,0xc9,0x08,0xc0,0xb5,0x05,0xac,0x3c,0xa0,
+    0xb6,0x05,0xb4,0x2d,0xc1,0x6f,0x0b,0x80,0x79,0x61,0x1a,0x1e,0x60,0x02,0xe4,0x15,0x60,0xbb,0x00,0x2e,
+    0x50,0xdc,0x4c,0x07,0x9a,0x11,0x08,0x2e,0x81,0x5b,0x84,0x21,0x08,0x42,0x10,0x8f,0xbb,0x07,0x9c,0x11,
+    0x00,0x1e,0x78,0x4d,0x42,0x38,0x2e,0xe1,0xe8,0x04,0x74,0x78,0x4d,0x02,0xf0,0x17,0x90,0xbd,0x05,0xec,
+    0x30,0x60,0x0c,0x20,0x03,0xd1,0x0b,0xf0,0x44,0x00,0x5f,0xc2,0x30,0x30,0x01,0xe9,0x07,0xa6,0x1e,0xa0,
+    0x48,0x07,0xaa,0x18,0x10,0x91,0x00,0x60,0xc3,0x08,0x11,0x00,0x1e,0xb0,0x51,0x40,0x11,0x41,0x14,0x1e,
+    0xb8,0x61,0x43,0x0c,0x18,0x70,0x98,0x80,0x31,0x01,0x18,0x18,0x90,0x9f,0x00,0x24,0x42,0x70,0x1e,0xc0,
+    0x62,0x83,0x16,0x18,0xc0,0xc6,0x86,0x38,0x31,0xe1,0x90,0x0c,0x88,0x64,0x83,0xd9,0x0f,0x68,0x32,0x61,
+    0x94,0x0c,0xa8,0x7b,0x61,0x96,0x0c,0xb8,0x66,0x03,0x32,0x19,0xa0,0xf7,0x03,0x36,0x12,0x41,0xee,0x87,
+    0xbc,0x1e,0xf8,0x7c,0x01,0x9c,0x0c,0xe8,0x67,0x83,0xe1,0x0c,0xf8,0x68,0x03,0xe2,0x0f,0x8c,0x34,0x21,
+    0xa2,0x0d,0x18,0x69,0x03,0x4a,0x1f,0x20,0x69,0x83,0xe5,0x0d,0x38,0x6a,0x02,0x4c,0x35,0x21,0xf3,0x06,
+    0xa8,0x35,0x61,0xac,0x0d,0x68,0x6b,0x83,0xe7,0x0f,0xa0,0x35,0xe1,0xb0,0x0d,0x88,0x7d,0x21,0xb2,0x0d,
+    0x98,0x6d,0x03,0x6a,0x1f,0x50,0x6d,0x83,0xeb,0x0d,0xb8,0x5e,0x77,0x01,0x20,0x1b,0x90,0xdd,0x07,0xd8,
+    0x1b,0xb0,0xde,0x06,0xf4,0x37,0xc1,0xbf,0x0e,0x00,0x70,0x43,0x84,0x1c,0x30,0xe2,0x07,0xda,0x1f,0x70,
+    0x7d,0xe1,0xc5,0x0e,0x30,0x71,0xc3,0xf0,0x0f,0xc4,0x3f,0x20,0xfc,0xc3,0xf4,0x0e,0x40,0x7e,0xa1,0xc9,
+    0x0f,0xd8,0x39,0x41,0xfb,0x87,0xf0,0x1c,0xb0,0xe6,0x07,0x34,0x3f,0x90,0xfe,0x83,0x9c,0x1c,0xf0,0x92,
+    0x94,0x09,0x40,0xfe,0xc3,0xfc,0x0f,0xf4,0x3f,0xe0,0xe8,0x07,0x44,0x3a,0x41,0xd3,0x0e,0xa0,0x75,0x43,
+    0xac,0x1d,0x70,0xec,0x07,0x64,0x3b,0x41,0xdb,0x0e,0xe0,0x4a,0x84,0x5c,0x20,0x9e,0x43,0xba,0x12,0x61,
+    0xde,0x0f,0xfc,0x25,0x83,0xbe,0x2e,0xe4,0x8a,0x70,0xa1,0x21,0xee,0xaf,0x1c,0x16,
+};
+static const unsigned char kXzFixture[] = {
+    0xfd,0x37,0x7a,0x58,0x5a,0x00,0x00,0x04,0xe6,0xd6,0xb4,0x46,0x02,0x00,0x21,0x01,0x16,0x00,0x00,0x00,
+    0x74,0x2f,0xe5,0xa3,0xe0,0x3f,0xff,0x01,0x36,0x5d,0x00,0x2a,0x15,0xc6,0x6c,0x0d,0x7a,0x3e,0xbc,0x10,
+    0xfa,0x6e,0xa9,0x25,0xa9,0x64,0x66,0x6c,0x4e,0xf6,0xf0,0x19,0x04,0xa0,0x11,0xf6,0x76,0xcc,0x1b,0xcf,
+    0x25,0xdb,0x5d,0x8e,0x10,0xa6,0x52,0x3d,0x2b,0x48,0x51,0x47,0x37,0x48,0x2f,0xcc,0x85,0x68,0xd3,0xf0,
+    0x7e,0xb9,0xa5,0xae,0xce,0xd0,0xdb,0x99,0x03,0x96,0xc4,0xfe,0xc4,0xf6,0xd3,0x4c,0x62,0xec,0x98,0x51,
+    0x0d,0x76,0x69,0x2c,0x60,0xa4,0x4a,0xe1,0x7c,0x2b,0x96,0x9c,0x91,0xe3,0x06,0xdf,0x0d,0x2f,0x58,0xea,
+    0xe5,0x90,0xce,0x13,0xdf,0x7d,0x29,0xff,0x7a,0x60,0x57,0x8c,0xec,0x05,0xc7,0x52,0xdf,0xe0,0xd9,0x1b,
+    0xfb,0x41,0xa7,0xa0,0xee,0x70,0x7f,0xe4,0xbf,0x93,0xbc,0x1e,0x48,0x00,0x7c,0x39,0xa5,0xf1,0x7a,0xfc,
+    0x9e,0x8f,0xf4,0x49,0x35,0x21,0x1b,0x25,0x35,0x4f,0xf8,0x67,0xaf,0xfd,0x33,0xed,0x12,0x28,0x5c,0x0c,
+    0xcf,0x63,0x2c,0x19,0x27,0xf8,0x9e,0x0a,0x12,0x47,0x5a,0x6c,0xd3,0xfa,0x67,0x23,0xc4,0x3b,0x10,0x7c,
+    0x39,0x76,0xfa,0xbb,0x70,0x73,0xfa,0xf2,0x7d,0x28,0x9c,0x31,0x4b,0xe9,0x0f,0x53,0x29,0x60,0x8f,0xc9,
+    0x98,0xff,0x70,0x1f,0xf5,0xbd,0x99,0xbf,0xbb,0xd3,0xe2,0x2a,0x9a,0xd2,0x9d,0x87,0x9a,0x16,0xa7,0x6f,
+    0xac,0xcf,0x51,0x85,0x2f,0x89,0x1b,0x32,0x1f,0x9a,0x90,0xcc,0x12,0xe0,0x8e,0x34,0x02,0xb5,0xbf,0x5f,
+    0x2a,0x9f,0xee,0x5c,0xdf,0x30,0x96,0x46,0xac,0x64,0x6e,0x05,0xfd,0x52,0xbb,0xf4,0x34,0x27,0xc1,0xb6,
+    0x87,0xa7,0x1d,0xf4,0x1d,0xcb,0x3c,0xae,0x06,0x38,0x2d,0x57,0x24,0x9d,0x56,0x80,0x55,0x28,0x22,0x64,
+    0x02,0x2b,0x00,0x87,0x82,0x32,0x7d,0xc4,0x4a,0x12,0x06,0xa7,0x53,0x93,0x46,0x23,0xf4,0xad,0x0f,0xa2,
+    0xb1,0xc8,0x86,0x06,0x09,0xaa,0xe5,0x0f,0x24,0x28,0x7c,0x2c,0xef,0xa1,0xa6,0x1f,0xef,0xb3,0xcf,0x08,
+    0x00,0x00,0x00,0x00,0x7f,0x2f,0x31,0x47,0x50,0xdd,0xd7,0x01,0x00,0x01,0xd2,0x02,0x80,0x80,0x01,0x00,
+    0x63,0xa6,0x14,0xf3,0xb1,0xc4,0x67,0xfb,0x02,0x00,0x00,0x00,0x00,0x04,0x59,0x5a,
+};
+
+// LZ4 frames made by the official lz4 library (1.9.4) from lz4Plain() / lz4Noise(3000):
+// linked 64 KiB blocks with block + content checksums; independent 256 KiB blocks with the content size;
+// incompressible data (an uncompressed block).
+static const unsigned char kLz4Linked[] = {
+    0x04,0x22,0x4d,0x18,0x54,0x40,0xae,0x1b,0x01,0x00,0x00,0xff,0x01,0x46,0x4d,0x52,0x52,0x45,0x20,0x6c,
+    0x7a,0x34,0x20,0x62,0x6c,0x6f,0x63,0x6b,0x20,0x10,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xd8,0x50,0x6c,0x6f,0x63,0x6b,0x20,0x19,0x25,0x1e,0x12,0x12,0x02,
+    0x00,0x00,0x0f,0x10,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0x64,0xff,0xf1,0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,
+    0x0d,0x0e,0x0f,0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,0x20,
+    0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,0x30,0x31,0x32,0x33,0x34,
+    0x35,0x36,0x37,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,
+    0x49,0x4a,0x4b,0x4c,0x4d,0x4e,0x4f,0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5a,0x5b,0x5c,
+    0x5d,0x5e,0x5f,0x60,0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68,0x69,0x6a,0x6b,0x6c,0x6d,0x6e,0x6f,0x70,
+    0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7a,0x7b,0x7c,0x7d,0x7e,0x7f,0x80,0x81,0x82,0x83,0x84,
+    0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0x8c,0x8d,0x8e,0x8f,0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,
+    0x99,0x9a,0x9b,0x9c,0x9d,0x9e,0x9f,0xa0,0xa1,0xa2,0xa3,0xa4,0xa5,0xa6,0xa7,0xa8,0xa9,0xaa,0xab,0xac,
+    0xad,0xae,0xaf,0xb0,0xb1,0xb2,0xb3,0xb4,0xb5,0xb6,0xb7,0xb8,0xb9,0xba,0xbb,0xbc,0xbd,0xbe,0xbf,0xc0,
+    0xc1,0xc2,0xc3,0xc4,0xc5,0xc6,0xc7,0xc8,0xc9,0xca,0xcb,0xcc,0xcd,0xce,0xcf,0xd0,0xd1,0xd2,0xd3,0xd4,
+    0xd5,0xd6,0xd7,0xd8,0xd9,0xda,0xdb,0xdc,0xdd,0xde,0xdf,0xe0,0xe1,0xe2,0xe3,0xe4,0xe5,0xe6,0xe7,0xe8,
+    0xe9,0xea,0xeb,0xec,0xed,0xee,0xef,0xf0,0xf1,0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,0xf8,0xf9,0xfa,0xfb,0xfc,
+    0xfd,0xfe,0xff,0x00,0x01,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x2d,0x0f,0x01,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0x30,0x50,0x00,0x00,0x00,0x00,0x00,0xf4,0x7b,0x2c,0x44,0x5d,0x00,0x00,0x00,
+    0x0f,0x01,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0x7b,0x50,0x00,0x00,0x00,0x00,0x00,0xe6,0xb9,0xe5,0xb3,0x00,0x00,0x00,
+    0x00,0x33,0x34,0x7a,0x54,
+};
+static const unsigned char kLz4Independent[] = {
+    0x04,0x22,0x4d,0x18,0x68,0x50,0x40,0x53,0x02,0x00,0x00,0x00,0x00,0x00,0xd0,0x77,0x03,0x00,0x00,0xff,
+    0x01,0x46,0x4d,0x52,0x52,0x45,0x20,0x6c,0x7a,0x34,0x20,0x62,0x6c,0x6f,0x63,0x6b,0x20,0x10,0x00,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x55,0xff,0xf1,0x00,0x01,
+    0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x11,0x12,0x13,0x14,0x15,
+    0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,
+    0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3a,0x3b,0x3c,0x3d,
+    0x3e,0x3f,0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4a,0x4b,0x4c,0x4d,0x4e,0x4f,0x50,0x51,
+    0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5a,0x5b,0x5c,0x5d,0x5e,0x5f,0x60,0x61,0x62,0x63,0x64,0x65,
+    0x66,0x67,0x68,0x69,0x6a,0x6b,0x6c,0x6d,0x6e,0x6f,0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,
+    0x7a,0x7b,0x7c,0x7d,0x7e,0x7f,0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0x8c,0x8d,
+    0x8e,0x8f,0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9a,0x9b,0x9c,0x9d,0x9e,0x9f,0xa0,0xa1,
+    0xa2,0xa3,0xa4,0xa5,0xa6,0xa7,0xa8,0xa9,0xaa,0xab,0xac,0xad,0xae,0xaf,0xb0,0xb1,0xb2,0xb3,0xb4,0xb5,
+    0xb6,0xb7,0xb8,0xb9,0xba,0xbb,0xbc,0xbd,0xbe,0xbf,0xc0,0xc1,0xc2,0xc3,0xc4,0xc5,0xc6,0xc7,0xc8,0xc9,
+    0xca,0xcb,0xcc,0xcd,0xce,0xcf,0xd0,0xd1,0xd2,0xd3,0xd4,0xd5,0xd6,0xd7,0xd8,0xd9,0xda,0xdb,0xdc,0xdd,
+    0xde,0xdf,0xe0,0xe1,0xe2,0xe3,0xe4,0xe5,0xe6,0xe7,0xe8,0xe9,0xea,0xeb,0xec,0xed,0xee,0xef,0xf0,0xf1,
+    0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,0xf8,0xf9,0xfa,0xfb,0xfc,0xfd,0xfe,0xff,0x00,0x01,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x2d,
+    0x0f,0x01,0x00,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xc3,
+    0x50,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+};
+static const unsigned char kLz4Raw[] = {
+    0x04,0x22,0x4d,0x18,0x6c,0x40,0xb8,0x0b,0x00,0x00,0x00,0x00,0x00,0x00,0xe8,0xb8,0x0b,0x00,0x80,0xdc,
+    0x04,0x65,0xaa,0x1f,0xad,0x1d,0x5a,0xda,0xe5,0xac,0x1b,0x1e,0x5f,0x13,0x70,0x79,0x6c,0xfd,0x10,0xff,
+    0x19,0xaf,0x60,0x1d,0x04,0xac,0xb4,0x1d,0x02,0x2b,0x46,0x78,0x73,0x3a,0xf2,0xdf,0x5f,0xae,0xb7,0x08,
+    0x59,0xd1,0xee,0x39,0x10,0xcb,0x48,0x95,0xb5,0xcc,0x89,0x29,0x11,0xff,0x06,0xb6,0x62,0x2e,0xdf,0x3c,
+    0xf9,0x35,0xfd,0x4b,0x94,0x28,0xca,0x09,0x7c,0x44,0xb3,0x02,0x5e,0x96,0x5f,0xb3,0xea,0x6d,0xac,0xd4,
+    0x2d,0x81,0x6e,0x69,0xaf,0xe0,0xe6,0x87,0x4c,0x9c,0x04,0xe7,0xd2,0x36,0x5d,0x2c,0x60,0xc9,0xea,0xf4,
+    0x79,0xf6,0x86,0xa0,0xeb,0x93,0x26,0xe4,0x62,0x12,0xd5,0x0d,0xcb,0xb3,0x77,0x15,0x6a,0x6a,0x3a,0x68,
+    0xba,0x8e,0xdb,0x74,0x08,0x46,0x9e,0xf3,0xce,0xb3,0x0a,0xf8,0xd0,0xdd,0x68,0xbb,0xf8,0x5f,0xfa,0x24,
+    0xf2,0xd2,0xfc,0x18,0x87,0xfb,0x5c,0x87,0xba,0xb4,0x38,0x32,0xa5,0x9b,0x1b,0x3d,0x10,0x7c,0xf7,0x78,
+    0xd6,0x7f,0xe2,0x6d,0xf8,0x11,0x91,0x29,0x7e,0x93,0x95,0xcb,0x12,0xc5,0x57,0xce,0x5a,0xf1,0xd4,0x16,
+    0x18,0xd7,0x19,0xbc,0x04,0x5b,0x7e,0x99,0x65,0xf1,0xa2,0x94,0x71,0xc4,0x2a,0xac,0x6a,0xa9,0x38,0xc4,
+    0x75,0xc7,0xad,0x32,0x38,0x02,0x1f,0x05,0x3b,0x2c,0x99,0x1a,0xfc,0xeb,0x15,0xde,0xcf,0x68,0xba,0xe0,
+    0x7c,0xbc,0xd6,0x1e,0x97,0x1b,0x9a,0x0b,0x9d,0xbe,0x97,0x63,0xd3,0x92,0xfc,0xaf,0xdf,0xa2,0x8c,0x97,
+    0x23,0x45,0x62,0xeb,0xdd,0x07,0x65,0x70,0xff,0x58,0x89,0x6a,0xcf,0xf7,0xca,0xee,0x3f,0x1c,0xe9,0xe4,
+    0x0a,0x68,0xe5,0xde,0x93,0x8d,0x38,0x9c,0x7d,0xbd,0xd7,0x5b,0x09,0xd4,0xe7,0xe2,0x33,0x44,0x3f,0x4a,
+    0x8c,0xc4,0xa1,0x90,0xd6,0xb8,0xb8,0xdc,0x61,0x5f,0xd1,0x8e,0x28,0xbe,0x59,0x0e,0xaa,0x50,0x1b,0x50,
+    0x8a,0x6a,0x36,0x29,0xe6,0x70,0xdf,0x55,0x77,0xba,0xdc,0x44,0x6d,0x43,0xbb,0xa9,0x08,0x17,0xd6,0xc0,
+    0xf6,0x7b,0x08,0x61,0x70,0xd9,0x2d,0xc9,0x12,0x72,0x5b,0x24,0x7e,0xc2,0xe2,0xda,0xb1,0xb2,0x04,0x9e,
+    0x20,0x80,0x74,0x37,0x9a,0x6f,0x90,0x0c,0xdd,0x2e,0x5e,0x72,0xf5,0x09,0x48,0xb6,0x58,0xd1,0x97,0xe9,
+    0xc3,0x8c,0xb1,0x6e,0xd3,0xdd,0x12,0x44,0x62,0x32,0x0c,0x14,0xa7,0xaf,0x3f,0xfa,0x0c,0xde,0xd6,0x13,
+    0xce,0x13,0x86,0xcb,0x57,0xa0,0x47,0xe4,0x5b,0xbe,0xd1,0x45,0xb4,0x36,0xd5,0x88,0xfe,0xd2,0x00,0x41,
+    0xf2,0x87,0xb1,0x0f,0x83,0x5f,0x74,0x65,0xba,0x28,0x46,0x16,0x52,0xdf,0x88,0xa2,0x13,0xd9,0xbf,0x42,
+    0xef,0xb7,0x11,0xb5,0xde,0x07,0x7f,0xc9,0x79,0xba,0xe3,0xa8,0x58,0x4a,0xa9,0xe8,0x2d,0xa8,0x4d,0x50,
+    0x9d,0xe6,0x98,0x6b,0xe2,0xa9,0x9a,0xcf,0x21,0x4c,0x66,0x2a,0x8c,0xd5,0x90,0x11,0x37,0x98,0x67,0x89,
+    0xbb,0xad,0xf3,0x51,0x8d,0x13,0xad,0xf5,0x1c,0xa1,0x01,0x94,0xac,0xb0,0x84,0x6c,0xf5,0x8a,0xf5,0x2a,
+    0x7a,0x91,0xf5,0xf3,0xab,0x2f,0x86,0x32,0xba,0x81,0x45,0x20,0x3d,0xc3,0x67,0x14,0x88,0x7a,0x75,0x90,
+    0xc8,0x63,0xc7,0x07,0xe0,0x1e,0xc2,0x70,0x03,0x9a,0xd1,0x8b,0x16,0x3f,0x24,0xf6,0xc3,0xde,0x2b,0xef,
+    0x5d,0x5a,0xd1,0xe6,0x76,0x13,0x79,0xca,0x42,0x16,0xb9,0x10,0xaa,0x05,0xd9,0x83,0x30,0xc7,0x0a,0xcf,
+    0x85,0xf0,0x66,0xcb,0xec,0xef,0xac,0x89,0x4c,0xfa,0xb7,0x1f,0x18,0xba,0xc3,0x34,0xdf,0xb6,0x60,0x4a,
+    0xb2,0x80,0x32,0xcd,0x39,0xa1,0x6e,0xdf,0x94,0x44,0x14,0xe1,0xf3,0xa6,0xec,0xc1,0xf4,0x39,0x43,0x06,
+    0xc0,0x9b,0x62,0x9d,0xe3,0x3a,0xd3,0x61,0xef,0xc3,0x53,0x6b,0xd0,0x4f,0x96,0x1f,0xee,0x4d,0xbd,0xf3,
+    0x05,0x2d,0x97,0xfe,0xc4,0xd1,0x9b,0x45,0x27,0xb4,0xa2,0xc4,0x94,0xd8,0x64,0x3e,0xb8,0x71,0xb9,0xc4,
+    0x1f,0x53,0x8b,0x08,0x95,0x1c,0x9e,0x5f,0x40,0x21,0xff,0x97,0x7a,0x1a,0x4d,0x7f,0x70,0x8c,0xab,0x2f,
+    0x7c,0xfa,0x80,0x1b,0x42,0xca,0xf5,0xdb,0x8c,0xf9,0x2c,0xb8,0xe6,0x7e,0x41,0xf6,0xf9,0x7f,0x01,0xe4,
+    0xa8,0x36,0x6d,0xa4,0xec,0xa2,0xed,0xba,0x70,0xed,0x54,0x57,0xeb,0xa0,0x97,0x63,0x41,0x89,0x4d,0x4d,
+    0x59,0x68,0xe6,0x92,0xbc,0x5c,0xab,0x0e,0xf3,0x10,0x79,0x06,0x9d,0xa5,0x3d,0xf1,0x52,0x5d,0x2e,0x09,
+    0x3b,0x0d,0xce,0x96,0x6d,0x41,0x9e,0xf5,0x0a,0x2c,0xa4,0x6b,0x16,0x56,0x9d,0xac,0x1a,0x04,0x02,0x29,
+    0x7b,0x66,0xbd,0x1d,0x97,0x83,0xa8,0x56,0xa5,0xe5,0xca,0xc3,0x49,0x04,0x50,0xc2,0xfa,0x73,0x4d,0x28,
+    0x14,0xcc,0x31,0x0d,0xbc,0x5d,0x0b,0x5c,0x78,0x8f,0x7e,0x1e,0x8a,0x1a,0x85,0x81,0x0f,0xeb,0xe6,0xab,
+    0xdc,0xd0,0x77,0x41,0x14,0xe9,0x14,0xb5,0x89,0xcf,0x5c,0x53,0xd8,0x81,0x2e,0x0b,0x43,0x13,0xe6,0xfc,
+    0x4c,0x15,0x57,0xc5,0x17,0xc4,0x88,0x8a,0x7d,0xf3,0x2f,0xc8,0xef,0xb7,0xef,0xd9,0x11,0xd5,0x50,0x46,
+    0x12,0xec,0x82,0xd0,0xcd,0x62,0xd1,0x3d,0xa1,0x10,0xe8,0xe3,0x11,0xad,0xc6,0xf6,0x1a,0xfb,0x80,0x91,
+    0x58,0xb3,0xbb,0x85,0xd7,0x31,0xe8,0xe5,0xba,0xe0,0x3e,0x4e,0x8e,0x63,0x79,0xf7,0x6b,0x89,0x54,0x7c,
+    0xd0,0xee,0xc7,0x6a,0x3c,0x70,0x00,0x89,0x8c,0x58,0x23,0xed,0x18,0x45,0xc2,0xbb,0x8c,0xd8,0x1b,0xbc,
+    0x86,0x21,0x14,0xa3,0xf4,0xcc,0xf7,0x1e,0x2b,0x0b,0xed,0x9f,0xc8,0x43,0x3c,0xe7,0x47,0x76,0x40,0x57,
+    0x65,0x73,0x2b,0xf6,0x35,0xbf,0x7c,0x41,0x04,0x42,0x40,0xb6,0xee,0xb1,0x0c,0x1f,0x3d,0xbf,0xb6,0x9f,
+    0x85,0x03,0xd6,0x7d,0x80,0xa7,0xff,0xb4,0xaa,0xd6,0xbd,0x36,0x9c,0xe3,0x4e,0x04,0x29,0x3a,0x21,0xef,
+    0x3a,0x07,0x10,0x2b,0x69,0xa8,0x5c,0x99,0x60,0xd3,0x6c,0xd1,0xf0,0x87,0x45,0xf1,0xf0,0xb4,0xc8,0x27,
+    0xdc,0xa9,0xaf,0x00,0x29,0x41,0x46,0x6f,0x69,0xcd,0xe9,0x9d,0x23,0xc0,0x41,0x74,0x70,0x1d,0x3d,0xe9,
+    0x56,0xa1,0xd2,0x0c,0xe4,0xb0,0x73,0xd0,0x11,0x00,0x4f,0x9b,0x55,0x07,0x4e,0x8c,0x05,0x25,0xc9,0x90,
+    0x6f,0x92,0x0b,0x24,0xb9,0x05,0x8c,0xe7,0x7a,0x29,0xe7,0xe7,0x15,0xc1,0xa1,0xa8,0xda,0x95,0x98,0xf3,
+    0xdb,0x24,0x4c,0x65,0x8e,0x08,0xd1,0xb3,0x27,0x27,0x90,0xbe,0xb3,0x9e,0xc1,0x5a,0xf4,0x6e,0xa9,0xde,
+    0x00,0xe4,0x93,0x6b,0x98,0xca,0x8f,0xfd,0x49,0x50,0xed,0x33,0x44,0xb7,0x77,0xde,0xfe,0xc3,0x72,0x4b,
+    0x88,0xde,0x53,0x51,0xab,0x0c,0x42,0x19,0xcb,0x92,0x4f,0xb0,0x79,0x66,0x77,0x4e,0xd5,0x55,0x55,0x64,
+    0xa9,0xf7,0xa8,0x67,0x47,0x53,0x88,0x5f,0x1e,0x51,0x67,0x2e,0x1f,0xe3,0xca,0xa1,0xd2,0xf2,0xc5,0x38,
+    0x36,0x0a,0x38,0xb5,0x5d,0xc6,0xcc,0x67,0xc4,0xfa,0xab,0x33,0x73,0xa2,0x02,0x67,0xd9,0x8d,0x37,0x3e,
+    0x65,0xc9,0xea,0x33,0xe4,0xcd,0xad,0x06,0x9e,0x69,0x84,0x8f,0x2e,0x6e,0x1b,0x46,0x25,0x1d,0xca,0x8e,
+    0x5e,0x50,0x49,0xc4,0x1f,0x6a,0x32,0x0b,0xf4,0x00,0x3c,0xd5,0x4c,0x44,0x31,0x32,0xd0,0x36,0xb4,0xd9,
+    0x87,0x89,0xb5,0xf7,0xab,0x56,0xb0,0xb9,0x48,0x82,0xa8,0x9b,0x9a,0xf0,0xe7,0x6e,0x24,0x67,0x72,0x2c,
+    0x90,0x42,0x4e,0x7c,0x4a,0xda,0x76,0x03,0xda,0xb4,0x97,0x70,0x05,0x69,0x91,0x46,0xa3,0x59,0xae,0x68,
+    0x3f,0x0f,0xa0,0x66,0x71,0x72,0x3d,0x8a,0xfa,0xb1,0xf9,0xa0,0xa4,0xec,0x27,0x89,0xd7,0xa3,0xef,0x7f,
+    0xfb,0xdf,0x0e,0x25,0x91,0x22,0x51,0x56,0x11,0x0f,0xcf,0xaa,0x81,0xda,0xe9,0xc8,0xda,0x6e,0x02,0x6e,
+    0x1a,0x5f,0xff,0x41,0x28,0x96,0x7d,0x55,0x6c,0xb6,0xd5,0x7c,0x2a,0x50,0xd1,0x4f,0xa3,0xcc,0x2b,0xfe,
+    0xea,0x12,0xc9,0xd7,0x87,0xfb,0xbb,0x97,0xcd,0x7b,0xf0,0x74,0xfb,0x8a,0xbc,0xe6,0x15,0xd7,0x0a,0x39,
+    0x80,0x2c,0x60,0xd4,0x60,0x9f,0x98,0x47,0xb2,0x7e,0x58,0x16,0x28,0xf8,0x56,0x47,0xc8,0x8b,0x4d,0xad,
+    0x43,0x32,0xbe,0xf3,0x16,0x4a,0x67,0x67,0x62,0x48,0x84,0x8c,0x8c,0x1d,0xc8,0x5e,0x94,0x64,0x1a,0x63,
+    0x36,0x51,0x10,0x76,0xc3,0x5a,0x2c,0x53,0xbc,0xa2,0xd9,0xe1,0x33,0x2a,0x23,0x43,0xe2,0xb7,0x3a,0x9d,
+    0x08,0x81,0xa5,0xa6,0x07,0xa0,0x45,0xf2,0xbf,0x36,0x11,0xfd,0xa8,0x5d,0x8b,0xf7,0xb2,0xcf,0x05,0x51,
+    0xdc,0x58,0x95,0x0c,0x96,0xfc,0xd9,0xbc,0xd7,0xe8,0x6b,0x5e,0xfe,0x19,0x23,0xdf,0x6a,0xce,0x0f,0x68,
+    0xd8,0xaf,0x33,0x6b,0x7f,0xba,0x01,0x6f,0xed,0xf1,0x97,0x9b,0xa0,0xc5,0xbb,0x04,0x63,0x40,0x97,0xb6,
+    0x6e,0xf5,0x34,0x84,0x3d,0xa9,0xb7,0x90,0x2c,0xbf,0x5e,0x99,0xd7,0x64,0x3a,0x07,0x34,0x7f,0xaa,0xb8,
+    0x6d,0x56,0x9b,0x88,0x7e,0x00,0x81,0xa3,0x93,0x8e,0x14,0x8a,0x1f,0xf8,0xcb,0xe6,0xbc,0xc9,0x19,0x10,
+    0xc6,0x8a,0x6a,0x5c,0xb5,0xf0,0xdc,0x29,0x3e,0xc4,0xbe,0xa9,0x29,0x96,0xc9,0x71,0xf1,0x21,0x20,0xbf,
+    0x1d,0x7d,0x09,0x8f,0x61,0x07,0x69,0x5c,0x73,0x10,0x01,0xb6,0xae,0x48,0x6b,0x89,0x6a,0xe9,0xd2,0x27,
+    0x16,0xa3,0x74,0x1a,0x1a,0x4a,0xd9,0xac,0x6e,0x42,0xd1,0x32,0xfa,0xa6,0x2f,0x1d,0xac,0x3b,0x46,0xbf,
+    0x5b,0x18,0x27,0xdc,0x5f,0x11,0x99,0xf8,0xec,0xe8,0xd5,0x5b,0x33,0x32,0x06,0xe4,0x37,0x0a,0x83,0x93,
+    0x6f,0x79,0xca,0xd4,0x21,0xa1,0x3c,0x8c,0x79,0xac,0x9b,0xe5,0x6c,0x76,0x43,0xda,0x4f,0xfc,0x2b,0x81,
+    0x35,0x84,0x9b,0x1b,0x0d,0x8a,0xab,0xdd,0x78,0x6e,0x7f,0x7c,0x6c,0xdf,0x44,0x7b,0x8a,0x05,0xe9,0x34,
+    0x3f,0x71,0x9e,0xa8,0x9c,0xc5,0x0d,0x06,0xf6,0x23,0x5b,0xfd,0x3d,0x56,0xdd,0xc1,0x1d,0xc3,0x9a,0xdf,
+    0xd6,0x0d,0x85,0xc1,0xdc,0x8b,0x77,0x01,0x2e,0x6b,0xee,0x6e,0x76,0xa3,0x88,0xdf,0xe6,0x9b,0x3d,0xba,
+    0xcd,0x9b,0x5f,0x42,0xfb,0xf6,0x53,0xa5,0xda,0xf4,0x0d,0xc1,0x49,0x81,0x4d,0xba,0x37,0x96,0x9b,0x3c,
+    0x04,0x6b,0x03,0x91,0x97,0x59,0x91,0x62,0x3f,0x91,0x8b,0x4c,0x4b,0x7f,0x71,0x2a,0x68,0xfc,0xb5,0x1d,
+    0xbd,0x36,0x3a,0x5b,0xc8,0x5f,0x8f,0xbd,0xf6,0x18,0xe8,0x06,0x05,0x9c,0xe0,0xf4,0x1a,0xad,0xf1,0x09,
+    0xa1,0x3e,0xaf,0x16,0xe8,0xe5,0xc7,0x8c,0x7b,0xff,0xbb,0x82,0x3d,0xa0,0x5b,0x86,0x4b,0x42,0x02,0x24,
+    0x90,0x29,0x96,0x37,0x28,0x97,0x3d,0xf2,0x76,0xb5,0xe0,0xac,0x04,0x3c,0x60,0x70,0x1d,0xe6,0x9b,0x40,
+    0x2c,0x98,0x1d,0x2d,0xd3,0x4c,0xa6,0x18,0xcb,0xc0,0x60,0x45,0x7e,0xe0,0xdd,0xa5,0x66,0xf4,0xd2,0xe0,
+    0x23,0x89,0x95,0x24,0x5f,0x21,0x58,0xb0,0x62,0x9a,0x23,0x1f,0x74,0x5e,0x93,0x75,0xf6,0x50,0x54,0xeb,
+    0x3f,0x72,0x5f,0x7a,0x37,0x56,0xf4,0x29,0xb6,0x4a,0x57,0x17,0x9a,0x43,0x4a,0x48,0xaa,0x85,0x4d,0x2f,
+    0x2e,0x18,0x98,0xff,0x4a,0xeb,0xd5,0xb2,0x1e,0xc4,0x9e,0xd6,0x9f,0xef,0xb9,0x1a,0x34,0xa3,0x15,0x9c,
+    0x10,0x32,0x83,0xf0,0x52,0xf9,0x36,0xf0,0xde,0x02,0xf9,0x46,0xf9,0x79,0x32,0xba,0xa7,0xd5,0x9a,0x3c,
+    0xc4,0xc2,0xba,0xb1,0xe5,0xd0,0x24,0x7e,0xec,0xde,0x77,0xd5,0x6d,0x44,0x10,0xc2,0xc4,0xc3,0x90,0xf4,
+    0xf2,0x2e,0x12,0x4c,0x3c,0xd5,0x29,0x27,0x82,0xb4,0x9c,0x6c,0x60,0x60,0xe1,0x54,0x06,0xad,0x5a,0xfc,
+    0xd7,0x20,0x51,0xac,0xc4,0x18,0xb5,0xe5,0x67,0xbb,0x92,0x2c,0xdf,0xa1,0x52,0x99,0x6e,0x43,0xb5,0x1e,
+    0xd4,0x22,0x92,0x98,0x69,0xb7,0x4b,0x98,0xfc,0x1e,0x11,0xee,0x6e,0x81,0xdd,0xf9,0x0e,0x45,0x29,0xb1,
+    0xb3,0xf7,0x72,0x71,0x9c,0xf5,0x6f,0x85,0x08,0xdc,0x0e,0x78,0x94,0xb5,0x33,0x1a,0x57,0xde,0x30,0x53,
+    0xbe,0xba,0x02,0xab,0x29,0x18,0x51,0x95,0x42,0x64,0x26,0x7f,0x21,0x90,0x6a,0x9a,0x22,0xc0,0x22,0x69,
+    0x81,0xb8,0x6c,0x0b,0xba,0x06,0x39,0x49,0xa2,0xee,0xc8,0x5f,0x45,0x1a,0xe6,0x8b,0x7f,0xfe,0xe7,0x56,
+    0x59,0x0d,0x62,0xa5,0x29,0x9d,0xb0,0x7f,0x68,0x9a,0x23,0x9c,0x51,0xee,0x07,0xb1,0x3f,0xac,0x5a,0x7d,
+    0xc4,0xff,0x4a,0x93,0x88,0xd5,0x73,0xe6,0xe8,0x4b,0xd5,0x16,0x4a,0xd7,0x97,0x7d,0x42,0x37,0x7d,0xf8,
+    0x66,0x1d,0x2a,0x75,0xf1,0x97,0x17,0x41,0x1a,0x40,0x4f,0x0f,0x32,0x29,0xf0,0xc7,0x80,0x85,0x62,0x15,
+    0xdc,0x16,0x54,0xac,0x0e,0x5b,0x7b,0x5e,0xe4,0x76,0x0a,0xdd,0x15,0xdf,0xf0,0x4e,0xd9,0xcb,0xd4,0x93,
+    0x44,0x5a,0xd1,0x55,0x66,0x83,0xf1,0xd4,0x24,0xbf,0x6b,0x6e,0xd5,0x78,0x9c,0xf1,0x9c,0x30,0xc7,0xa0,
+    0x88,0x72,0x8d,0x07,0x6c,0x79,0x2a,0x7f,0x7f,0xa1,0x75,0x7f,0xb4,0x91,0x96,0xa9,0xd8,0x26,0x84,0x90,
+    0x6d,0x1e,0x46,0x4b,0x48,0x89,0xe5,0xbb,0xec,0xf0,0x33,0x9b,0xa5,0x42,0x3f,0x4c,0x64,0x82,0x93,0x5e,
+    0x5e,0x33,0x34,0xde,0x63,0x7f,0x57,0x62,0xfe,0x29,0xe3,0xd5,0x52,0x38,0xab,0x03,0xaf,0x61,0x67,0xe4,
+    0xf7,0x31,0x77,0xa8,0xb3,0xff,0x58,0x86,0xf4,0x94,0xe2,0x45,0xeb,0x96,0x47,0x87,0x48,0xb9,0xcc,0xd8,
+    0x53,0xa6,0x45,0x7a,0xcb,0xa7,0x51,0xee,0x82,0x17,0x5a,0x42,0xb4,0x8b,0x4b,0x1e,0x2b,0xc0,0x10,0x8c,
+    0x15,0x44,0xcf,0x8a,0xa1,0xe5,0xe8,0x51,0x5b,0xda,0xad,0x64,0x4d,0xb2,0xe1,0x57,0xd1,0x00,0xf2,0x64,
+    0x37,0xc4,0xf6,0xaf,0x1c,0x98,0x67,0x55,0x85,0x9f,0x9f,0x37,0xbe,0x2d,0x12,0x87,0xf5,0x36,0x4d,0x17,
+    0x95,0x78,0xb2,0x5c,0x64,0x68,0xf0,0x45,0x5b,0xde,0x45,0xbe,0x49,0x7f,0x73,0x02,0x26,0xee,0x83,0xa5,
+    0x38,0xb2,0x3d,0x5d,0xe8,0xe5,0x62,0x94,0x61,0xa2,0xb0,0xae,0xee,0x2c,0x93,0x1a,0x10,0xde,0xab,0x1a,
+    0x62,0xd7,0x01,0x53,0x2d,0x61,0x09,0x14,0xcb,0x26,0x57,0x66,0xbc,0x11,0x21,0xd8,0x8a,0x05,0x79,0x07,
+    0x5d,0x41,0x47,0xef,0x5c,0x8e,0x08,0xf5,0xca,0x2d,0x48,0xb0,0xdd,0x84,0xe0,0x7b,0x5e,0x82,0xf0,0xbb,
+    0x02,0xd7,0x9b,0xf1,0x8a,0xd6,0x85,0x7e,0x9c,0x25,0x0e,0x39,0x5f,0x2a,0x4b,0xb3,0xda,0x35,0xc8,0x45,
+    0x0a,0x6d,0x00,0xde,0xc5,0x7c,0x99,0x8e,0x51,0xfa,0x60,0xd1,0xc3,0x9a,0x07,0x9c,0x19,0x17,0xa0,0x29,
+    0x17,0xdc,0xd8,0x83,0xe2,0x76,0xf4,0xd1,0x5d,0xba,0x8d,0x62,0x47,0xb6,0x0b,0x7c,0x11,0x58,0xe3,0xe4,
+    0x80,0xe0,0x90,0x2d,0x07,0x07,0x52,0xc1,0xe2,0xec,0xa9,0xb1,0xf2,0xc3,0x90,0x3c,0x5c,0x3c,0x7a,0x21,
+    0xe0,0xb5,0x0e,0xa4,0xf9,0x1f,0xa1,0x62,0xb9,0xb0,0x77,0xd6,0x63,0x4d,0xba,0xa7,0xc6,0xb6,0x36,0xb7,
+    0x5c,0x6f,0xda,0xec,0x26,0x72,0xef,0xbc,0x45,0x96,0x15,0x7b,0x58,0xbd,0x02,0x64,0x99,0xc0,0xfa,0x69,
+    0xb6,0x1c,0x0e,0xba,0x71,0x59,0x14,0x17,0xf6,0x3e,0x6a,0xd6,0xff,0xb6,0x6a,0xb4,0xaa,0x80,0xab,0x5b,
+    0x15,0x9a,0xfd,0xb7,0xbf,0x6b,0x23,0xf9,0x9e,0xb3,0x4e,0x67,0x00,0x33,0x5e,0xea,0x22,0x1b,0xd8,0x56,
+    0x92,0x38,0xa5,0x77,0x44,0xda,0x90,0xdf,0x77,0x86,0x7d,0x72,0x45,0x61,0x6a,0xae,0x0d,0x57,0x27,0xbb,
+    0x81,0x0e,0xd5,0x36,0x8e,0x8e,0x20,0xbd,0xef,0xac,0x3c,0x3a,0x8f,0x3b,0xa1,0xf0,0xa3,0xf2,0x85,0x47,
+    0x84,0x1c,0x1d,0x58,0x4d,0x02,0x94,0x36,0x38,0x18,0xc8,0x02,0xb9,0xea,0xc7,0xad,0x58,0xc4,0x0c,0x8c,
+    0x4f,0x24,0x79,0x9d,0xe7,0xe1,0x14,0x9b,0x93,0x17,0x82,0xc3,0xc9,0xd9,0x44,0x64,0xa4,0x96,0xb3,0x29,
+    0x3b,0x47,0xbc,0x27,0xbf,0x5e,0x5c,0xa5,0x56,0x6f,0xda,0xad,0xbb,0x9b,0xc8,0x56,0x92,0xc0,0xb7,0xcf,
+    0x8c,0x61,0xbd,0x2c,0x3f,0x57,0xa8,0xf0,0xc2,0x35,0xff,0x5e,0x0c,0x7c,0xbc,0x80,0x0a,0x83,0xcc,0xf4,
+    0x82,0x25,0x42,0x7a,0xaa,0x28,0x5f,0x3d,0x87,0x70,0x42,0xe4,0x07,0xe8,0x6f,0x58,0xdd,0x2b,0x02,0x54,
+    0x20,0xf6,0xaf,0xae,0xa3,0x4f,0x81,0x67,0x12,0x71,0x4e,0x74,0xd1,0x7e,0xfc,0x49,0x94,0xe3,0x77,0x2b,
+    0xbe,0x8a,0x6e,0x33,0x7b,0xc3,0xd0,0x21,0x9c,0xf0,0x09,0xe6,0x35,0xf2,0xfd,0xef,0xf8,0x57,0xc1,0x33,
+    0x50,0x40,0x1c,0xfb,0x3d,0x14,0xc0,0x74,0xf2,0xe6,0x48,0xf6,0x30,0xa6,0xf1,0x12,0x60,0x0b,0x18,0x5e,
+    0x73,0x3c,0x77,0x00,0x7a,0x41,0x1f,0xfb,0x04,0x2d,0x35,0x3c,0x3b,0x07,0x6c,0x63,0xbe,0x7d,0x46,0x53,
+    0x3c,0x47,0x0a,0x78,0xd4,0x5c,0x84,0xdb,0x2f,0xd8,0x7f,0xe7,0x5b,0xa8,0x03,0xf8,0x66,0xfb,0x4f,0xa9,
+    0xbf,0x68,0x95,0xda,0x4c,0xdf,0x78,0x83,0x4a,0x51,0x46,0x3c,0xe9,0x1f,0xf5,0x88,0xa3,0x44,0xdf,0xe5,
+    0x60,0x41,0x3d,0x94,0x4b,0xcc,0x65,0x28,0x72,0x37,0xc3,0xd1,0x20,0xa1,0x99,0x66,0xfa,0xe0,0x76,0x34,
+    0xdc,0x2a,0x77,0x89,0x71,0x86,0x41,0xfe,0x94,0xf5,0xba,0x88,0x6a,0x5f,0x8a,0x3e,0x3c,0x3f,0x54,0xe7,
+    0x15,0x0e,0xb4,0x4b,0x1f,0x70,0xf9,0x36,0xbe,0x21,0x9f,0x4c,0x69,0x9e,0x93,0x90,0x4d,0x93,0x26,0xb3,
+    0xa0,0x07,0xcd,0x1c,0xc5,0x4a,0x9e,0xbb,0x24,0x9a,0x8a,0x8e,0xc7,0x97,0x5b,0xf0,0xb5,0x6d,0x6c,0xa4,
+    0x0f,0xbb,0x2c,0xa5,0xec,0x46,0x51,0xab,0xf4,0x5f,0xdb,0x7d,0xbe,0x14,0xcf,0xfa,0xea,0x19,0xb0,0xe5,
+    0xfe,0x74,0xbe,0x73,0x01,0xec,0xee,0x96,0xd9,0x2f,0xac,0x07,0x65,0xc6,0x53,0x16,0x5a,0xb9,0x68,0x31,
+    0xde,0x01,0x9a,0x36,0xe6,0xb2,0x7a,0x78,0x50,0xe5,0xfa,0x93,0xc0,0x67,0xa7,0xf0,0x3b,0x23,0xa6,0x17,
+    0x84,0x4f,0x70,0xb8,0x39,0x59,0x4d,0x77,0xad,0x90,0x92,0x7b,0x84,0x93,0x9a,0xb5,0x11,0x7a,0x85,0xf0,
+    0x70,0xc6,0xb3,0x9d,0x62,0x09,0xfe,0x5c,0xeb,0x54,0xbb,0x4a,0xad,0x65,0x70,0x0d,0x03,0x8d,0x52,0xa0,
+    0xdd,0x63,0x85,0xdf,0x5e,0x2b,0x12,0xd2,0x37,0x03,0xa7,0xb9,0xc1,0xd3,0x12,0xdc,0xdd,0xf2,0x7c,0x0f,
+    0x8b,0x99,0x65,0x07,0x4d,0x08,0x63,0x60,0x3a,0x7a,0x9a,0x6a,0xe1,0xca,0xfa,0xb7,0xe3,0xe1,0x3c,0x65,
+    0x4e,0xe7,0x9a,0x2c,0xbb,0x25,0x51,0x26,0x28,0xbc,0xd7,0x61,0x93,0x08,0xdc,0x26,0x5b,0xd1,0x03,0x08,
+    0x56,0x37,0x5d,0xab,0xb1,0x5c,0xa9,0x5a,0x8b,0xcf,0x4e,0x46,0x51,0xbb,0x14,0x9f,0xd7,0xd4,0xa6,0x55,
+    0x3b,0xfd,0xc8,0xab,0x7a,0xb9,0x58,0x80,0xcf,0x58,0x06,0x5d,0xcf,0xde,0xd3,0x3d,0x46,0xb2,0x4b,0x20,
+    0xcf,0x0b,0x81,0x4e,0x35,0x1a,0xcf,0x6c,0x8d,0xf7,0x4a,0x40,0x0f,0x4e,0x08,0x43,0xb9,0xc6,0x11,0xec,
+    0xa2,0x34,0x26,0xb7,0x1f,0x84,0x34,0xf7,0x97,0x63,0x96,0x61,0x26,0xae,0x0e,0x54,0xf4,0x9a,0x81,0xe9,
+    0x54,0xa8,0x76,0xbf,0x9c,0x46,0x4d,0x83,0xc7,0x45,0x3f,0x42,0xcb,0xff,0x19,0x6e,0xbb,0x44,0xb8,0x00,
+    0x00,0x00,0x00,0x3f,0x06,0xe5,0x58,
+};
 
 static int g_fail = 0;
 #define CHECK(cond)                                                       \
@@ -38,8 +398,29 @@ static bool runTask(const std::string& name, Task::Fn fn) {
 }
 
 static void testSha() {
+    printf("SHA-256 backend: %s\n", Sha256::backend());
     CHECK(Sha256::hexOf("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     CHECK(Sha256::hexOf("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(Sha256::hexOf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    // The hardware path (ARMv8 / Intel SHA) must agree with the portable one for every length and split.
+    std::string data(70000, '\0');
+    uint32_t x = 12345;
+    for (auto& ch : data) { x = x * 1103515245 + 12345; ch = char(x >> 16); }
+    for (size_t len : {0, 1, 55, 56, 63, 64, 65, 127, 128, 1000, 4096, 65536, 70000})
+        for (size_t split : {0, 1, 63, 64, 100}) {
+            auto run = [&](bool soft) {
+                Sha256::forceSoftware(soft);
+                Sha256 h;
+                size_t a = std::min(split, len);
+                h.update(data.data(), a);
+                h.update(data.data() + a, len - a);
+                return h.hexDigest();
+            };
+            std::string hw = run(false), sw = run(true);
+            CHECK(hw == sw);
+        }
+    Sha256::forceSoftware(false);
 }
 
 static void testInstaller(const std::string& dir) {
@@ -154,16 +535,1826 @@ static void testBackupRestore(const std::string& dir) {
     util::writeFile(f, data);
     CHECK(!runTask("verify-bad", [&](Task& t) { return backup::verify(sets[0], t); }));
     CHECK(!runTask("restore-bad", [&](Task& t) { return backup::restore(sets[0], {"data"}, true, t); }));
+
+    // Encrypted backup: AES-256-CTR + HMAC, the password checked before anything is wiped.
+    backup::Options e = o;
+    e.name = "selftest-enc";
+    e.password = "c0rrect horse";
+    CHECK(runTask("backup-enc", [&](Task& t) { return backup::create(e, t); }));
+    backup::Set es;
+    for (auto& x : backup::list())
+        if (x.name == "selftest-enc") es = x;
+    CHECK(es.items.size() == 2 && backup::encrypted(es));
+    for (auto& it : es.items) {
+        std::string raw;
+        util::readFile(es.path + "/" + it.file, raw);
+        CHECK(it.encrypted && util::endsWith(it.file, ".enc") && raw.compare(0, 8, "TWV2ENC1") == 0);
+        CHECK(raw.find("com.example.app") == std::string::npos);  // no plaintext (tar names) in the file
+    }
+    std::string perr;
+    CHECK(!backup::checkPassword(es, "wrong", perr) && perr.find("wrong password") != std::string::npos);
+    CHECK(backup::checkPassword(es, e.password, perr));
+    CHECK(runTask("verify-enc", [&](Task& t) { return backup::verify(es, t); }));  // SHA-256 needs no password
+    util::removeTree(root + "/data/data");
+    util::writeFile(root + "/dev/block/by-name/boot_a", std::string(bootBefore.size(), '\0'));
+    util::writeFile(root + "/data/media/0/keep.txt", "keep");
+    CHECK(!runTask("restore-enc-wrong", [&](Task& t) { return backup::restore(es, {"data", "boot"}, false, t, "nope"); }));
+    CHECK(util::exists(root + "/data/media/0/keep.txt"));  // nothing was wiped
+    CHECK(!runTask("restore-enc-none", [&](Task& t) { return backup::restore(es, {"boot"}, false, t); }));
+    CHECK(runTask("restore-enc", [&](Task& t) { return backup::restore(es, {"data", "boot"}, true, t, e.password); }));
+    after.clear();
+    CHECK(util::readFile(marker, after) && after == before);
+    bootAfter.clear();
+    util::readFile(root + "/dev/block/by-name/boot_a", bootAfter);
+    CHECK(bootAfter == bootBefore);
+    // Tampering with the ciphertext: the HMAC catches it even without the digest check.
+    for (auto& it : es.items)
+        if (it.part == "boot") {
+            std::string fe = es.path + "/" + it.file, d2;
+            util::readFile(fe, d2);
+            d2[d2.size() / 2] ^= 0x01;
+            util::writeFile(fe, d2);
+        }
+    CHECK(!runTask("restore-enc-tampered", [&](Task& t) { return backup::restore(es, {"boot"}, false, t, e.password); }));
+}
+
+// Samsung AP firmware packages (ustar + appended MD5): list the images, verify the checksum, extract one.
+static std::string ustarHeader(const std::string& name, uint64_t size) {
+    std::string h(512, '\0');
+    auto oct = [&](int off, int len, uint64_t v) {
+        char b[32];
+        snprintf(b, sizeof b, "%0*llo", len - 1, (unsigned long long)v);
+        memcpy(&h[off], b, len - 1);
+    };
+    memcpy(&h[0], name.data(), std::min<size_t>(name.size(), 100));
+    oct(100, 8, 0644);
+    oct(108, 8, 0);
+    oct(116, 8, 0);
+    oct(124, 12, size);
+    oct(136, 12, 0);
+    h[156] = '0';
+    memcpy(&h[257], "ustar", 5);
+    memcpy(&h[263], "00", 2);
+    memset(&h[148], ' ', 8);  // checksum field spaces while summing
+    unsigned sum = 0;
+    for (unsigned char ch : h) sum += ch;
+    char cs[8];
+    snprintf(cs, sizeof cs, "%06o", sum);
+    memcpy(&h[148], cs, 6);
+    h[154] = '\0';
+    return h;
+}
+static void tarAppend(std::string& tar, const std::string& name, const std::string& data) {
+    tar += ustarHeader(name, data.size());
+    tar += data;
+    if (data.size() % 512) tar.append(512 - data.size() % 512, '\0');
+}
+static std::string lz4Plain();  // further down, next to the other LZ4 tests
+
+static void testSamsungAp(const std::string& dir) {
+    std::string boot = "ANDROID!", recov(3000, 'R'), meta = "junk";  // entry payloads (content doesn't matter here)
+    for (int i = 0; i < 5000; i++) boot.push_back(char('a' + (i * 7 % 26)));
+    std::string tar;
+    tarAppend(tar, "boot.img.lz4", boot);
+    tarAppend(tar, "recovery.img", recov);
+    tarAppend(tar, "meta-data/fota.zip", meta);  // not a partition image: must be ignored
+    tarAppend(tar, "vbmeta.img.lz4", std::string(600, 'V'));
+    tar.append(1024, '\0');  // end of archive
+    Md5 hasher;
+    hasher.update(tar.data(), tar.size());
+    std::string hex = Sha256::toHex(hasher.digest());
+    std::string ap = dir + "/AP_test.tar.md5";
+    CHECK(util::writeFile(ap, tar + hex + "  AP_test.tar\n"));
+
+    samsung::Package pkg;
+    std::string err;
+    CHECK(samsung::read(ap, pkg, err));
+    CHECK(pkg.md5 == samsung::Md5State::Ok);
+    CHECK(pkg.images.size() == 3);  // boot, recovery, vbmeta - not the meta-data entry
+    CHECK(samsung::partitionFor("boot.img.lz4") == "boot" && samsung::partitionFor("vbmeta.img.lz4") == "vbmeta");
+    CHECK(samsung::partitionFor("recovery.img") == "recovery" && samsung::partitionFor("meta-data/fota.zip").empty());
+    bool foundBoot = false;
+    for (auto& im : pkg.images)
+        if (im.partition == "boot") {
+            foundBoot = im.lz4 && im.size == boot.size();
+            std::string out = dir + "/out-boot.img.lz4", got;
+            CHECK(runTask("ap-extract", [&](Task& t) { return samsung::extract(ap, im, out, t); }));
+            CHECK(util::readFile(out, got) && got == boot);  // the exact entry bytes, kept compressed
+            unlink(out.c_str());
+        }
+    CHECK(foundBoot);
+    // A damaged tar body: the MD5 no longer matches (caught before anything is flashed).
+    std::string bad = tar;
+    bad[600] ^= 0x40;
+    CHECK(util::writeFile(ap, bad + hex + "  AP_test.tar\n"));
+    CHECK(samsung::read(ap, pkg, err) && pkg.md5 == samsung::Md5State::Mismatch);
+    // A plain .tar with no appended checksum: still readable, md5 None.
+    CHECK(util::writeFile(dir + "/plain.tar", tar));
+    CHECK(samsung::read(dir + "/plain.tar", pkg, err) && pkg.md5 == samsung::Md5State::None && pkg.images.size() == 3);
+
+    // `ap-extract` (the S8 guide pulls the stock recovery out of the AP with it): a real LZ4 frame from the official
+    // library comes out decompressed next to the AP, "all" fills a folder, a missing partition is an error, and no
+    // temporary file is left behind.
+    std::string arc;
+    tarAppend(arc, "recovery.img.lz4", std::string((const char*)kLz4Linked, sizeof kLz4Linked));
+    tarAppend(arc, "boot.img", boot);
+    arc.append(1024, '\0');
+    Md5 h2;
+    h2.update(arc.data(), arc.size());
+    util::mkdirs(device::path("/tmp/apx/all"));
+    CHECK(util::writeFile(device::path("/tmp/apx/AP_x.tar.md5"), arc + Sha256::toHex(h2.digest()) + "  AP_x.tar\n"));
+    std::string got;
+    CHECK(runTask("ap-extract", [](Task& t) { return ors::run({"ap-extract /tmp/apx/AP_x.tar.md5 recovery"}, t); }));
+    CHECK(util::readFile(device::path("/tmp/apx/recovery.img"), got) && got == lz4Plain());
+    CHECK(runTask("ap-extract-all", [](Task& t) { return ors::run({"ap-extract /tmp/apx/AP_x.tar.md5 all /tmp/apx/all"}, t); }));
+    CHECK(util::readFile(device::path("/tmp/apx/all/boot.img"), got) && got == boot);
+    CHECK(util::readFile(device::path("/tmp/apx/all/recovery.img"), got) && got == lz4Plain());
+    CHECK(!runTask("ap-extract-none", [](Task& t) { return ors::run({"ap-extract /tmp/apx/AP_x.tar.md5 vendor"}, t); }));
+    CHECK(!util::exists(device::path("/tmp/apx/recovery.img.ap.tmp")) && !util::exists(device::path("/tmp/apx/all/boot.img.ap.tmp")));
+    util::removeTree(device::path("/tmp/apx"));
+}
+
+// A backup split into parts (for FAT32 cards): each .winNNN is a whole, independent archive; restore stitches them
+// back. Tested compressed+encrypted (parts are independent gzip + encryption streams) and plain.
+// Removable storage on a UFS phone (like the Galaxy S8): sda.. are the phone's own storage, the microSD is mmcblk0 and
+// a USB stick is an sd* disk behind the USB controller. Fstab lines that point at the wrong device (sda1 as "USB OTG",
+// mmcblk1 as the card) must never make FMRRE mount or format internal storage. Also: length= / =footer in fstabs.
+static void testRemovableSafety(const std::string& dir) {
+    std::string root = dir + "/ufs";
+    sim::ensureRoot(root);
+    device::init(true, root);
+    auto disk = [&](const std::string& name, const std::string& devPath) {
+        util::mkdirs(root + devPath);
+        util::mkdirs(root + "/sys/block");
+        CHECK(symlink((root + devPath).c_str(), (root + "/sys/block/" + name).c_str()) == 0);
+    };
+    disk("sda", "/sys/devices/platform/11120000.ufs/host0/target0:0:0/0:0:0:0/block/sda");
+    disk("sdg", "/sys/devices/platform/10c00000.usb/xhci-hcd/usb1/1-1/1-1:1.0/host1/target1:0:0/1:0:0:0/block/sdg");
+    util::mkdirs(root + "/sys/block/mmcblk0/device");
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "SD\n");
+    util::mkdirs(root + "/sys/block/mmcblk0boot0");
+    for (auto n : {"sda", "sda1", "sdg", "sdg1", "mmcblk0", "mmcblk0p1"}) util::writeFile(root + "/dev/block/" + n, "");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/sda1")) == "internal");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/sdg1")) == "usb");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/mmcblk0p1")) == "sd");
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/loop3")) == "unknown");
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "MMC\n");  // an eMMC phone: mmcblk0 is internal
+    CHECK(std::string(Partitions::diskKind(root + "/dev/block/mmcblk0p1")) == "internal");
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "SD\n");
+
+    // Wrong devices in the fstab (found via /system/etc/twrp.fstab, where the PC builder puts it on old ramdisks).
+    util::mkdirs(root + "/system/etc");
+    CHECK(util::writeFile(root + "/system/etc/twrp.fstab",
+                          "/data ext4 /dev/block/by-name/userdata flags=display=\"Data\";encryptable=footer;length=-20480\n"
+                          "/cache ext4 /dev/block/by-name/cache flags=encryptable=footer\n"
+                          "/usb_otg auto /dev/block/sda1 flags=display=\"USB OTG\";storage;removable\n"
+                          "/external_sd vfat /dev/block/mmcblk1p1 flags=display=\"MicroSD\";storage;removable\n"));
+    unlink((root + "/etc/recovery.fstab").c_str());
+    Partitions& P = Partitions::get();
+    P.load();
+    CHECK(util::endsWith(P.fstabPath(), "/system/etc/twrp.fstab"));
+    CHECK(P.find("/data") && P.find("/data")->length == -20480);  // explicit length wins over the footer default
+    CHECK(P.find("/cache") && P.find("/cache")->length == -16384);
+    P.rescanRemovable();
+    Partition* otg = P.find("/usb_otg");
+    Partition* sd = P.find("/external_sd");
+    CHECK(otg && otg->blockDev == root + "/dev/block/sdg1" && otg->present);
+    CHECK(sd && sd->blockDev == root + "/dev/block/mmcblk0p1" && sd->present);
+    // No USB stick plugged in: "USB OTG" must not fall back to the fstab's sda1 (internal).
+    unlink((root + "/sys/block/sdg").c_str());
+    P.load();
+    P.rescanRemovable();
+    otg = P.find("/usb_otg");
+    CHECK(otg && otg->blockDev.empty() && !otg->present);
+    // Even if a removable entry is forced onto internal storage, mount and format refuse it.
+    otg->blockDev = root + "/dev/block/sda1";
+    std::string err;
+    CHECK(!P.mount(*otg, &err) && err.find("own storage") != std::string::npos);
+    CHECK(!runTask("format-internal", [&](Task& t) { return P.format(*otg, t, "vfat"); }));
+
+    // AOSP-format fstab: voldmanaged storage is detected, never guessed; =footer reserves AOSP's 16 KiB.
+    unlink((root + "/system/etc/twrp.fstab").c_str());
+    util::writeFile(root + "/sys/block/mmcblk0/device/type", "SD\n");
+    CHECK(util::writeFile(root + "/etc/recovery.fstab",
+                          "/dev/block/by-name/userdata /data ext4 noatime wait,check,forceencrypt=footer\n"
+                          "/devices/platform/11500000.dwmmc2/mmc_host* auto auto defaults voldmanaged=sdcard:auto\n"
+                          "/devices/platform/10c00000.usb/usb* auto auto defaults voldmanaged=usb:auto\n"));
+    P.load();
+    CHECK(P.find("/data") && P.find("/data")->length == -16384);
+    CHECK(P.find("/usb_otg") && P.find("/usb_otg")->blockDev.empty());  // no USB disk now: nothing, not sda1
+    P.rescanRemovable();
+    CHECK(P.find("/external_sd") && P.find("/external_sd")->blockDev == root + "/dev/block/mmcblk0p1");
+    CHECK(P.find("/usb_otg") && !P.find("/usb_otg")->present);
+
+    // Samsung's by-name links are capitals: found whatever case is asked for.
+    util::writeFile(root + "/dev/block/by-name/RADIO", "");
+    CHECK(Partitions::byName("radio") == root + "/dev/block/by-name/RADIO");
+    CHECK(Partitions::byName("boot_a") == root + "/dev/block/by-name/boot_a" && Partitions::byName("nope").empty());
+
+    // The mkfs command keeps the footer free: 64 MiB partition, 20 KiB reserved.
+    Partition d;
+    d.blockDev = "/dev/block/sda30";
+    d.length = -20480;
+    uint64_t whole = 64ull << 20;
+    CHECK(Partitions::mkfsCommand(d, "ext4", whole, true) == "mke2fs -F -t ext4 -b 4096 '/dev/block/sda30' 16379");
+    CHECK(Partitions::mkfsCommand(d, "ext4", whole, false) == "make_ext4fs -l 67088384 '/dev/block/sda30'");
+    CHECK(Partitions::mkfsCommand(d, "f2fs", whole, true).find("'/dev/block/sda30' 131032") != std::string::npos);
+    d.length = 0;
+    CHECK(Partitions::mkfsCommand(d, "ext4", whole, true) == "mke2fs -F -t ext4 -b 4096 '/dev/block/sda30'");
+    CHECK(Partitions::mkfsCommand(d, "btrfs", whole, true).empty());
+
+    util::removeTree(root);
+    device::init(true, dir + "/sim");  // back to the shared sandbox for the tests that follow
+    P.load();
+}
+
+// A phone whose /data is encrypted as a whole (full-disk encryption: the Galaxy S8 era) - it can't be mounted here.
+// Nothing may then be written to the bare /data mount point (that is RAM): storage falls back to a card or RAM,
+// settings go to /cache, and a factory reset - which promises to keep internal storage - refuses instead of formatting.
+static void testEncryptedData(const std::string& dir) {
+    std::string root = dir + "/fde";
+    sim::ensureRoot(root);
+    device::init(true, root);
+    Partitions& P = Partitions::get();
+    P.unmountAll();
+    std::string noise(8192, '\0');
+    uint32_t seed = 99;
+    for (auto& ch : noise) { seed = seed * 1103515245 + 12345; ch = char(seed >> 16); }
+    std::string userdata = root + "/dev/block/by-name/userdata";
+    CHECK(util::writeFile(userdata, noise));
+    unlink((root + "/dev/block/mmcblk1p1").c_str());  // no microSD in the slot, for now
+    P.load();
+    Partition* data = P.find("/data");
+    std::string err;
+    CHECK(data && !P.mount(*data, &err) && P.dataEncrypted());
+    CHECK(P.storagePath() == root + "/tmp");  // no card in the slot: RAM, and said so - not /data
+    CHECK(P.configDir() == root + "/cache/fmrre");
+    bool listed = false;
+    for (auto* st : P.storages()) listed |= st->mountPoint == "/data";
+    CHECK(!listed);
+    // Factory reset refuses (it can't keep the files) and formats nothing.
+    CHECK(!runTask("reset-encrypted", [&](Task& t) { return P.wipe(*data, t); }));
+    std::string after;
+    CHECK(util::readFile(userdata, after) && after == noise);
+    // Wiping /cache keeps FMRRE's settings there.
+    util::writeFile(root + "/cache/fmrre/.fmrre.conf", "detail=0\n");
+    util::writeFile(root + "/cache/junk.bin", "x");
+    Partition* cache = P.find("/cache");
+    CHECK(cache && runTask("wipe-cache", [&](Task& t) { return P.wipe(*cache, t); }));
+    CHECK(util::exists(root + "/cache/fmrre/.fmrre.conf") && !util::exists(root + "/cache/junk.bin"));
+    // With a microSD present, backups and screenshots go there (and it is the storage picked at start).
+    util::writeFile(root + "/dev/block/mmcblk1p1", "");
+    P.unmountAll();
+    P.load();
+    CHECK(P.currentStorage() == "/external_sd" && P.storagePath() == root + "/external_sd");
+    CHECK(P.appDir() == root + "/external_sd/FMRRE" && P.configDir() == root + "/cache/fmrre");
+    // An erased partition (zeros) is not "encrypted": it mounts in the sandbox and a reset proceeds.
+    CHECK(util::writeFile(userdata, std::string(8192, '\0')));
+    P.unmountAll();
+    P.load();
+    data = P.find("/data");
+    CHECK(data && P.mount(*data) && !P.dataEncrypted());
+
+    util::removeTree(root);
+    device::init(true, dir + "/sim");  // back to the shared sandbox
+    P.unmountAll();
+    P.load();
+    P.mountAllStorage();
+    P.refresh();
+}
+
+// Logs without adb: the recovery log, the kernel log and what SELinux refused FMRRE are written where a person can
+// reach them - /cache/recovery (the stock recovery's log viewer), a card, readable internal storage.
+static void testLogSave(const std::string& dir) {
+    std::string root = dir + "/sim";
+    std::string avc = "audit: type=1400 audit(1.2:3): avc:  denied  { write } for  pid=311 comm=\"recovery\" name=\"brightness\" "
+                      "dev=\"sysfs\" ino=4711 scontext=u:r:recovery:s0 tcontext=u:object_r:sysfs_leds:s0 tclass=file permissive=0\n";
+    std::string kmsg = "<5>[   10.1] " + avc + "<5>[   10.9] " + avc +  // the same refusal twice: listed once
+                       "<5>[   11.0] audit: type=1400 audit(1.3:4): avc:  denied  { read open } for  pid=311 comm=\"recovery\" "
+                       "path=\"/dev/block/sda3\" dev=\"tmpfs\" ino=99 scontext=u:r:recovery:s0 tcontext=u:object_r:efs_block_device:s0 "
+                       "tclass=blk_file permissive=0\n"
+                       "<5>[   12.0] audit: type=1400 audit(1.4:5): avc:  denied  { search } for  pid=77 comm=\"vold\" name=\"x\" "
+                       "scontext=u:r:vold:s0 tcontext=u:object_r:foo:s0 tclass=dir permissive=0\n"  // another program's: not ours
+                       "<6>[   13.0] decon: unrelated line\n";
+    auto den = logsave::selinuxDenials(kmsg);
+    CHECK(den.size() == 2);
+    CHECK(den.size() == 2 && den[0] == "write file brightness  (sysfs_leds)");
+    CHECK(den.size() == 2 && den[1] == "read open blk_file /dev/block/sda3  (efs_block_device)");
+    CHECK(logsave::selinuxDenials("nothing here\n").empty());
+
+    util::mkdirs(root + "/proc");
+    util::mkdirs(root + "/cache/recovery");
+    CHECK(util::writeFile(root + "/proc/kmsg.txt", kmsg));
+    CHECK(util::writeFile(root + "/cache/recovery/last_log", "older session\n"));
+    LOGI("logsave marker line");
+    auto where = logsave::save("test", logsave::Removable::Mount);
+    CHECK(std::find(where.begin(), where.end(), "/cache/recovery") != where.end());
+    std::string got;
+    CHECK(util::readFile(root + "/cache/recovery/last_log", got) && got.find("logsave marker line") != std::string::npos &&
+          got.find("2 kind(s) of action refused") != std::string::npos && got.find("--- saved: test ---") != std::string::npos);
+    CHECK(util::readFile(root + "/cache/recovery/last_log.1", got) && got == "older session\n");  // rotated like AOSP's
+    CHECK(util::readFile(root + "/cache/recovery/last_kmsg", got) && got == kmsg);
+    CHECK(util::readFile(root + "/external_sd/FMRRE/logs/selinux.txt", got) && got.find("sysfs_leds") != std::string::npos);
+    CHECK(util::readFile(root + "/external_sd/FMRRE/logs/kernel.log", got) && got == kmsg);
+    CHECK(util::exists(root + "/data/media/0/FMRRE/logs/recovery.log"));
+    // Later saves in the same run rewrite this run's files: the older session is not pushed out again.
+    LOGI("logsave second marker");
+    logsave::save("again", logsave::Removable::No);
+    CHECK(util::readFile(root + "/cache/recovery/last_log.1", got) && got == "older session\n");
+    CHECK(util::readFile(root + "/cache/recovery/last_log", got) && got.find("logsave second marker") != std::string::npos);
+    unlink((root + "/proc/kmsg.txt").c_str());
+}
+
+// Touch decoding with made-up events (no panel needed): what a real driver sends, in each of the three protocols.
+static void testTouchDecode() {
+    auto drain = [](InputQueue& q) {
+        std::string s;
+        for (auto& e : q.drain()) {
+            char b[48];
+            snprintf(b, sizeof b, "%c%d,%d ", e.type == EvType::TouchDown ? 'D' : e.type == EvType::TouchMove ? 'M' : e.type == EvType::TouchUp ? 'U' : '?', e.x, e.y);
+            s += b;
+        }
+        return s;
+    };
+    // Protocol B (slots), as on the Galaxy S8: the first finger lands in slot 3, a second one in slot 0 is ignored.
+    {
+        EvdevInput in;
+        InputQueue q;
+        int d = in.addFake(true, 4095, 4095, 1440, 2960);
+        auto ev = [&](int t, int c, int v) { in.feed(d, t, c, v, q); };
+        ev(EV_ABS, ABS_MT_SLOT, 3);
+        ev(EV_ABS, ABS_MT_TRACKING_ID, 41);
+        ev(EV_ABS, ABS_MT_POSITION_X, 2048);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 0);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "D720,0 ");
+        ev(EV_ABS, ABS_MT_SLOT, 0);  // a second finger
+        ev(EV_ABS, ABS_MT_TRACKING_ID, 42);
+        ev(EV_ABS, ABS_MT_POSITION_X, 100);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 100);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q).empty());  // not followed
+        ev(EV_ABS, ABS_MT_SLOT, 3);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 4095);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "M720,2959 ");
+        ev(EV_ABS, ABS_MT_TRACKING_ID, -1);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "U720,2959 ");
+        // The calibration chips: swap, flip.
+        in.setTransform(false, true, true);
+        ev(EV_ABS, ABS_MT_TRACKING_ID, 43);
+        ev(EV_ABS, ABS_MT_POSITION_X, 0);
+        ev(EV_ABS, ABS_MT_POSITION_Y, 0);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "D1439,2959 ");
+        ev(EV_KEY, BTN_TOUCH, 0);  // "no finger left" lifts it even without a tracking id
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "U1439,2959 ");
+    }
+    // Protocol A (no slots): contacts end with SYN_MT_REPORT; a frame without contacts is the lift.
+    {
+        EvdevInput in;
+        InputQueue q;
+        int d = in.addFake(true, 1079, 1919, 1080, 1920);
+        auto ev = [&](int t, int c, int v) { in.feed(d, t, c, v, q); };
+        auto frame = [&](std::vector<std::pair<int, int>> pts) {
+            for (auto& p : pts) {
+                ev(EV_ABS, ABS_MT_POSITION_X, p.first);
+                ev(EV_ABS, ABS_MT_POSITION_Y, p.second);
+                ev(EV_SYN, SYN_MT_REPORT, 0);
+            }
+            if (pts.empty()) ev(EV_SYN, SYN_MT_REPORT, 0);
+            ev(EV_SYN, SYN_REPORT, 0);
+        };
+        frame({{100, 200}});
+        CHECK(drain(q) == "D100,200 ");
+        frame({{110, 210}, {900, 900}});  // the second contact doesn't drag the first one away
+        CHECK(drain(q) == "M110,210 ");
+        frame({});
+        CHECK(drain(q) == "U110,210 ");
+    }
+    // Single touch: ABS_X / ABS_Y with BTN_TOUCH.
+    {
+        EvdevInput in;
+        InputQueue q;
+        int d = in.addFake(false, 1023, 1023, 480, 800);
+        auto ev = [&](int t, int c, int v) { in.feed(d, t, c, v, q); };
+        ev(EV_ABS, ABS_X, 1023);
+        ev(EV_ABS, ABS_Y, 1023);
+        ev(EV_KEY, BTN_TOUCH, 1);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "D479,799 ");
+        ev(EV_KEY, BTN_TOUCH, 0);
+        ev(EV_SYN, SYN_REPORT, 0);
+        CHECK(drain(q) == "U479,799 ");
+        // Keys still come through a touch device: Samsung's Bixby key is Back.
+        ev(EV_KEY, 0x2bf, 1);
+        auto evs = q.drain();
+        CHECK(evs.size() == 1 && evs[0].type == EvType::KeyDown && evs[0].key == Key::Back);
+    }
+}
+
+static void testSplitBackup(const std::string& dir) {
+    std::string root = dir + "/sim";
+    sim::ensureRoot(root);
+    device::init(true, root);
+    Partitions::get().load();
+    Partitions::get().mountAllStorage();
+    Partitions::get().refresh();
+    // Enough data under /data to need several parts: 24 files of 48 KiB (mix of compressible text and random bytes).
+    std::string src = root + "/data/splitsrc";
+    util::mkdirs(src);
+    std::map<std::string, std::string> want;
+    uint32_t seed = 12345;
+    auto rnd = [&]() { seed = seed * 1103515245 + 12345; return uint8_t(seed >> 16); };
+    for (int i = 0; i < 24; i++) {
+        std::string d(48 * 1024, '\0');
+        for (size_t k = 0; k < d.size(); k++) d[k] = (i % 2) ? char(rnd()) : char('a' + (k % 26));
+        char nm[32];
+        snprintf(nm, sizeof nm, "f%02d.bin", i);
+        util::writeFile(src + "/" + nm, d);
+        want[nm] = d;
+    }
+    for (bool compress : {false, true})
+        for (bool enc : {false, true}) {
+            backup::Options o;
+            o.parts = {"/data"};
+            o.name = std::string("split-") + (compress ? "gz" : "raw") + (enc ? "-enc" : "");
+            o.compress = compress;
+            o.digest = true;
+            o.splitSize = 256 * 1024;  // 256 KiB parts -> several
+            if (enc) o.password = "split pw";
+            CHECK(runTask("backup-split", [&](Task& t) { return backup::create(o, t); }));
+            backup::Set ss;
+            for (auto& x : backup::list())
+                if (x.name == o.name) ss = x;
+            CHECK(ss.items.size() == 1);
+            if (ss.items.empty()) continue;
+            const backup::Item& it = ss.items[0];
+            CHECK(!it.extra.empty());  // actually split into >1 part
+            CHECK(util::basename(it.file).find(".win000") != std::string::npos);  // TWRP-style numbering
+            // Each part stays under the split size, except where a single file is bigger than it: the bound is the
+            // split size plus the largest file in /data (so the check holds whatever the sim's own /data contains).
+            uint64_t biggest = 0;
+            std::function<void(const std::string&)> scan = [&](const std::string& d) {
+                for (auto& e : util::listDir(d)) {
+                    if (e.name == "media" || e.name == "lost+found") continue;
+                    std::string p = d + "/" + e.name;
+                    if (e.dir) scan(p);
+                    else biggest = std::max(biggest, util::fileSize(p));
+                }
+            };
+            scan(root + "/data");
+            std::vector<std::string> files = {it.file};
+            for (auto& e : it.extra) files.push_back(e.first);
+            for (auto& f : files) {
+                CHECK(util::exists(ss.path + "/" + f));
+                CHECK(util::fileSize(ss.path + "/" + f) <= 256 * 1024 + biggest + 8 * 1024);
+            }
+            CHECK(runTask("verify-split", [&](Task& t) { return backup::verify(ss, t); }));
+            // Restore into a wiped /data and check every file came back byte-for-byte.
+            util::removeTree(src);
+            CHECK(!util::exists(src));
+            CHECK(runTask("restore-split", [&](Task& t) { return backup::restore(ss, {"data"}, true, t, o.password); }));
+            bool allBack = true;
+            for (auto& kv : want) {
+                std::string got;
+                allBack &= util::readFile(src + "/" + kv.first, got) && got == kv.second;
+            }
+            CHECK(allBack);
+            // A damaged middle part is caught by verify and refused by restore (even with digests made to match it
+            // the per-part SHA-256 of the real bytes still differs - here we rely on the stored digest).
+            std::string mid = ss.path + "/" + it.extra[0].first, bad;
+            util::readFile(mid, bad);
+            bad[bad.size() / 2] ^= 0x7f;
+            util::writeFile(mid, bad);
+            CHECK(!runTask("verify-split-bad", [&](Task& t) { return backup::verify(ss, t); }));
+        }
+}
+
+
+// ---- dynamic partitions (LP metadata) -----------------------------------------
+static void testSuper(const std::string& dir) {
+    device::init(false, "");
+    std::string dev = dir + "/super.img";
+    const uint64_t size = 1ull << 30;
+    int fd = open(dev.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    CHECK(fd >= 0 && ftruncate(fd, size) == 0);
+    close(fd);
+    lp::Metadata m;
+    m.slotCount = 3;
+    m.minor = 2;
+    m.headerSize = 256;
+    m.devs.push_back({2048, 1 << 20, 0, size, "super", 0});
+    m.groups.push_back({"default", 0, 0});
+    m.groups.push_back({"main_a", 0, 900ull << 20});
+    std::string err;
+    CHECK(m.add("system_a", "main_a", lp::kAttrReadonly, err));
+    CHECK(m.add("vendor_a", "main_a", lp::kAttrReadonly, err));
+    CHECK(m.add("product_a", "main_a", 0, err));
+    CHECK(m.resize("system_a", 300ull << 20, err));
+    CHECK(m.resize("vendor_a", 100ull << 20, err));
+    CHECK(m.resize("product_a", 200ull << 20, err));
+    CHECK(lp::format(dev, m, err));
+    lp::Metadata r;
+    CHECK(lp::read(dev, 0, r, err));
+    CHECK(r.serialize() == m.serialize());
+    CHECK(r.find("vendor_a") && r.find("vendor_a")->bytes() == (100ull << 20));
+    CHECK(r.find("system_a")->attrs == lp::kAttrReadonly);
+    uint64_t free0 = r.freeBytes();
+    CHECK(free0 > (300ull << 20) && free0 < (1ull << 30));
+    // grow system past vendor: needs a second extent
+    CHECK(r.resize("system_a", 450ull << 20, err));
+    CHECK(r.find("system_a")->bytes() == (450ull << 20));
+    CHECK(r.find("system_a")->extents.size() == 2);
+    // the group limit (900 MiB) must be enforced
+    lp::Metadata over = r;
+    CHECK(!over.resize("product_a", 400ull << 20, err));
+    CHECK(r.validate(err));
+    CHECK(lp::write(dev, r, err));
+    lp::Metadata r2;
+    CHECK(lp::read(dev, 2, r2, err));  // every slot was written
+    CHECK(r2.find("system_a")->bytes() == (450ull << 20));
+    // shrink + delete
+    CHECK(r2.resize("system_a", 10ull << 20, err));
+    CHECK(r2.find("system_a")->extents.size() == 1);
+    CHECK(r2.remove("product_a", err));
+    CHECK(lp::write(dev, r2, err));
+    lp::Metadata r3;
+    CHECK(lp::read(dev, 0, r3, err));
+    CHECK(!r3.find("product_a") && r3.parts.size() == 2);
+    CHECK(r3.freeBytes() > free0);
+    // corrupt the primary copy of slot 0: the backup must be used
+    std::string saved = dir + "/meta.bin";
+    CHECK(lp::saveMetadataRegion(dev, saved, err));
+    fd = open(dev.c_str(), O_RDWR);
+    char junk[64];
+    memset(junk, 0x5a, sizeof(junk));
+    CHECK(pwrite(fd, junk, sizeof(junk), 4096 * 3 + 40) == (ssize_t)sizeof(junk));
+    close(fd);
+    lp::Metadata r4;
+    CHECK(lp::read(dev, 0, r4, err));
+    CHECK(r4.serialize() == r3.serialize());
+    CHECK(lp::restoreMetadataRegion(dev, saved, err));
+    // a bad geometry must be rejected, not misread
+    std::string notSuper = dir + "/notsuper.img";
+    util::writeFile(notSuper, std::string(1 << 20, '\0'));
+    lp::Metadata bad;
+    CHECK(!lp::read(notSuper, 0, bad, err));
+}
+
+// ---- streaming image flasher ---------------------------------------------------
+static std::string makeSparse(uint32_t bs, std::string& expect) {
+    std::string img;
+    auto u16 = [&](uint16_t v) { img.append((const char*)&v, 2); };
+    auto u32 = [&](uint32_t v) { img.append((const char*)&v, 4); };
+    u32(0xED26FF3A); u16(1); u16(0); u16(28); u16(12); u32(bs); u32(4); u32(3); u32(0);
+    std::string a(bs, '\0');
+    a[1080] = 0x53; a[1081] = (char)0xEF;
+    for (uint32_t i = 2048; i < bs; i++) a[i] = char('a' + i % 26);
+    u16(0xCAC1); u16(0); u32(1); u32(12 + bs); img += a;
+    u16(0xCAC2); u16(0); u32(2); u32(16); u32(0x41414141);
+    u16(0xCAC1); u16(0); u32(1); u32(12 + bs); img += std::string(bs, 'Z');
+    expect = a + std::string(2 * bs, 'A') + std::string(bs, 'Z');
+    return img;
+}
+
+static void gzipTo(const std::string& path, const std::string& data) {
+    size_t clen = 0;
+    void* c = tdefl_compress_mem_to_heap(data.data(), data.size(), &clen, TDEFL_DEFAULT_MAX_PROBES);
+    std::string out("\x1f\x8b\x08\0\0\0\0\0\0\x03", 10);
+    out.append((const char*)c, clen);
+    mz_free(c);
+    uint32_t crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, (const unsigned char*)data.data(), data.size()), sz = (uint32_t)data.size();
+    out.append((const char*)&crc, 4);
+    out.append((const char*)&sz, 4);
+    util::writeFile(path, out);
+}
+
+static void testImages(const std::string& dir) {
+    device::init(false, "");
+    const uint32_t bs = 4096;
+    std::string expect;
+    std::string sparse = makeSparse(bs, expect);
+    std::string raw = std::string(3 * bs + 123, 'r');
+    for (size_t i = 0; i < raw.size(); i++) raw[i] = char(i * 2654435761u >> 24);
+    struct Case { std::string file, entry; const std::string* want; img::Compression comp; bool sparse; };
+    std::vector<Case> cases;
+    util::writeFile(dir + "/a.img", sparse);
+    cases.push_back({dir + "/a.img", "", &expect, img::Compression::None, true});
+    util::writeFile(dir + "/b.img", raw);
+    cases.push_back({dir + "/b.img", "", &raw, img::Compression::None, false});
+    gzipTo(dir + "/c.img.gz", sparse);
+    cases.push_back({dir + "/c.img.gz", "", &expect, img::Compression::Gzip, true});
+    gzipTo(dir + "/d.img.gz", raw);
+    cases.push_back({dir + "/d.img.gz", "", &raw, img::Compression::Gzip, false});
+    mz_zip_archive z{};
+    mz_zip_writer_init_file(&z, (dir + "/e.zip").c_str(), 0);
+    mz_zip_writer_add_mem(&z, "README.txt", "hi", 2, 0);
+    mz_zip_writer_add_mem(&z, "system.img", sparse.data(), sparse.size(), MZ_BEST_COMPRESSION);
+    mz_zip_writer_finalize_archive(&z);
+    mz_zip_writer_end(&z);
+    cases.push_back({dir + "/e.zip", "", &expect, img::Compression::Zip, true});
+    if (util::haveBinary("xz")) {
+        util::writeFile(dir + "/f.img", sparse);
+        util::writeFile(dir + "/g.img", raw);
+        util::run("xz -f " + dir + "/f.img && xz -f --check=sha256 " + dir + "/g.img");
+        cases.push_back({dir + "/f.img.xz", "", &expect, img::Compression::Xz, true});
+        cases.push_back({dir + "/g.img.xz", "", &raw, img::Compression::Xz, false});
+    } else {
+        printf("  (xz not installed on the host: skipping .xz cases)\n");
+    }
+    for (auto& c : cases) {
+        img::Info info = img::inspect(c.file, c.entry);
+        CHECK(info.ok);
+        CHECK(info.comp == c.comp);
+        CHECK(info.sparse == c.sparse);
+        CHECK(info.imageSize == c.want->size());
+        if (c.sparse) CHECK(info.kind == img::Kind::Ext4);
+        std::string target = dir + "/target.bin";
+        util::writeFile(target, std::string(8 * bs, '\x01'));
+        img::FlashOptions o;
+        o.verify = true;
+        bool ok = runTask("flash " + util::basename(c.file), [&](Task& t) { return img::flash(c.file, c.entry, target, o, t); });
+        CHECK(ok);
+        std::string out;
+        util::readFile(target, out);
+        CHECK(out.substr(0, c.want->size()) == *c.want);
+        if (!ok || out.substr(0, c.want->size()) != *c.want) fprintf(stderr, "   case: %s\n", c.file.c_str());
+    }
+    // too big for the partition: refused before writing anything
+    std::string small = dir + "/small.bin";
+    util::writeFile(small, std::string(bs, '\x02'));
+    CHECK(!runTask("too-big", [&](Task& t) { return img::flash(dir + "/a.img", "", small, {}, t); }));
+    std::string s2;
+    util::readFile(small, s2);
+    CHECK(s2 == std::string(bs, '\x02'));
+    // corrupt gzip must fail
+    std::string gz;
+    util::readFile(dir + "/d.img.gz", gz);
+    gz[gz.size() / 2] ^= 0xFF;
+    util::writeFile(dir + "/bad.img.gz", gz);
+    util::writeFile(dir + "/target.bin", std::string(8 * bs, '\x01'));
+    CHECK(!runTask("bad-gz", [&](Task& t) { return img::flash(dir + "/bad.img.gz", "", dir + "/target.bin", {}, t); }));
+    // dd command generation
+    img::Info gi = img::inspect(dir + "/d.img.gz");
+    auto dd = img::ddCommand(gi, "/dev/block/mapper/system_a");
+    std::string all;
+    for (auto& l : dd.lines) all += l + "\n";
+    CHECK(all.find("blockdev --setrw '/dev/block/mapper/system_a'") != std::string::npos);
+    CHECK(all.find("gzip -dc") != std::string::npos && all.find("| dd of=") != std::string::npos);
+    auto dds = img::ddCommand(img::inspect(dir + "/a.img"), "/dev/block/by-name/boot_a");
+    CHECK(dds.needsSimg2img && dds.lines[0].find("simg2img") == 0);
+    CHECK(img::isImageName("system-td-arm64-ab-vanilla.img.xz") && !img::isImageName("rom.zip"));
+}
+
+static void testAvb(const std::string& dir) {
+    std::string vb(4096, '\0');
+    memcpy(&vb[0], "AVB0", 4);
+    vb[123] = 0;
+    util::writeFile(dir + "/vbmeta.img", vb);
+    avb::Info i = avb::read(dir + "/vbmeta.img");
+    CHECK(i.ok && i.flags == 0);
+    std::string err;
+    CHECK(avb::setFlags(dir + "/vbmeta.img", 3, err));
+    std::string out;
+    util::readFile(dir + "/vbmeta.img", out);
+    CHECK(out.size() == 4096 && (uint8_t)out[123] == 3 && out[120] == 0);
+    CHECK(!avb::read(dir + "/a.img").ok);
+}
+
+// Renamed from TWRP v2: FMRRE/ is home, and backups in TWRP/BACKUPS (classic TWRP, or TWRP v2) still restore.
+// A ustar header written by hand (for archives FMRRE's own writer would never make).
+static std::string tarEntry(const std::string& name, char type, const std::string& data, const std::string& link = "") {
+    char h[512] = {0};
+    memcpy(h, name.data(), std::min<size_t>(name.size(), 100));
+    snprintf(h + 100, 8, "%07o", type == '5' ? 0755 : 0644);  // folders searchable, or a non-root reader can't get in
+    snprintf(h + 108, 8, "%07o", 0);
+    snprintf(h + 116, 8, "%07o", 0);
+    snprintf(h + 124, 12, "%011o", unsigned(data.size()));
+    snprintf(h + 136, 12, "%011o", 1700000000u);
+    h[156] = type;
+    memcpy(h + 157, link.data(), std::min<size_t>(link.size(), 100));
+    memcpy(h + 257, "ustar", 6);
+    memcpy(h + 263, "00", 2);
+    memset(h + 148, ' ', 8);
+    unsigned sum = 0;
+    for (int i = 0; i < 512; i++) sum += (unsigned char)h[i];
+    snprintf(h + 148, 8, "%06o", sum);
+    std::string out(h, 512);
+    out += data + std::string((512 - data.size() % 512) % 512, '\0');
+    return out;
+}
+
+static void testLegacyFolders() {
+    Partitions& p = Partitions::get();
+    CHECK(p.appDir() == p.storagePath() + "/FMRRE" && p.legacyDir() == p.storagePath() + "/TWRP");
+    std::string old = p.legacyDir() + "/BACKUPS/" + device::info().serial + "/2024-05-01--10-00-00";
+    CHECK(util::mkdirs(old));
+    CHECK(util::writeFile(old + "/boot.emmc.win", std::string(4096, 'b')));
+    bool found = false, ours = false;
+    for (auto& s : backup::list()) {
+        found |= util::basename(s.path) == "2024-05-01--10-00-00" && !s.hasManifest && s.items.size() == 1 && s.items[0].part == "boot";
+        ours |= s.name == "selftest" && util::startsWith(s.path, p.appDir() + "/BACKUPS/");
+    }
+    CHECK(found && ours);
+    // TWRP splits big archives into parts (cache.ext4.win000, .win001 ...), each a whole tar archive with absolute
+    // names and its own .sha2: listed as one item, every part verified, all of them restored into the partition.
+    std::string part0 = tarEntry("/cache/twrp-a.txt", '0', "first part") + std::string(1024, '\0');
+    std::string part1 = tarEntry("/cache/sub/", '5', "") + tarEntry("/cache/sub/twrp-b.txt", '0', "second part") + std::string(1024, '\0');
+    CHECK(util::writeFile(old + "/cache.ext4.win000", part0) && util::writeFile(old + "/cache.ext4.win001", part1));
+    CHECK(util::writeFile(old + "/cache.ext4.win000.sha2", Sha256::hexOf(part0) + "  cache.ext4.win000\n"));
+    CHECK(util::writeFile(old + "/cache.ext4.win001.sha2", Sha256::hexOf(part1) + "  cache.ext4.win001\n"));
+    const backup::Set* set = nullptr;
+    auto sets = backup::list();
+    for (auto& s : sets)
+        if (util::basename(s.path) == "2024-05-01--10-00-00") set = &s;
+    const backup::Item* cache = nullptr;
+    if (set)
+        for (auto& i : set->items)
+            if (i.part == "cache") cache = &i;
+    CHECK(cache && cache->file == "cache.ext4.win000" && cache->extra.size() == 1 && cache->extra[0].first == "cache.ext4.win001" &&
+          cache->size == part0.size() + part1.size() && !cache->sha256.empty());
+    if (set && cache) {
+        CHECK(runTask("twrp-split-restore", [&](Task& t) { return backup::restore(*set, {"cache"}, true, t); }));
+        std::string got, root = Partitions::get().find("/cache")->contentPath();
+        CHECK(util::readFile(root + "/twrp-a.txt", got) && got == "first part" && util::readFile(root + "/sub/twrp-b.txt", got) &&
+              got == "second part");
+        CHECK(util::writeFile(old + "/cache.ext4.win001", part1 + "x"));  // a changed part: refused before anything is wiped
+        CHECK(!runTask("twrp-split-bad", [&](Task& t) { return backup::restore(*set, {"cache"}, true, t); }));
+        // TWRP 3.0 / 3.1 wrote .md5 digests instead of .sha2 (RFC 1321 values first).
+        auto md5hex = [](const std::string& x) {
+            Md5 m;
+            m.update(x.data(), x.size());
+            return Sha256::toHex(m.digest());
+        };
+        CHECK(md5hex("") == "d41d8cd98f00b204e9800998ecf8427e" && md5hex("abc") == "900150983cd24fb0d6963f7d28e17f72" &&
+              md5hex("message digest") == "f96b697d7cb7938d525a2f31aaf161d0" &&
+              md5hex(std::string(1000, 'a')) == "cabe45dcc9ae5b66ba86600cca6b8ba8");
+        CHECK(util::writeFile(old + "/cache.ext4.win001", part1));
+        unlink((old + "/cache.ext4.win001.sha2").c_str());
+        CHECK(util::writeFile(old + "/cache.ext4.win001.md5", md5hex(part1) + "  cache.ext4.win001\n"));
+        for (auto& s2 : backup::list())
+            if (util::basename(s2.path) == "2024-05-01--10-00-00")
+                for (auto& i : s2.items)
+                    if (i.part == "cache") {
+                        CHECK(i.extra.size() == 1 && util::startsWith(i.extra[0].second, "md5:"));
+                        CHECK(runTask("twrp-md5", [&](Task& t) { return backup::verify(s2, t); }));
+                        CHECK(util::writeFile(old + "/cache.ext4.win001", part1 + "!"));
+                        CHECK(!runTask("twrp-md5-bad", [&](Task& t) { return backup::verify(s2, t); }));
+                    }
+        unlink((old + "/cache.ext4.win001.md5").c_str());
+        // TWRP's own encryption (OpenAES) is named for what it is, not reported as a damaged archive.
+        CHECK(util::writeFile(old + "/cache.ext4.win001", "OAES\x01\x02" + std::string(600, '\x5a')));
+        unlink((old + "/cache.ext4.win001.sha2").c_str());
+        std::string log;
+        CHECK(!runTask("twrp-oaes", [&](Task& t) {
+            bool r = backup::restore(*set, {"cache"}, false, t);
+            size_t cursor = 0;
+            for (auto& l : t.linesSince(cursor)) log += l + "\n";
+            return r;
+        }) && log.find("OpenAES") != std::string::npos);
+    }
+    util::removeTree(p.legacyDir());
+}
+
+static void testPathcheck(const std::string& dir) {
+    std::string root = dir + "/sim";
+    device::init(true, root);
+    Partitions::get().load();
+    Partitions::get().mountAllStorage();
+    std::string media = root + "/data/media/0";
+    CHECK(pathcheck::resolve("/sdcard/Download/x.img") == media + "/Download/x.img");
+    CHECK(pathcheck::resolve("/storage/emulated/0/Download/x.img") == media + "/Download/x.img");
+    CHECK(pathcheck::resolve("Download/x.img") == media + "/Download/x.img");
+    util::writeFile(media + "/Download/System.img", "x");
+    auto r = pathcheck::check("/sdcard/Download/system.img");
+    CHECK(!r.exists && !r.suggestions.empty());
+    auto r2 = pathcheck::check("/sdcard/Download/GSI_A15_download(1)");
+    CHECK(r2.usable() && !r2.shownInImagePicker);
+    auto r3 = pathcheck::check("/sdcard/Download/pixel-gsi.img.crdownload");
+    bool flagged = false;
+    for (auto& f : r3.findings) if (f.level == pathcheck::Level::Error) flagged = true;
+    CHECK(flagged);
+    // sim super is consistent with the mapper files
+    lp::Metadata m;
+    std::string err;
+    CHECK(lp::read(lp::superDevice(), 0, m, err));
+    CHECK(m.find("system_a") && util::fileSize(root + "/dev/block/mapper/system_a") == m.find("system_a")->bytes());
+
+    // AOSP recovery arguments -> ORS
+    // `adb reboot fastboot` / `fastboot reboot fastboot` put --fastboot in the bootloader message.
+    CHECK(ors::fromAospArgs({"--fastboot"}) == std::vector<std::string>{"fastboot"});
+    auto l = ors::fromAospArgs({"--update_package=/data/ota.zip", "--wipe_cache", "--reason=foo", "--update_package=@/cache/recovery/block.map"});
+    CHECK(l.size() == 3 && l[0] == "install /data/ota.zip" && l[1] == "wipe cache" && l[2].find("print") == 0);
+    // bootloader message in misc is read and cleared
+    std::string misc(4096, '\0');
+    memcpy(&misc[0], "boot-recovery", 13);
+    std::string rec = "recovery\n--wipe_data\n";
+    memcpy(&misc[64], rec.data(), rec.size());
+    misc[2048] = 'X';  // A/B slot metadata after the message must survive
+    util::writeFile(root + "/dev/block/by-name/misc", misc);
+    ors::Script sc;
+    CHECK(ors::takePending(sc));
+    // Android's "Erase all data": the whole of /data (not FMRRE's reset, which keeps internal storage), then a restart.
+    CHECK(sc.erase && sc.lines == std::vector<std::string>({"format data", "wipe cache", "reboot"}));
+    std::string after;
+    util::readFile(root + "/dev/block/by-name/misc", after);
+    CHECK(after.size() == 4096 && after[0] == 0 && after[64] == 0 && after[2048] == 'X');
+    ors::Script none;
+    CHECK(!ors::takePending(none));
+    unlink((root + "/dev/block/by-name/misc").c_str());
+    // ORS script runs and stops at the first failure
+    CHECK(runTask("ors", [](Task& t) { return ors::run({"print one", "mkdir /tmp/ors-test-dir", "print two"}, t); }));
+    CHECK(util::isDir(root + "/tmp/ors-test-dir"));
+    CHECK(!runTask("ors-fail", [](Task& t) { return ors::run({"print a", "bogus", "mkdir /tmp/never"}, t); }));
+    CHECK(!util::exists(root + "/tmp/never"));
+
+    // Installing FMRRE permanently: A/B phone without a recovery partition -> boot, stock saved first
+    auto bootImg = [](const std::string& f, uint32_t hv, uint32_t kernel, char fill) {
+        std::string b(2 << 20, fill);
+        memcpy(&b[0], "ANDROID!", 8);
+        memcpy(&b[8], &kernel, 4);
+        memcpy(&b[40], &hv, 4);
+        util::writeFile(f, b);
+    };
+    std::string bootA = root + "/dev/block/by-name/boot_a", stockBoot;
+    bootImg(bootA, 4, 1 << 20, 'S');
+    util::readFile(bootA, stockBoot);
+    std::string twrp = root + "/data/media/0/Download/fmrre-test.img", junk = root + "/data/media/0/Download/junk.img";
+    bootImg(twrp, 4, 1 << 20, 'T');
+    CHECK(bootimg::recoveryTarget(twrp).name == "boot");
+    CHECK(runTask("install-recovery", [&](Task& t) { return bootimg::installRecovery(twrp, t); }));
+    std::string now, img;
+    util::readFile(bootA, now);
+    util::readFile(twrp, img);
+    CHECK(now == img);
+    auto saved = bootimg::imagesIn(bootimg::stockDir());
+    std::string savedData;
+    CHECK(saved.size() == 1 && util::readFile(saved[0], savedData) && savedData == stockBoot);
+    // header mismatch with the phone's boot is refused, and boot stays untouched
+    bootImg(root + "/data/media/0/Download/v2.img", 2, 1 << 20, 'X');
+    CHECK(!runTask("install-mismatch", [&](Task& t) { return bootimg::installRecovery(root + "/data/media/0/Download/v2.img", t); }));
+    util::readFile(bootA, now);
+    CHECK(now == img);
+    util::writeFile(junk, std::string(8192, 'j'));
+    CHECK(!runTask("install-junk", [&](Task& t) { return bootimg::installRecovery(junk, t); }));
+    // with a recovery partition the image goes there instead
+    util::writeFile(root + "/dev/block/by-name/recovery_a", std::string(2 << 20, 'R'));
+    CHECK(bootimg::recoveryTarget(twrp).name == "recovery");
+    CHECK(runTask("install-recovery-part", [&](Task& t) { return bootimg::installRecovery(twrp, t); }));
+    util::readFile(root + "/dev/block/by-name/recovery_a", now);
+    CHECK(now == img);
+    CHECK(bootimg::imagesIn(bootimg::stockDir()).size() == 2);
+    unlink((root + "/dev/block/by-name/recovery_a").c_str());
+}
+
+// The expanded fixture: "TWRP v2 payload " x 512, bytes 0..255 x 16, zeros and a run of 'R', 16 KiB.
+// (The project's old name stays here: the bzip2 / xz fixtures above were compressed from exactly this text.)
+static std::string fixturePlain() {
+    std::string d;
+    for (int i = 0; i < 512; i++) d += "TWRP v2 payload ";
+    for (int k = 0; k < 16; k++)
+        for (int i = 0; i < 256; i++) d.push_back(char(i));
+    d += std::string(3000, '\0') + std::string(1000, 'R');
+    d.resize(16384, '\0');
+    return d;
+}
+
+// Stored formats that must never change (backups and settings made before the rename are still used):
+// expected values computed independently with Python's hashlib / hmac.
+static void testFrozenFormats() {
+    uint8_t h[crypt::kHeaderSize] = {'T', 'W', 'V', '2', 'E', 'N', 'C', '1'};
+    for (int i = 0; i < 16; i++) h[8 + i] = uint8_t(i);  // salt
+    h[24] = 0xe8, h[25] = 0x03;                         // 1000 iterations
+    const char* check = "03f4073da437dd14e7bbcacc8b76cfd8";  // HMAC(pbkdf2("pw")[32:], "TWRP v2 backup password check")[:16]
+    for (int i = 0; i < 16; i++) h[28 + i] = uint8_t(std::stoi(std::string(check + 2 * i, 2), nullptr, 16));
+    std::string err;
+    crypt::Stream a, b;
+    CHECK(a.beginDecrypt("pw", h, err));
+    CHECK(!b.beginDecrypt("px", h, err) && err == "wrong password");
+    CHECK(Sha256::hexOf(std::string("1234") + kPinSalt) == "3c8d4d5d0b4aee3a4e6ffa93abc3300e91839309772c1869ad44f4e7946e7a25");
+}
+
+static void testCrypt() {
+    uint8_t key[32], pt[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}, ct[16];
+    for (int i = 0; i < 32; i++) key[i] = uint8_t(i);
+    crypt::Aes256(key).encryptBlock(pt, ct);
+    CHECK(Sha256::toHex(std::string((const char*)ct, 16)) == "8ea2b7ca516745bfeafc49904b496089");  // FIPS-197 C.3
+    uint8_t k1[20];
+    memset(k1, 0x0b, 20);
+    crypt::HmacSha256 h1(k1, 20);
+    h1.update("Hi There", 8);
+    CHECK(Sha256::toHex(h1.final()) == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");  // RFC 4231 #1
+    uint8_t dk[40];
+    crypt::pbkdf2Sha256("password", (const uint8_t*)"salt", 4, 4096, dk, 40);
+    CHECK(Sha256::toHex(std::string((const char*)dk, 40)) ==
+          "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134af7ad98c1b458ce3f");
+    // Stream round trip in odd-sized pieces, and the tag binds the data.
+    crypt::Stream enc;
+    std::string hdr;
+    CHECK(enc.beginEncrypt("pw", hdr, 2000) && hdr.size() == crypt::kHeaderSize);
+    std::string plain(5000, '\0');
+    for (size_t i = 0; i < plain.size(); i++) plain[i] = char(i * 13);
+    std::string c = plain;
+    for (size_t off = 0, n = 1; off < c.size(); off += n, n = n * 3 % 37 + 1) enc.process((uint8_t*)&c[off], std::min(n, c.size() - off));
+    std::string tag = enc.tag();
+    CHECK(c != plain);
+    crypt::Stream dec;
+    std::string err;
+    CHECK(!crypt::Stream().beginDecrypt("PW", (const uint8_t*)hdr.data(), err) && err == "wrong password");
+    CHECK(dec.beginDecrypt("pw", (const uint8_t*)hdr.data(), err));
+    std::string d = c;
+    dec.process((uint8_t*)&d[0], d.size());
+    CHECK(d == plain && dec.tag() == tag);
+    // The CPU's AES instructions (if any) and the tables agree: the FIPS block, 1000 blocks at once, and a stream
+    // encrypted one way and decrypted the other.
+    printf("AES backend: %s\n", crypt::Aes256::backend());
+    std::string blocks(16000, '\0'), hw(16000, '\0'), sw(16000, '\0');
+    for (size_t i = 0; i < blocks.size(); i++) blocks[i] = char(i * 7 + (i >> 8));
+    crypt::Aes256 aes(key);
+    aes.encryptBlocks((const uint8_t*)blocks.data(), (uint8_t*)&hw[0], 1000);
+    uint8_t one[16];
+    aes.encryptBlocks(pt, one, 1);
+    crypt::Aes256::forceSoftware(true);
+    aes.encryptBlocks((const uint8_t*)blocks.data(), (uint8_t*)&sw[0], 1000);
+    CHECK(hw == sw && Sha256::toHex(std::string((const char*)one, 16)) == "8ea2b7ca516745bfeafc49904b496089");
+    crypt::Stream enc2;
+    CHECK(enc2.beginEncrypt("pw", hdr, 2000));
+    crypt::Aes256::forceSoftware(false);
+    std::string c2 = plain;
+    for (size_t off = 0, n = 5; off < c2.size(); off += n, n = n * 7 % 4099 + 1) enc2.process((uint8_t*)&c2[off], std::min(n, c2.size() - off));
+    std::string tag2 = enc2.tag();
+    crypt::Aes256::forceSoftware(true);
+    crypt::Stream dec2;
+    CHECK(dec2.beginDecrypt("pw", (const uint8_t*)hdr.data(), err));
+    dec2.process((uint8_t*)&c2[0], c2.size());
+    CHECK(c2 == plain && dec2.tag() == tag2);
+    crypt::Aes256::forceSoftware(false);
+}
+
+static void testDecoders(const std::string& dir) {
+    std::string out, err;
+    CHECK(Bunzip2::decode(kBz2Fixture, sizeof kBz2Fixture, out, err));
+    CHECK(out == fixturePlain());
+    CHECK(Sha256::hexOf(out) == "de8d08c87cc612c30308640fed4ca8225480c3bbc3071f87cdadc67cb173c71f");
+    std::vector<unsigned char> bad(kBz2Fixture, kBz2Fixture + sizeof kBz2Fixture);
+    bad[300] ^= 0x10;
+    CHECK(!Bunzip2::decode(bad.data(), bad.size(), out, err));  // CRC or format error, never garbage
+    // Reed-Solomon (libfec parameters): parity makes a valid codeword, one flipped byte doesn't.
+    for (uint32_t roots : {2u, 8u}) {
+        uint8_t cw[255];
+        for (uint32_t i = 0; i < 255 - roots; i++) cw[i] = uint8_t(i * 31 + roots);
+        verity::rsEncode(roots, cw, cw + 255 - roots);
+        CHECK(verity::rsCheck(roots, cw));
+        cw[17] ^= 0x5a;
+        CHECK(!verity::rsCheck(roots, cw));
+    }
+    // dm-verity hash tree + FEC, known answers from an independent implementation (tests/payload_test.py).
+    std::string img(3 * 4096 + 4096 + 8192, '\0');
+    for (int i = 0; i < 3 * 4096; i++) img[i] = char((i * 7) & 0xff);
+    std::string f = dir + "/verity.img";
+    CHECK(util::writeFile(f, img));
+    int fd = open(f.c_str(), O_RDWR);
+    std::string root;
+    CHECK(verity::hashTreeSize(3 * 4096, 4096) == 4096 && verity::fecSize(4 * 4096, 2, 4096) == 8192);
+    CHECK(verity::buildHashTree(fd, 0, 3 * 4096, 3 * 4096, 4096, 4096, "sha256", "twrp", root, err));
+    CHECK(Sha256::toHex(root) == "277d21eea9b022fdfb33a47cfc28ac0a664c7b4893cf4e97f2253588b026ffe4");
+    CHECK(verity::encodeFec(fd, 0, 4 * 4096, 4 * 4096, 8192, 2, 4096, err));
+    close(fd);
+    CHECK(util::readFile(f, img));
+    CHECK(Sha256::hexOf(img.substr(3 * 4096, 4096)) == "ac0f55b0b7b0520eab99bb014b631725b3fa6e3e88009cb8f8d5fe44997703c7");
+    CHECK(Sha256::hexOf(img.substr(4 * 4096)) == "7059e48a298a302332ad48dc7c9eff639ab5f4111ba6d25eaa40a7925e6723d0");
+}
+
+static std::string lz4Plain() {  // the data the kLz4* fixtures were made from
+    std::string d;
+    for (int i = 0; i < 6000; i++) d += "FMRRE lz4 block ";
+    for (int k = 0; k < 64; k++)
+        for (int i = 0; i < 256; i++) d.push_back(char(i));
+    return d + std::string(40000, '\0');
+}
+
+static std::string lz4Noise(int n) {
+    std::string d;
+    uint32_t x = 12345;
+    for (int i = 0; i < n; i++) {
+        x = x * 1103515245u + 12345u;
+        d.push_back(char((x >> 16) & 0xff));
+    }
+    return d;
+}
+
+static bool lz4Decode(const std::string& in, std::string& out, std::string& err, size_t chunk = 4096) {
+    size_t at = 0;
+    Lz4Frame f([&](uint8_t* p, size_t n) {  // hands the input over in small pieces, like a file
+        size_t k = std::min({n, chunk, in.size() - at});
+        memcpy(p, in.data() + at, k);
+        at += k;
+        return k;
+    });
+    out.clear();
+    char buf[3000];
+    for (;;) {
+        ssize_t r = f.read(buf, sizeof buf);
+        if (r < 0) { err = f.error(); return false; }
+        if (r == 0) return true;
+        out.append(buf, size_t(r));
+    }
+}
+
+static void testLz4(const std::string& dir) {
+    // xxHash32 reference values (the xxhash library)
+    CHECK(Xxh32::of("", 0) == 0x02cc5d05u && Xxh32::of("abc", 3) == 0x32d153ffu);
+    const char* spam = "Nobody inspects the spammish repetition";
+    CHECK(Xxh32::of(spam, strlen(spam)) == 0xe2293b2fu);
+    Xxh32 x;
+    for (size_t i = 0, n = strlen(spam); i < n; i += 5) x.update(spam + i, std::min<size_t>(5, n - i));  // in pieces
+    CHECK(x.digest() == 0xe2293b2fu);
+    // Frames from the official lz4 library: linked blocks with checksums, independent blocks, an uncompressed block.
+    std::string linked((const char*)kLz4Linked, sizeof kLz4Linked), indep((const char*)kLz4Independent, sizeof kLz4Independent);
+    std::string raw((const char*)kLz4Raw, sizeof kLz4Raw), out, err;
+    const std::string plain = lz4Plain();
+    CHECK(lz4Decode(linked, out, err) && out == plain);
+    CHECK(lz4Decode(linked, out, err, 1) && out == plain);  // one byte at a time
+    CHECK(lz4Decode(indep, out, err) && out == plain);
+    CHECK(lz4Decode(raw, out, err) && out == lz4Noise(3000));
+    std::string skippable = std::string("\x5a\x2a\x4d\x18\x03\x00\x00\x00xyz", 11);
+    CHECK(lz4Decode(linked + skippable + raw, out, err) && out == plain + lz4Noise(3000));
+    // Damage is found: a changed byte (block checksum), the header checksum, a cut-off file, not LZ4 at all.
+    std::string bad = linked;
+    bad[bad.size() / 2] ^= 0x20;
+    CHECK(!lz4Decode(bad, out, err) && err.find("checksum") != std::string::npos);
+    bad = linked;
+    bad[6] ^= 0x01;
+    CHECK(!lz4Decode(bad, out, err) && err.find("header") != std::string::npos);
+    CHECK(!lz4Decode(linked.substr(0, linked.size() - 10), out, err) && err.find("cut off") != std::string::npos);
+    CHECK(!lz4Decode("PK\x03\x04 not lz4", out, err) && err.find("not an LZ4") != std::string::npos);
+    // A block that points before its own data is refused, not read out of bounds.
+    std::vector<uint8_t> o;
+    const uint8_t evil[] = {0x1f, 'a', 0xff, 0xff, 0x00};
+    CHECK(!lz4Block(evil, sizeof evil, o, 1 << 16, err));
+    // Flashing an .img.lz4 decodes it on the way (no lz4 binary needed).
+    std::string img = dir + "/sim/data/media/0/Download/dtbo-test.img.lz4", dev = dir + "/sim/dev/block/by-name/dtbo_b";
+    CHECK(util::writeFile(img, linked));
+    CHECK(img::inspect(img).comp == img::Compression::Lz4);
+    std::string img2 = dir + "/sim/data/media/0/Download/sized.img.lz4";  // a frame that states its content size
+    CHECK(util::writeFile(img2, indep));
+    img::Info si = img::inspect(img2);
+    CHECK(si.comp == img::Compression::Lz4 && si.imageSize == plain.size() && si.sizeExact);
+    img::FlashOptions fo;
+    fo.verify = true;
+    CHECK(runTask("flash-lz4", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
+    std::string got;
+    CHECK(util::readFile(dev, got) && got.substr(0, plain.size()) == plain);
+    CHECK(util::writeFile(img, bad));
+    CHECK(!runTask("flash-lz4-bad", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
+    // Unpack (Files -> "Decompress to ..."): boot.img.lz4 -> boot.img next to it, "-unpacked" when that name is taken.
+    CHECK(util::writeFile(img, linked));
+    std::string unpacked = img::unpackedName(img);
+    CHECK(util::basename(unpacked) == "dtbo-test.img");
+    CHECK(runTask("unpack-lz4", [&](Task& t) { return img::unpack(img, unpacked, t); }) && util::readFile(unpacked, got) && got == plain);
+    CHECK(util::basename(img::unpackedName(img)) == "dtbo-test-unpacked.img");
+    CHECK(!runTask("unpack-bad", [&](Task& t) { return img::unpack(img2 + ".missing", unpacked, t); }));
+    unlink(unpacked.c_str());
+
+    // bzip2 images (.img.bz2): decoded on the way in, like the other compressors. kBz2Fixture is a real bzip2 stream
+    // (tests/make... / the bzip2 tool) whose plaintext is fixturePlain().
+    std::string bz = dir + "/sim/data/media/0/Download/system.img.bz2", bzDev = dir + "/sim/dev/block/by-name/system_b";
+    CHECK(util::writeFile(bz, std::string((const char*)kBz2Fixture, sizeof kBz2Fixture)));
+    CHECK(img::inspect(bz).comp == img::Compression::Bzip2);
+    CHECK(runTask("flash-bz2", [&](Task& t) { return img::flash(bz, "", bzDev, fo, t); }));
+    CHECK(util::readFile(bzDev, got) && got.substr(0, fixturePlain().size()) == fixturePlain());
+    std::string bzOut = img::unpackedName(bz);
+    CHECK(util::basename(bzOut) == "system.img");
+    CHECK(runTask("unpack-bz2", [&](Task& t) { return img::unpack(bz, bzOut, t); }) && util::readFile(bzOut, got) && got == fixturePlain());
+    unlink(bzOut.c_str());
+    std::string bzBad((const char*)kBz2Fixture, sizeof kBz2Fixture);
+    bzBad[bzBad.size() / 2] ^= 0x40;  // a block-CRC mismatch: refused, never flashed as garbage
+    CHECK(util::writeFile(bz, bzBad));
+    CHECK(!runTask("flash-bz2-bad", [&](Task& t) { return img::flash(bz, "", bzDev, fo, t); }));
+}
+
+static void testPayload(const std::string& dir) {
+    // boot: bzip2 + xz + zero operations; system: data + hash tree + FEC computed on "device".
+    std::string plain = fixturePlain(), image = plain + plain + std::string(8192, '\0');
+    sim::OtaPart boot;
+    boot.name = "boot";
+    boot.size = image.size();
+    Sha256 h;
+    h.update(image.data(), image.size());
+    boot.hash = h.digest();
+    boot.ops.push_back({payload::kReplaceBz, 0, 4, std::string((const char*)kBz2Fixture, sizeof kBz2Fixture)});
+    boot.ops.push_back({payload::kReplaceXz, 4, 4, std::string((const char*)kXzFixture, sizeof kXzFixture)});
+    boot.ops.push_back({payload::kZero, 8, 2, ""});
+    sim::OtaPart sys;
+    std::string sdata(64 * 4096, '\0');
+    for (size_t i = 0; i < sdata.size() / 3; i++) sdata[i] = char('a' + i % 19);
+    std::string err;
+    CHECK(sim::otaPartFromImage("system", sdata, true, dir + "/ota.tmp", sys, err));
+    CHECK(sys.treeCount == 1 && sys.fecCount == 2);
+    std::string pl = sim::encodePayload({boot, sys}, "main", 1ull << 30, {"system"}, "2026-11-05");
+    CHECK(util::writeFile(dir + "/payload.bin", pl));
+    payload::Payload p;
+    CHECK(payload::open(dir + "/payload.bin", p, err));
+    CHECK(p.full() && p.parts.size() == 2 && p.isDynamic("system") && !p.isDynamic("boot"));
+    CHECK(p.groups.size() == 1 && p.groups[0].name == "main" && p.securityPatch == "2026-11-05");
+    CHECK(p.find("system") && p.find("system")->hashTree.count == 1 && p.find("system")->fecRoots == 2);
+    CHECK(runTask("payload-extract", [&](Task& t) { return payload::extract(p, {}, dir + "/pout", true, t); }));
+    std::string got;
+    CHECK(util::readFile(dir + "/pout/boot.img", got) && got == image);
+    CHECK(util::readFile(dir + "/pout/system.img", got) && got.size() == sys.size);
+    Sha256 h2;
+    h2.update(got.data(), got.size());
+    CHECK(h2.digest() == sys.hash);
+    // Inside a zip (stored), with metadata; truncated and delta payloads are refused.
+    CHECK(sim::writeOtaZip(dir + "/ota.zip", pl, "ota-type=AB\npre-device=husky\n"));
+    payload::Payload z;
+    CHECK(payload::open(dir + "/ota.zip", z, err) && z.inZip && z.device() == "husky" && z.parts.size() == 2);
+    CHECK(payload::isOtaZip(dir + "/ota.zip"));
+    CHECK(util::writeFile(dir + "/trunc.bin", pl.substr(0, pl.size() - 100)));
+    payload::Payload tr;
+    CHECK(!payload::open(dir + "/trunc.bin", tr, err));
+    sim::OtaPart delta = boot;
+    delta.ops = {{payload::kSourceCopy, 0, 10, ""}};
+    CHECK(util::writeFile(dir + "/delta.bin", sim::encodePayload({delta}, "", 0, {}, "")));
+    payload::Payload d;
+    CHECK(payload::open(dir + "/delta.bin", d, err) && !d.full() && !payload::plan(d, payload::InstallOptions()).ok);
+}
+
+static void testRescue() {
+    auto has = [](const std::vector<rescue::Finding>& v, rescue::Fix f) {
+        for (auto& x : v)
+            if (x.fix == f) return true;
+        return false;
+    };
+    auto v = rescue::scan("[ 5.1] device-mapper: verity: 252:1: data block 12345 is corrupted\n", "");
+    CHECK(v.size() == 1 && v[0].fix == rescue::Fix::DisableVerity && v[0].severity == 2 && v[0].evidence.find("252:1") != std::string::npos);
+    v = rescue::scan("init: Failed to mount required partitions early ...\n", "");
+    CHECK(has(v, rescue::Fix::ReflashSystem));
+    v = rescue::scan("[ 9.0] Kernel panic - not syncing: Attempted to kill init! exitcode=0x0000000b\n", "kernel_panic");
+    CHECK(v.size() == 1 && v[0].fix == rescue::Fix::RestoreBoot);
+    v = rescue::scan("init: Service 'zygote' (pid 1012) crashed 4 times\ninit: Received sys.powerctl='reboot,rescueparty'\n", "");
+    CHECK(v.size() == 2 && v[0].severity == 2 && has(v, rescue::Fix::DisableModules) && has(v, rescue::Fix::FormatData));
+    v = rescue::scan("vold: Failed to unlock user 0\n", "");
+    CHECK(has(v, rescue::Fix::FormatData));
+    CHECK(rescue::scan("", "watchdog").size() == 1);
+    CHECK(rescue::scan("[ 1.0] all good\n", "reboot,shell").empty());
+    // pstore pmsg: logcat records, events and noise in between are skipped
+    auto rec = [](uint8_t id, uint8_t prio, const std::string& tag, const std::string& msg) {
+        std::string body = std::string(1, char(prio)) + tag + '\0' + msg + '\0';
+        uint16_t len = uint16_t(18 + body.size());
+        std::string h = {'l', char(len & 0xff), char(len >> 8), 0, 0, 0, 0, char(id), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        return h + body;
+    };
+    std::string pm = std::string("\x00\xffjunk", 6) + rec(0, 4, "Zygote", "info is dropped") + rec(4, 6, "AndroidRuntime", "*** FATAL EXCEPTION IN SYSTEM PROCESS: main") +
+                     rec(4, 6, "AndroidRuntime", "java.lang.IllegalStateException: boom\n\tat Foo.bar(Foo.java:1)") + rec(2, 4, "ev", "\x01");
+    std::string lc = rescue::decodePmsg(pm);
+    CHECK(lc.find("info is dropped") == std::string::npos && lc.find("E/AndroidRuntime: *** FATAL EXCEPTION IN SYSTEM PROCESS") != std::string::npos);
+    CHECK(lc.find("E/AndroidRuntime: \tat Foo.bar") != std::string::npos);
+    auto f2 = rescue::scan(lc, "");
+    CHECK(!f2.empty() && f2[0].evidence.find("IllegalStateException: boom") != std::string::npos);
+}
+
+// Auto repair on the simulator (its pstore holds a Rescue Party bootloop, /data has 3 Magisk modules).
+static void testAutofix(const std::string& dir) {
+    std::string root = dir + "/sim";
+    auto find = [](const autofix::Plan& p, const std::string& id) -> const autofix::Step* {
+        for (auto& s : p.steps)
+            if (s.id == id) return &s;
+        return nullptr;
+    };
+    // Android asked recovery to *offer* a factory reset: never erase on our own.
+    CHECK(ors::fromAospArgs({"--prompt_and_wipe_data", "--reason=RescueParty", "--locale=en-US"}) == std::vector<std::string>{"autofix --prompt"});
+    CHECK(ors::fromAospArgs({"--wipe_data"}) == std::vector<std::string>({"format data", "wipe cache", "reboot"}));
+
+    autofix::Plan p = autofix::diagnose();
+    CHECK(p.bootFailed && p.headline.find("Rescue Party") != std::string::npos);
+    const autofix::Step* mods = find(p, "disable_modules");
+    CHECK(mods && mods->recommended && mods->risk == autofix::Risk::Undoable);
+    CHECK(find(p, "wipe_caches") && find(p, "wipe_caches")->recommended);
+    for (auto& s : p.steps) CHECK(!(s.risk == autofix::Risk::ErasesData && s.recommended));  // never on the first run
+    CHECK(!p.checks.empty() && p.checks[0].title.find("boot") != std::string::npos);
+
+    // What Android said counts: /data that won't unlock -> repair the file system, offer Format Data.
+    rescue::setAndroidReason("init_user0_failed");
+    p = autofix::diagnose();
+    CHECK(p.report.androidReason == "init_user0_failed");
+    CHECK(find(p, "repair_data_fs") && find(p, "repair_data_fs")->recommended && find(p, "format_data") && !find(p, "format_data")->recommended);
+    rescue::setAndroidReason("");
+
+    // The last change was a boot flash and boot is now damaged: restore the stock copy saved before.
+    std::string bn = root + "/dev/block/by-name/", stock;
+    CHECK(util::readFile(bn + "boot_a", stock));
+    std::string sdir = bootimg::backupDir();
+    util::mkdirs(sdir);
+    CHECK(util::writeFile(sdir + "/boot_a_stock_2026-10.img", stock));
+    history::record("Flash image", "boot_a <- custom-kernel.img", true);
+    {
+        int fd = open((bn + "boot_a").c_str(), O_WRONLY);
+        CHECK(fd >= 0 && pwrite(fd, "BROKEN!!", 8, 0) == 8);
+        close(fd);
+    }
+    p = autofix::diagnose();
+    const autofix::Step* rb = find(p, "restore_boot");
+    CHECK(rb && rb->recommended && util::basename(rb->file) == "boot_a_stock_2026-10.img");
+    CHECK(p.lastChange.find("custom-kernel.img") != std::string::npos);
+    bool damagedShown = false;
+    for (auto& c : p.checks) damagedShown |= c.title == "Boot image (boot_a)" && c.level == 2;
+    CHECK(damagedShown);
+    autofix::Options o;
+    o.only = {"restore_boot"};
+    CHECK(runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));
+    std::string after;
+    CHECK(util::readFile(bn + "boot_a", after) && after == stock);
+    auto h = history::recent(3);
+    CHECK(h.size() >= 2 && h[0].action == "Auto repair" && h[0].detail.find("[restore_boot]") != std::string::npos);
+    CHECK(h[1].detail.find("(by auto repair)") != std::string::npos);  // its own flash isn't "the last change"
+    // Next run: escalation - what was tried is not planned again.
+    p = autofix::diagnose();
+    CHECK(p.lastChange.find("custom-kernel.img") != std::string::npos);
+    rb = find(p, "restore_boot");
+    CHECK(rb && rb->triedBefore && !rb->recommended);
+    CHECK(p.earlierFixes >= 1);
+    // After the safe fixes: the system partitions from the newest unencrypted backup ("selftest": boot + data),
+    // only with permission, and never /data.
+    const autofix::Step* rbk = find(p, "restore_backup");
+    CHECK(rbk && rbk->recommended && rbk->risk == autofix::Risk::Replaces && rbk->parts == std::vector<std::string>{"boot"});
+    o.only = {"restore_backup"};
+    CHECK(!runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));  // not allowed
+    o.allowRestore = true;
+    CHECK(runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));
+    CHECK(history::recent(1)[0].detail.find("[restore_backup]") != std::string::npos);
+    // Format Data only with explicit permission.
+    o.only = {"format_data"};
+    o.allowFormatData = false;
+    if (find(p, "format_data")) CHECK(!runTask("autofix", [&](Task& t) { return autofix::apply(p, o, t); }));
+    // Unattended runs: at most 3 a day.
+    CHECK(autofix::autoRunAllowed());
+    for (int i = 0; i < 3; i++) autofix::noteAutoRun();
+    CHECK(!autofix::autoRunAllowed());
+
+    // Verified boot stopped the boot: disable verity on an unlocked bootloader - never on a locked one,
+    // which refuses vbmeta with verification off (the phone wouldn't start at all).
+    CHECK(device::bootloaderUnlocked() == 1);  // the simulator is unlocked (orange)
+    std::string ps = root + "/sys/fs/pstore/dmesg-ramoops-1";
+    CHECK(util::writeFile(ps, "[ 5.1] device-mapper: verity: 252:1: data block 12345 is corrupted\n"));
+    p = autofix::diagnose();
+    CHECK(find(p, "disable_verity") && find(p, "disable_verity")->recommended);
+    device::setProp("ro.boot.flash.locked", "1");
+    device::setProp("ro.boot.verifiedbootstate", "green");
+    device::setProp("ro.boot.vbmeta.device_state", "locked");
+    std::string how;
+    CHECK(device::bootloaderUnlocked(&how) == 0 && how.find("verifiedbootstate=green") != std::string::npos);
+    p = autofix::diagnose();
+    CHECK(!find(p, "disable_verity"));
+    bool advised = false;
+    for (auto& a : p.advice) advised |= a.find("bootloader is locked") != std::string::npos;
+    CHECK(advised);
+    device::setProp("ro.boot.flash.locked", "0");
+    device::setProp("ro.boot.verifiedbootstate", "orange");
+    device::setProp("ro.boot.vbmeta.device_state", "unlocked");
+    unlink(ps.c_str());
+
+    // Another ROM flashed over the old one's data (the zip was signed with another key than the system it replaced):
+    // a factory reset that keeps internal storage is planned - not preselected, it erases apps - until data is wiped.
+    CHECK(rescue::romSwitchWithoutWipe().empty() && !find(autofix::diagnose(), "factory_reset"));
+    history::record("Install zip", std::string("crDroid-11.zip - signed: crDroid (another key than the installed system's); ") +
+                                       installer::kRomSwitchNote, true);
+    CHECK(rescue::romSwitchWithoutWipe().find("crDroid-11.zip") == 0);
+    p = autofix::diagnose(true);
+    const autofix::Step* fr = find(p, "factory_reset");
+    CHECK(fr && fr->risk == autofix::Risk::ErasesData && fr->recommended);
+    bool named = false;
+    for (auto& f : p.report.findings) named |= f.fix == rescue::Fix::FactoryReset && f.evidence.find("crDroid") != std::string::npos;
+    CHECK(named);
+    history::record("Wipe", "Data", true);
+    CHECK(rescue::romSwitchWithoutWipe().empty() && !find(autofix::diagnose(true), "factory_reset"));
+}
+
+static void testI18n() {
+    i18n::setLanguage("en");
+    CHECK(i18n::tr("Back") == "Back");
+    i18n::setLanguage("ro");
+    CHECK(i18n::language() == "ro");
+    CHECK(i18n::tr("Back") == "\xC3\x8Enapoi");                                                    // Înapoi
+    CHECK(i18n::tr("Swipe to install to slot B") == "Gliseaz\xC4\x83 pentru a instala \xC3\xAEn slotul B");
+    CHECK(i18n::tr("slot details need bootctl") == "slot details need bootctl");                  // {} is one word only
+    CHECK(i18n::tr("Flashing My ROM v2.zip") == "Se instaleaz\xC4\x83 My ROM v2.zip");             // {*} is any text
+    CHECK(i18n::tr("3 zip(s) queued") == "3 zip-uri \xC3\xAEn coad\xC4\x83");
+    CHECK(i18n::tr("boot_a") == "boot_a" && i18n::tr("") == "");
+    {
+        i18n::NoTranslate raw;
+        CHECK(i18n::tr("Back") == "Back");
+    }
+    CHECK(i18n::longDate(2, 3, 10) == "Mar\xC8\x9Bi, 03 noiembrie");
+    CHECK(i18n::upper("Op\xC8\x9Biuni \xC8\x99i \xC4\x83\xC3\xA2\xC3\xAE abc") == "OP\xC8\x9AIUNI \xC8\x98I \xC4\x82\xC3\x82\xC3\x8E ABC");
+    CHECK(i18n::upper("\xE2\x80\xA2 \xC5\x82") == "\xE2\x80\xA2 \xC5\x81");  // bullet kept, l-stroke
+    // Every entry: a translation, the same placeholder, no conflicting duplicates.
+    std::map<std::string, std::string> seen;
+    for (auto& e : i18n::entries("ro")) {
+        CHECK(!e.second.empty());
+        for (const char* ph : {"{}", "{*}"})
+            CHECK((e.first.find(ph) == std::string::npos) == (e.second.find(ph) == std::string::npos));
+        auto it = seen.find(e.first);
+        CHECK(it == seen.end() || it->second == e.second);
+        seen[e.first] = e.second;
+    }
+    i18n::setLanguage("en");
+    CHECK(i18n::longDate(2, 3, 10) == "Tuesday, 03 November");
+}
+
+static void testZipSig(const std::string& dir) {
+    auto sha1hex = [](const std::string& s) {
+        Sha1 h;
+        h.update(s.data(), s.size());
+        return Sha256::toHex(h.digest());
+    };
+    // SHA-1 reference values (FIPS 180-2)
+    CHECK(sha1hex("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d");
+    CHECK(sha1hex("") == "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+    CHECK(sha1hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") == "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
+    {
+        Sha1 h;
+        std::string a(1000, 'a');
+        for (int i = 0; i < 1000; i++) {  // a million 'a', partly in odd pieces
+            if (i % 7) h.update(a.data(), a.size());
+            else h.update(a.data(), 999), h.update("a", 1);
+        }
+        CHECK(Sha256::toHex(h.digest()) == "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
+    }
+    CHECK(pk::p256SelfTest());
+    CHECK(x509::base64Decode(x509::base64Encode((const uint8_t*)"hello!?", 7)) == "hello!?");
+
+    // Certificates made by openssl: RSA-2048 / sha256WithRSA, EC P-256, AOSP's test key subject / sha1WithRSA.
+    auto rsa = x509::load(kSigRsaCert), ec = x509::load(kSigEcCert), test = x509::load(kSigTestCert);
+    CHECK(rsa.size() == 1 && ec.size() == 1 && test.size() == 1);
+    if (rsa.size() != 1 || ec.size() != 1 || test.size() != 1) return;
+    CHECK(rsa[0].key == x509::Cert::Key::Rsa && rsa[0].rsa.bits() == 2048 && rsa[0].hashLen == 32 &&
+          rsa[0].cn == "FMR RSA test key" && rsa[0].o == "FMR Test");
+    CHECK(ec[0].key == x509::Cert::Key::Ec && pk::ecOnCurve(ec[0].ec) && ec[0].hashLen == 32 && ec[0].keyDesc() == "EC P-256");
+    CHECK(test[0].isAospTestKey() && test[0].hashLen == 20 && !rsa[0].isAospTestKey());
+    CHECK(x509::load(rsa[0].pem()).size() == 1 && x509::load(rsa[0].pem())[0].sameKey(rsa[0]) && !rsa[0].sameKey(test[0]));
+    CHECK(x509::load(std::string(rsa[0].der.begin(), rsa[0].der.end())).size() == 1);  // a DER file
+    CHECK(rsa[0].keyId().size() == 64 && rsa[0].keyId() != test[0].keyId());
+    pk::EcKey off = ec[0].ec;
+    off.y[31] ^= 1;
+    CHECK(!pk::ecOnCurve(off));
+
+    std::string d = dir + "/zipsig";
+    util::mkdirs(d);
+    auto put = [&](const std::string& name, const std::string& data) {
+        std::string p = d + "/" + name;
+        util::writeFile(p, data);
+        return p;
+    };
+    const std::string rsaZip((const char*)kSigRsaZip, sizeof kSigRsaZip);
+    std::string zr = put("rsa.zip", rsaZip), ze = put("ec.zip", std::string((const char*)kSigEcZip, sizeof kSigEcZip)),
+                zt = put("test.zip", std::string((const char*)kSigTestZip, sizeof kSigTestZip)),
+                zu = put("plain.zip", std::string((const char*)kSigZip, sizeof kSigZip));
+    zipsig::Keys none;
+    zipsig::Result r = zipsig::verify(zr, none);
+    CHECK(r.valid() && r.trust == zipsig::Trust::Unknown && r.hash == "SHA-256" && r.cert.cn == "FMR RSA test key" &&
+          !r.otherThanSystem() && r.badge() == "Other key");
+    r = zipsig::verify(ze, none);
+    CHECK(r.valid() && r.cert.key == x509::Cert::Key::Ec && r.hash == "SHA-256");
+    r = zipsig::verify(zt, none);
+    CHECK(r.valid() && r.testKey && r.hash == "SHA-1" && r.badge() == "Test key");
+    CHECK(zipsig::verify(zu, none).state == zipsig::State::Unsigned);
+    CHECK(zipsig::verify(d + "/missing.zip", none).state == zipsig::State::Error);
+    // Whose key: the installed system's, another ROM's, one the user trusted.
+    zipsig::Keys sys;
+    sys.system = rsa;
+    r = zipsig::verify(zr, sys);
+    CHECK(r.valid() && r.trust == zipsig::Trust::System && r.trusted() && !r.otherThanSystem());
+    r = zipsig::verify(ze, sys);
+    CHECK(r.valid() && !r.trusted() && r.otherThanSystem() && r.brief().find("another key") != std::string::npos);
+    zipsig::Keys user;
+    user.user = ec;
+    r = zipsig::verify(ze, user);
+    CHECK(r.trust == zipsig::Trust::User && !r.otherThanSystem());  // the system's keys aren't known: no claim
+
+    // Tampering. A byte of the signed zip, a byte of the signature value:
+    std::string t = rsaZip;
+    t[40] ^= 1;
+    CHECK(zipsig::verify(put("t1.zip", t), none).state == zipsig::State::Bad);
+    CHECK(zipsig::verify(put("t1.zip", t), sys).state == zipsig::State::Bad);
+    t = rsaZip;
+    t[t.size() - 10] ^= 1;
+    CHECK(zipsig::verify(put("t2.zip", t), none).state == zipsig::State::Bad);
+    // An end-of-zip marker hidden in the unsigned comment (zip readers would use it) is refused, like Android does:
+    size_t comment = rsaZip.size() - ((uint8_t)rsaZip[rsaZip.size() - 2] | (uint8_t)rsaZip[rsaZip.size() - 1] << 8);
+    t = rsaZip;
+    t.replace(comment, 4, "PK\x05\x06");
+    r = zipsig::verify(put("t3.zip", t), none);
+    CHECK(r.state == zipsig::State::Bad && r.reason.find("added after") != std::string::npos);
+    t = rsaZip;
+    t[t.size() - 3] = 0;  // the footer's FF FF
+    CHECK(zipsig::verify(put("t4.zip", t), none).state == zipsig::State::Unsigned);
+    CHECK(!zipsig::verify(put("t5.zip", rsaZip.substr(0, rsaZip.size() - 100)), none).valid());  // cut off
+    CHECK(!zipsig::verify(put("t6.zip", rsaZip + "appended"), none).valid());
+    t = rsaZip;
+    t[t.size() - 6] = char(0xFF);  // signature start past the comment
+    CHECK(zipsig::verify(put("t7.zip", t), none).state == zipsig::State::Bad);
+    int calls = 0;
+    r = zipsig::verify(zr, none, [&](uint64_t, uint64_t) { return ++calls < 0; });  // cancelled
+    CHECK(r.state == zipsig::State::Error && calls == 1);
+
+    // Keys from otacerts.zip, where Android keeps them - here the simulated system's.
+    std::string ota = dir + "/sim/system_root/system/etc/security/otacerts.zip";
+    util::mkdirs(util::dirname(ota));
+    mz_zip_archive z{};
+    CHECK(mz_zip_writer_init_file(&z, ota.c_str(), 0));
+    CHECK(mz_zip_writer_add_mem(&z, "releasekey.x509.pem", kSigRsaCert, strlen(kSigRsaCert), MZ_DEFAULT_COMPRESSION));
+    CHECK(mz_zip_writer_add_mem(&z, "README.txt", "not a key", 9, MZ_DEFAULT_COMPRESSION));
+    mz_zip_writer_finalize_archive(&z);
+    mz_zip_writer_end(&z);
+    CHECK(x509::loadZip(ota).size() == 1);
+    zipsig::Keys k = zipsig::loadKeys(zipsig::Sources::current());
+    CHECK(k.system.size() == 1 && k.systemNote.empty());
+    CHECK(zipsig::verify(zr, k).trust == zipsig::Trust::System);
+    r = zipsig::verify(ze, k);
+    CHECK(r.otherThanSystem());
+    // "Trust this key": saved to FMRRE/keys, then it counts as the user's.
+    std::string err, saved;
+    CHECK(zipsig::trust(r, err, &saved) && util::exists(saved));
+    k = zipsig::loadKeys(zipsig::Sources::current());
+    CHECK(k.user.size() == 1 && zipsig::verify(ze, k).trust == zipsig::Trust::User);
+    unlink(saved.c_str());
+    // /res/keys of recoveries before Android 10: the same keys in mincrypt format, computed by Python - v4 (RSA), v5 (EC),
+    // v2 with negative words (old dumpkey output), v1 (e=3, SHA-1).
+    std::string kerr;
+    auto res = x509::loadMincrypt(kSigResKeys, &kerr);
+    auto e3 = x509::load(kSigE3Cert);
+    CHECK(res.size() == 4 && e3.size() == 1);
+    if (res.size() == 4 && e3.size() == 1) {
+        CHECK(res[0].sameKey(rsa[0]) && res[0].hashLen == 32 && res[0].keyId() == rsa[0].keyId());  // same SPKI bytes
+        CHECK(res[1].sameKey(ec[0]) && res[1].keyId() == ec[0].keyId());
+        CHECK(res[2].sameKey(test[0]) && res[2].hashLen == 20);
+        CHECK(res[3].sameKey(e3[0]) && res[3].rsa.e == std::vector<uint8_t>{3} && res[3].hashLen == 20);
+        CHECK(e3[0].rsa.e == std::vector<uint8_t>{3});
+        util::mkdirs(dir + "/sim/res");
+        CHECK(util::writeFile(dir + "/sim/res/keys", kSigResKeys));
+        k = zipsig::loadKeys(zipsig::Sources::current());
+        CHECK(k.recovery.size() == 4 && k.recoveryFrom.find("/res/keys") != std::string::npos);
+        r = zipsig::verify(put("e3.zip", std::string((const char*)kSigE3Zip, sizeof kSigE3Zip)), k);
+        CHECK(r.valid() && r.trust == zipsig::Trust::Recovery && r.hash == "SHA-1");  // e=3: the oldest OTA keys
+        CHECK(zipsig::verify(ze, k).trust == zipsig::Trust::Recovery);
+        CHECK(zipsig::verify(zr, k).trust == zipsig::Trust::System);  // the system's list is asked first
+        unlink((dir + "/sim/res/keys").c_str());
+    }
+    CHECK(x509::loadMincrypt("v9 {1,0x1,{1},{1}}", &kerr).empty() && kerr.find("version") != std::string::npos);
+    CHECK(x509::loadMincrypt("v2 {64,0x1,{1,2}", &kerr).empty() && kerr.find("damaged") != std::string::npos);
+    CHECK(x509::loadMincrypt("", &kerr).empty());
+    // A bare public key (update_engine's update-payload-key.pub.pem) gives the same key and id as its certificate.
+    std::vector<uint8_t> spki = x509::rsaSpki(rsa[0].rsa.n, rsa[0].rsa.e);
+    CHECK(spki == rsa[0].spki);
+    std::string pubPem = "-----BEGIN PUBLIC KEY-----\n" + x509::base64Encode(spki.data(), spki.size()) + "\n-----END PUBLIC KEY-----\n";
+    auto pubs = x509::loadPublicKeys(pubPem);
+    CHECK(pubs.size() == 1 && pubs[0].sameKey(rsa[0]) && pubs[0].keyId() == rsa[0].keyId());
+    CHECK(x509::ecSpki(ec[0].ec.x, ec[0].ec.y) == ec[0].spki);
+
+    // In the background, as the screens do it.
+    zipsig::Check c;
+    for (int i = 0; i < 500 && !(c = zipsig::check(zr)).done; i++) usleep(10 * 1000);
+    CHECK(c.done && c.result.trust == zipsig::Trust::System);
+    CHECK(zipsig::cached(zr, r) && r.valid());
+    unlink(ota.c_str());
+}
+
+// The plaintext of tests/zstd_fixtures.h (the same generators as tools/make_zstd_fixtures.py).
+static std::string zText(size_t n, uint32_t seed = 1) {
+    static const char* parts[] = {"boot", "init_boot", "vendor_boot", "dtbo", "vbmeta", "system", "vendor", "product"};
+    std::string out;
+    uint32_t x = seed;
+    for (int i = 0; out.size() < n; i++) {
+        x = (x * 1103515245u + 12345u) & 0x7FFFFFFF;
+        char line[96];
+        snprintf(line, sizeof line, "flash %s_%c: block %d of %d ok\n", parts[(x >> 16) % 8], "ab"[(x >> 20) & 1], i % 8, 8);
+        out += line;
+    }
+    out.resize(n);
+    return out;
+}
+static std::string zNoise(size_t n, uint32_t seed = 7) {
+    std::string out;
+    uint32_t x = seed;
+    for (size_t i = 0; i < n; i++) {
+        x = (x * 1103515245u + 12345u) & 0x7FFFFFFF;
+        out += char((x >> 16) & 0xFF);
+    }
+    return out;
+}
+// step: hand the decoder at most this many input bytes at a time (0 = as many as it asks for)
+static bool zstdDecode(const std::string& in, std::string& out, std::string& err, size_t step = 0, size_t maxWindow = size_t(256) << 20) {
+    size_t pos = 0;
+    ZstdFrame z(
+        [&](uint8_t* p, size_t n) {
+            size_t k = std::min(n, in.size() - pos);
+            if (step) k = std::min(k, step);
+            memcpy(p, in.data() + pos, k);
+            pos += k;
+            return k;
+        },
+        maxWindow);
+    out.clear();
+    char buf[7777];
+    for (;;) {
+        ssize_t r = z.read(buf, sizeof buf);
+        if (r < 0) return err = z.error(), false;
+        if (r == 0) return true;
+        out.append(buf, size_t(r));
+    }
+}
+
+// ---- CRC-32, gzip on several threads, gzip with several members ------------------------------------
+static bool gunzipAll(const std::string& gz, std::string& out, std::string& err, int* members = nullptr, size_t step = 1 << 16) {
+    size_t pos = 0;
+    GunzipReader r([&](uint8_t* p, size_t n) -> ssize_t {
+        size_t k = std::min({n, step, gz.size() - pos});
+        memcpy(p, gz.data() + pos, k);
+        pos += k;
+        return ssize_t(k);
+    });
+    out.clear();
+    char buf[70000];
+    for (;;) {
+        ssize_t k = r.read(buf, sizeof buf);
+        if (k < 0) return err = r.error(), false;
+        if (k == 0) break;
+        out.append(buf, size_t(k));
+    }
+    if (members) *members = r.members();
+    return true;
+}
+
+static std::string gzipWith(const std::string& in, unsigned threads, size_t step) {
+    std::string out;
+    GzipWriter w([&](const void* d, size_t n) { return out.append((const char*)d, n), true; }, 1, threads);
+    for (size_t i = 0; i < in.size(); i += step) CHECK(w.write(in.data() + i, std::min(step, in.size() - i)));
+    CHECK(w.finish());
+    return out;
+}
+
+static void testGzip() {
+    CHECK(crc32::update(0, "123456789", 9) == 0xCBF43926u && crc32::update(0, "", 0) == 0);
+    std::string t = zText(300000) + zNoise(50000);
+    uint32_t whole = crc32::update(0, t.data(), t.size());
+    for (size_t cut : {size_t(0), size_t(1), size_t(7), size_t(4096), size_t(123457), t.size()}) {
+        uint32_t a = crc32::update(0, t.data(), cut), b = crc32::update(0, t.data() + cut, t.size() - cut);
+        CHECK(crc32::combine(a, b, t.size() - cut) == whole);           // pieces checked apart, joined
+        CHECK(crc32::update(a, t.data() + cut, t.size() - cut) == whole);  // and in one go
+        CHECK(uint32_t(mz_crc32(0, (const unsigned char*)t.data(), cut)) == a);
+    }
+    // Several 1 MiB pieces: compressible text, noise, zeros; different thread counts and write sizes give the same data.
+    std::string in = zText(1800000) + zNoise(700000) + std::string(900000, '\0') + zText(333, 3);
+    for (unsigned threads : {1u, 3u, 0u}) {
+        std::string gz = gzipWith(in, threads, threads == 3 ? 77777 : 1 << 20), out, err;
+        int members = 0;
+        CHECK(gz.size() > 18 && gz.size() < in.size() / 2 && (uint8_t)gz[0] == 0x1f && (uint8_t)gz[1] == 0x8b);
+        CHECK(gunzipAll(gz, out, err, &members) && out == in && members == 1);
+        CHECK(gunzipAll(gz, out, err, nullptr, 1) && out == in);  // the input one byte at a time
+        // one plain deflate stream: miniz reads it in one go too
+        std::string raw(in.size(), '\0');
+        mz_stream zs{};
+        mz_inflateInit2(&zs, -MZ_DEFAULT_WINDOW_BITS);
+        zs.next_in = (const unsigned char*)gz.data() + 10;
+        zs.avail_in = unsigned(gz.size() - 18);
+        zs.next_out = (unsigned char*)&raw[0];
+        zs.avail_out = unsigned(raw.size());
+        CHECK(mz_inflate(&zs, MZ_FINISH) == MZ_STREAM_END && zs.avail_in == 0 && raw == in);
+        mz_inflateEnd(&zs);
+    }
+    std::string empty = gzipWith("", 2, 1), out, err;
+    CHECK(gunzipAll(empty, out, err) && out.empty());
+    // Members back to back (and zero padding after them) are all read.
+    std::string a = gzipWith(zText(5000), 1, 999), b = gzipWith(zNoise(3000), 2, 1 << 20);
+    int members = 0;
+    CHECK(gunzipAll(a + b + a + std::string(600, '\0'), out, err, &members) && out == zText(5000) + zNoise(3000) + zText(5000) && members == 3);
+    // Damage is refused: the CRC, the length, a cut, bytes after the end, not gzip at all.
+    std::string bad = a;
+    bad[bad.size() - 8] ^= 1;
+    CHECK(!gunzipAll(bad, out, err) && err.find("CRC") != std::string::npos);
+    bad = a;
+    bad[bad.size() - 1] ^= 1;
+    CHECK(!gunzipAll(bad, out, err) && err.find("length") != std::string::npos);
+    CHECK(!gunzipAll(a.substr(0, a.size() - 3), out, err) && err.find("cut off") != std::string::npos);
+    CHECK(!gunzipAll(a + "x", out, err) && err.find("after the end") != std::string::npos);
+    CHECK(!gunzipAll(zText(100), out, err) && err.find("not a gzip") != std::string::npos);
+    CHECK(!gunzipAll("", out, err));
+    // A gzip header with every optional field (name, comment, extra, header CRC), as other tools write it.
+    std::string full = std::string("\x1f\x8b\x08\x1e\0\0\0\0\0\x03", 10) + std::string("\x03\0abc", 5) + "name.tar" + '\0' + "comment" + '\0' + "\x12\x34" +
+                       a.substr(10);
+    CHECK(gunzipAll(full, out, err) && out == zText(5000));
+}
+
+// ---- one file over FUSE (adb sideload without storing the package) ---------------------------------
+static void testFuseFile(const std::string& dir) {
+    const uint32_t bs = 65536;
+    const uint64_t size = 5 * uint64_t(bs) + 1000;
+    std::atomic<int> fetches{0};
+    std::atomic<bool> lie{false};
+    auto blockData = [&](uint64_t b) {
+        std::string d(size_t(std::min<uint64_t>(bs, size - b * bs)), '\0');
+        for (size_t i = 0; i < d.size(); i++) d[i] = char((b * 131 + i * 7) & 0xFF);
+        return d;
+    };
+    fusefile::Server srv;
+    std::string err, mnt = dir + "/fuse";
+    if (!srv.start(mnt, "package.zip", size, bs, [&](uint64_t b, std::string& out) {
+            fetches++;
+            out = blockData(b);
+            if (lie && b == 2) out[100] ^= 1;  // a computer that changes a block after it was read once
+            return true;
+        }, err)) {
+        printf("FUSE can't be mounted here (%s): skipped\n", err.c_str());
+        return;
+    }
+    std::string want;
+    for (uint64_t b = 0; b * bs < size; b++) want += blockData(b);
+    std::string got;
+    CHECK(util::readFile(srv.path(), got) && got == want);  // the whole file, blocks fetched on demand
+    struct stat st;
+    CHECK(stat(srv.path().c_str(), &st) == 0 && uint64_t(st.st_size) == size && (st.st_mode & 0777) == 0444 && S_ISREG(st.st_mode));
+    auto names = util::listDir(mnt);
+    CHECK(names.size() == 1 && names[0].name == "package.zip");
+    CHECK(open((mnt + "/package.zip").c_str(), O_WRONLY) < 0 && errno == EROFS);
+    CHECK(!util::exists(mnt + "/other"));
+    // A read in the middle that spans two blocks, at an odd offset.
+    int fd = open(srv.path().c_str(), O_RDONLY);
+    char buf[3000];
+    CHECK(fd >= 0 && pread(fd, buf, sizeof buf, off_t(bs) * 3 - 1234) == ssize_t(sizeof buf) &&
+          memcmp(buf, want.data() + bs * 3 - 1234, sizeof buf) == 0);
+    // Past the end: nothing.
+    CHECK(pread(fd, buf, sizeof buf, off_t(size)) == 0);
+    // Read again past the kernel's cache (O_DIRECT) once the server's own few cached blocks are others: a block
+    // that changed since its first read is refused - its SHA-256 differs.
+    int dfd = open(srv.path().c_str(), O_RDONLY | O_DIRECT);
+    void* ab = nullptr;
+    if (dfd >= 0 && posix_memalign(&ab, 4096, 4096) == 0) {
+        bool ok = true;
+        for (uint64_t b : {0, 1, 3, 4}) ok &= pread(dfd, ab, 4096, off_t(b * bs)) == 4096 && memcmp(ab, want.data() + b * bs, 4096) == 0;
+        CHECK(ok);
+        lie = true;
+        int before = fetches;
+        ssize_t r = pread(dfd, ab, 4096, off_t(2 * bs));
+        CHECK(fetches > before && r < 0 && errno == EIO);
+        CHECK(srv.problem().find("different data for block 2") != std::string::npos);
+        lie = false;
+    } else {
+        printf("FUSE: no O_DIRECT here - the changed-block check didn't run\n");
+    }
+    free(ab);
+    if (dfd >= 0) close(dfd);
+    close(fd);
+    CHECK(srv.fetched() >= size);
+    srv.stop();
+    CHECK(!util::exists(mnt + "/package.zip"));
+}
+
+static void testZstd(const std::string& dir) {
+    // xxHash64 reference values (the xxhash library)
+    CHECK(Xxh64::of("", 0) == 0xef46db3751d8e999ull && Xxh64::of("abc", 3) == 0x44bc2cf5ad770999ull);
+    std::string spam = zText(1000);
+    Xxh64 x;
+    for (size_t i = 0; i < spam.size(); i += 13) x.update(spam.data() + i, std::min<size_t>(13, spam.size() - i));
+    CHECK(x.digest() == Xxh64::of(spam.data(), spam.size()));
+    // Frames from the zstd library; together they use every part of the format (see tools/make_zstd_fixtures.py).
+    std::string A = x509::base64Decode(kZstA), B = x509::base64Decode(kZstB), C = x509::base64Decode(kZstC),
+                E = x509::base64Decode(kZstE), out, err;
+    const std::string a = zText(140000);
+    CHECK(zstdDecode(A, out, err) && out == a);
+    CHECK(zstdDecode(A, out, err, 1) && out == a);  // the input one byte at a time
+    CHECK(zstdDecode(B, out, err) && out == zText(30000, 5));
+    CHECK(zstdDecode(C, out, err) && out == std::string(150000, '\0') + zNoise(2000) + zText(3000, 9));
+    std::string nz = zNoise(3000, 11), e = nz;
+    for (int k = 0; k < 120; k++) e += "Z" + nz.substr(size_t(k) * 24, 24);
+    CHECK(zstdDecode(E, out, err) && out == e);
+    // An empty frame (what `zstd` makes of an empty file): no data, checksum checked.
+    CHECK(zstdDecode(std::string("\x28\xb5\x2f\xfd\x24\x00\x01\x00\x00\x99\xe9\xd8\x51", 13), out, err) && out.empty());
+    CHECK(!zstdDecode(std::string("\x28\xb5\x2f\xfd\x24\x00\x01\x00\x00\x99\xe9\xd8\x52", 13), out, err) &&
+          err.find("checksum") != std::string::npos);
+    // Refused: cut off, not zstd, a dictionary, more history than allowed.
+    CHECK(!zstdDecode(A.substr(0, A.size() - 100), out, err) && err.find("cut off") != std::string::npos);
+    CHECK(!zstdDecode("PK\x03\x04 nope", out, err) && err.find("not a Zstandard") != std::string::npos);
+    std::string dict = A;
+    dict[4] = char(dict[4] | 1);
+    dict.insert(5, "\x42");
+    CHECK(!zstdDecode(dict, out, err) && err.find("dictionary") != std::string::npos);
+    CHECK(!zstdDecode(B, out, err, 0, 1024) && err.find("history") != std::string::npos);
+    // Damage: a checksummed frame either fails or decodes to exactly the original - never to something else,
+    // never outside its buffers. Random bit flips and cuts all over it.
+    uint32_t r = 12345;
+    int failed = 0, same = 0;
+    for (int k = 0; k < 300; k++) {
+        r = r * 1103515245u + 12345u;
+        std::string bad = A;
+        size_t at = 4 + (r >> 8) % (A.size() - 4);
+        if (k % 10 == 9) bad.resize(at);
+        else bad[at] = char(bad[at] ^ (1 << (r & 7)));
+        if (zstdDecode(bad, out, err)) same += out == a;
+        else failed++;
+    }
+    CHECK(failed + same == 300 && failed > 250);
+    // Flashing an .img.zst decodes it on the way (no zstd tool needed).
+    std::string img = dir + "/sim/data/media/0/Download/dtbo-test.img.zst", dev = dir + "/sim/dev/block/by-name/dtbo_b";
+    CHECK(util::writeFile(img, A));
+    img::Info zi = img::inspect(img);
+    CHECK(zi.comp == img::Compression::Zstd && zi.imageSize == a.size());
+    img::FlashOptions fo;
+    fo.verify = true;
+    CHECK(runTask("flash-zst", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
+    std::string got;
+    CHECK(util::readFile(dev, got) && got.substr(0, a.size()) == a);
+    std::string bad = A;
+    bad[A.size() / 2] = char(bad[A.size() / 2] ^ 4);
+    CHECK(util::writeFile(img, bad));
+    CHECK(!runTask("flash-zst-bad", [&](Task& t) { return img::flash(img, "", dev, fo, t); }));
+}
+
+static void testTar(const std::string& dir) {
+    std::string src = dir + "/tarsrc", dst = dir + "/tardst";
+    util::mkdirs(src + "/a/b");
+    std::string payload = zNoise(2000, 3), longName = std::string(130, 'n');
+    CHECK(util::writeFile(src + "/a/b/file", payload) && util::writeFile(src + "/empty", "") && util::writeFile(src + "/a/" + longName, "long"));
+    CHECK(symlink("b/file", (src + "/a/lnk").c_str()) == 0 && link((src + "/a/b/file").c_str(), (src + "/hl").c_str()) == 0);
+    chmod((src + "/a/b").c_str(), 0750);
+    bool xattrs = lsetxattr((src + "/a/b/file").c_str(), "user.fmrre", "v1", 2, 0) == 0;
+    std::string arc, err;
+    tar::Stats st;
+    CHECK(tar::create(src, {}, [&](const void* d, size_t n) { arc.append((const char*)d, n); return true; }, st, err));
+    CHECK(arc.size() % 512 == 0 && st.files == 3 && st.links == 2 && st.dirs == 3);
+    util::mkdirs(dst);
+    tar::Extractor x(dst);
+    bool fed = true;
+    for (size_t i = 0; i < arc.size(); i += 777) fed = fed && x.feed(arc.data() + i, std::min<size_t>(777, arc.size() - i));  // odd pieces
+    CHECK(fed && x.finish());
+    std::string got, lnk(64, '\0');
+    CHECK(util::readFile(dst + "/a/b/file", got) && got == payload && util::readFile(dst + "/a/" + longName, got) && got == "long");
+    ssize_t ln = readlink((dst + "/a/lnk").c_str(), &lnk[0], lnk.size());
+    CHECK(ln == 6 && lnk.substr(0, 6) == "b/file");
+    struct stat s1, s2;
+    CHECK(stat((dst + "/hl").c_str(), &s1) == 0 && stat((dst + "/a/b/file").c_str(), &s2) == 0 && s1.st_ino == s2.st_ino);  // a hard link again
+    CHECK(stat((dst + "/a/b").c_str(), &s1) == 0 && (s1.st_mode & 07777) == 0750);
+    if (xattrs) {
+        char v[8] = {0};
+        CHECK(lgetxattr((dst + "/a/b/file").c_str(), "user.fmrre", v, sizeof v) == 2 && std::string(v, 2) == "v1");
+    }
+    // Nothing outside the folder: "..", absolute names, a path through a symlink; a TWRP-style name with its prefix.
+    std::string evil = tarEntry("../evil", '0', "x") + tarEntry("/etc/evil", '0', "x") + tarEntry("esc", '2', "", "/") +
+                       tarEntry("esc/evil", '0', "x") + tarEntry("/data/app/ok", '0', "twrp") + tarEntry("fine", '0', "fine") +
+                       std::string(1024, '\0');
+    std::string d2 = dir + "/tarevil";
+    util::mkdirs(d2);
+    tar::Extractor y(d2, {"/data"});
+    CHECK(y.feed(evil.data(), evil.size()) && y.finish() && y.stats().refused == 3);
+    CHECK(util::readFile(d2 + "/app/ok", got) && got == "twrp" && util::readFile(d2 + "/fine", got) && got == "fine");
+    CHECK(!util::exists(dir + "/evil") && !util::exists("/etc/evil"));
+    // Damage: a changed header byte, a cut-off archive.
+    std::string bad = arc;
+    bad[20] = char(bad[20] ^ 1);
+    tar::Extractor z(dir + "/tarbad");
+    CHECK(!z.feed(bad.data(), bad.size()) && z.error().find("checksum") != std::string::npos);
+    tar::Extractor c(dst);
+    CHECK(c.feed(arc.data(), 1500) && !c.finish());
+    util::removeTree(src);
+    util::removeTree(dst);
+    util::removeTree(d2);
 }
 
 int main() {
-    char tmpl[] = "/tmp/twrpv2-selftest-XXXXXX";
+    char tmpl[] = "/tmp/fmrre-selftest-XXXXXX";
     std::string dir = mkdtemp(tmpl);
     log::init(dir + "/test.log");
     testSha();
     testInstaller(dir);
     testSparse(dir);
+    testSuper(dir);
+    testImages(dir);
+    testAvb(dir);
     testBackupRestore(dir);
+    testSplitBackup(dir);
+    testSamsungAp(dir);
+    testRemovableSafety(dir);
+    testEncryptedData(dir);
+    testLogSave(dir);
+    testTouchDecode();
+    testLegacyFolders();
+    testPathcheck(dir);
+    testCrypt();
+    testFrozenFormats();
+    testDecoders(dir);
+    testLz4(dir);
+    testZstd(dir);
+    testGzip();
+    testFuseFile(dir);
+    testTar(dir);
+    testZipSig(dir);
+    testPayload(dir);
+    testRescue();
+    testAutofix(dir);
+    testI18n();
     util::removeTree(dir);
     if (g_fail) {
         fprintf(stderr, "%d check(s) FAILED\n", g_fail);

@@ -6,6 +6,8 @@
 #include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -94,6 +96,21 @@ std::string humanSize(uint64_t b) {
     if (i == 0) snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)b);
     else snprintf(buf, sizeof(buf), v < 10 ? "%.2f %s" : (v < 100 ? "%.1f %s" : "%.0f %s"), v, u[i]);
     return buf;
+}
+
+uint64_t parseSize(const std::string& s) {
+    char* end = nullptr;
+    double v = strtod(s.c_str(), &end);
+    if (end == s.c_str() || v < 0) return 0;
+    while (*end == ' ') end++;
+    switch (*end | 0x20) {  // lower-case the unit
+        case 'g': v *= 1ull << 30; break;
+        case 'm': v *= 1ull << 20; break;
+        case 'k': v *= 1ull << 10; break;
+        case 't': v *= 1ull << 40; break;
+        default: break;  // bytes
+    }
+    return uint64_t(v);
 }
 
 std::string humanDuration(int64_t ms) {
@@ -211,7 +228,9 @@ bool copyFile(const std::string& from, const std::string& to, const std::functio
     if (in < 0) return false;
     struct stat st;
     fstat(in, &st);
-    int out = open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, st.st_mode & 0777);
+    uint64_t total = st.st_size;
+    if (S_ISBLK(st.st_mode)) ioctl(in, BLKGETSIZE64, &total);  // stat() reports 0 for block devices
+    int out = open(to.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, S_ISREG(st.st_mode) ? (st.st_mode & 0777) : 0644);
     if (out < 0) { close(in); return false; }
     std::vector<char> buf(1 << 20);
     uint64_t done = 0;
@@ -223,7 +242,7 @@ bool copyFile(const std::string& from, const std::string& to, const std::functio
         if (n == 0) break;
         if (write(out, buf.data(), n) != n) { ok = false; break; }
         done += n;
-        if (progress) progress(done, st.st_size);
+        if (progress) progress(done, total);
     }
     fsync(out);
     close(in);
