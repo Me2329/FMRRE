@@ -351,6 +351,25 @@ class UsbTransport:
         self.usb.util.release_interface(self.dev, self.intf.bInterfaceNumber)
 
 
+def _win_serialcomm():
+    """[(driver device name, COMx)] of the serial ports present now."""
+    out = []
+    try:
+        import winreg
+        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DEVICEMAP\SERIALCOMM")
+        i = 0
+        while True:
+            try:
+                name, port, _ = winreg.EnumValue(k, i)
+            except OSError:
+                break
+            out.append((name, port))
+            i += 1
+    except (OSError, ImportError):
+        pass
+    return out
+
+
 def _win_download_ports():
     """COM ports of USB devices with a Download-mode id (VID 04E8, PID 685D...), from the registry - found without
     sending anything. Only ports that exist now (SERIALCOMM lists the present ones)."""
@@ -412,7 +431,11 @@ def present():
     """Is a phone in Download mode connected? Looks at USB ids only: nothing is sent (the bootloader takes the ODIN
     handshake once per session - probing with it would break the flash that follows)."""
     if os.name == "nt":
-        return bool(_win_download_ports())
+        if _win_download_ports():
+            return True
+        # Fallback: a port of Samsung's modem driver ("ssudmdm"). Right after `adb reboot download` from a recovery,
+        # which has no such port, that is the phone in Download mode.
+        return any("ssud" in name.lower() for name, _ in _win_serialcomm())
     try:
         import usb.core
         return any(usb.core.find(idVendor=SAMSUNG_VID, idProduct=pid) is not None for pid in DOWNLOAD_PIDS)

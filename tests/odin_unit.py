@@ -358,6 +358,13 @@ def main():
     except odin.OdinError:
         check(True, "a device that isn't in Download mode is refused at the handshake")
 
+    # The real detection code (registry on Windows, sysfs / libusb elsewhere) runs on this computer without a phone.
+    try:
+        found, cands = odin.present(), odin.candidates()
+        check(found in (True, False) and isinstance(cands, list), "Download-mode detection runs here (no phone: %s, %d port(s))" % (found, len(cands)))
+    except Exception as e:
+        check(False, "Download-mode detection raised %r" % e)
+
     entries = odin.parse_pit(PIT)
     check([e.name for e in entries] == ["BOOTLOADER", "BOOT", "RECOVERY", "RADIO", "SYSTEM"] and entries[3].binary_type == 1, "PIT parsed")
     check(odin.pit_target(entries, "recovery.img").identifier == 11 and odin.pit_target(entries, "boot.img.lz4").identifier == 10,
