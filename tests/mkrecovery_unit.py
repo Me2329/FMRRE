@@ -331,6 +331,16 @@ def scenarios(d):
     check(rc == 1, "arm64 FMRRE refused for a 32-bit phone")
     rc, _ = run([a32, "--fmrre", fmrre, "-o", os.path.join(d, "x.img"), "--force"])
     check(rc == 0, "... unless --force")
+    k64 = bytearray(kernel)
+    k64[0x38:0x3C] = b"ARMd"  # an arm64 kernel Image
+    a32k = os.path.join(d, "arm32-on-arm64.img")
+    open(a32k, "wb").write(bootimg(0, bytes(k64), gzip.compress(cp32)))
+    rc, text = run([a32k, "--fmrre", fmrre, "-o", os.path.join(d, "y.img")])
+    check(rc == 0 and "kernel is arm64" in text, "32-bit recovery program on an arm64 kernel (some TWRP builds): arm64 FMRRE accepted")
+    k64gz = gzip.compress(bytes(k64))
+    open(a32k, "wb").write(bootimg(0, k64gz, gzip.compress(cp32)))
+    rc, text = run([a32k, "--fmrre", fmrre, "-o", os.path.join(d, "y.img")])
+    check(rc == 0, "... also with a gzip-packed kernel (Image.gz)")
 
     # 2. Newer Samsung: v2 header, recovery_dtbo + dtb, legacy LZ4 ramdisk with size_append, /system/bin/recovery,
     #    /etc -> /system/etc, AVB footer in a 6 MiB partition image, SHA-256 ID.

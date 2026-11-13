@@ -213,6 +213,7 @@ def flow_test():
         binary = os.path.join(d, "recovery")
         open(binary, "wb").write(elf() + b"FMRRE" * 1000)
         calls = []
+        phone_tmp = {}
 
         class FakeRunner:
             dry = False
@@ -228,12 +229,26 @@ def flow_test():
                 calls.append((tool,) + args)
                 if args[:2] == ("shell", "getprop ro.product.cpu.abi"):
                     return 0, "arm64-v8a\n"
+                part = "/dev/block/platform/11120000.ufs/by-name/RECOVERY"
+                if args[0] == "shell" and args[1].startswith("for p in"):
+                    return 0, part + "\n"
+                if args[0] == "shell" and args[1].startswith("dd if=%s of=" % part):
+                    phone_tmp[args[1].split(" of=")[1].split()[0]] = twrp
+                    return 0, "44+1 records in\n44+1 records out\nFMRRE_DD_OK\n"
+                if args[0] == "shell" and args[1].startswith("dd "):
+                    return 1, "dd: can't open: No such file or directory"
                 if args[0] == "shell":
-                    return 0, "/dev/block/platform/11120000.ufs/by-name/RECOVERY\n"
-                if args[0] == "pull" and args[1] == "/dev/block/platform/11120000.ufs/by-name/RECOVERY":
-                    open(args[2], "wb").write(twrp)
+                    return 0, ""
+                if args[0] == "pull" and args[1].startswith("/dev/block/"):
+                    return 1, "adb: error: remote object '%s' not a file or directory" % args[1]  # what real adb does
+                if args[0] == "pull" and args[1] in phone_tmp:
+                    open(args[2], "wb").write(phone_tmp[args[1]])
                     return 0, "1 file pulled"
                 return 1, "error"
+
+            def call_to_file(self, tool, path, *args, timeout=300):
+                open(path, "wb").close()
+                return 1
 
             def write(self, tool, *args):
                 calls.append((tool,) + args)

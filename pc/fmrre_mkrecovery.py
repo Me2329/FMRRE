@@ -660,6 +660,18 @@ def elf_arch(blob):
     return arch, static
 
 
+def kernel_arch(kernel):
+    """"arm64" for an arm64 kernel Image (its header carries "ARMd" at 0x38), also gzip-packed; else None."""
+    k = bytes(kernel[:65536])
+    if k[:2] == b"\x1f\x8b":
+        try:
+            import zlib
+            k = zlib.decompressobj(31).decompress(k, 4096)
+        except Exception:
+            return None
+    return "arm64" if len(k) >= 0x3C and k[0x38:0x3C] == b"ARMd" else None
+
+
 def ramdisk_arch(rd):
     for c in ("system/bin/recovery", "sbin/recovery", "system/bin/init", "init", "system/bin/linker64",
               "system/bin/linker", "sbin/adbd"):
@@ -825,8 +837,13 @@ def build(a):
          "stock": "This is a stock recovery."}[base])
 
     phone_arch, seen_in = ramdisk_arch(rd)
+    karch = kernel_arch(img.sections["kernel"])
+    if karch == "arm64" and phone_arch == "arm":
+        # A 32-bit recovery program on a 64-bit kernel (some TWRP builds): the kernel decides what can run.
+        say("The recovery program in it is 32-bit, but the kernel is arm64: an arm64 FMRRE runs.")
+        phone_arch, seen_in = "arm64", "the kernel"
     if phone_arch:
-        say("Phone CPU: %s (from /%s)" % (phone_arch, seen_in))
+        say("Phone CPU: %s (from /%s)" % (phone_arch, seen_in) if seen_in != "the kernel" else "Phone CPU: arm64 (from the kernel)")
     fmrre = a.fmrre or find_fmrre(phone_arch or "arm64")
     with open(fmrre, "rb") as f:
         binary = f.read()

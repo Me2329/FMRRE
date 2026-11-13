@@ -260,6 +260,17 @@ class Runner:
         except OSError as e:
             return 126, str(e)
 
+    def call_to_file(self, tool, path, *args, timeout=300):
+        """A command that only reads, its binary output saved to `path` (adb exec-out cat ...). Exit code."""
+        if not self.have(tool):
+            return 127
+        try:
+            with open(path, "wb") as f:
+                return subprocess.run(self._cmd(tool, args), stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.DEVNULL,
+                                      timeout=timeout).returncode
+        except (subprocess.TimeoutExpired, OSError):
+            return 124
+
     def write(self, tool, *args):
         """A command that changes the phone: shown, its output streamed to the log. True on success."""
         shown = [tool] + (["-s", self.serial] if self.serial and tool in ("adb", "fastboot") else []) + [str(a) for a in args]
@@ -1398,21 +1409,40 @@ class Rescue:
                       "/dev/block/platform/13540000.dwmmc0/by-name/RECOVERY")    # older Exynos eMMC phones
 
     def pull_recovery(self):
-        """The phone's current recovery partition, read over adb (a phone in TWRP or FMRRE: adb runs as root)."""
+        """The phone's current recovery partition, read over adb (a phone in TWRP or FMRRE: adb runs as root).
+        `adb pull` refuses block devices ("not a file or directory"), so the phone copies the partition to a file in
+        /tmp first (dd), and that is pulled; `adb exec-out cat` is the fallback."""
         rc, out = self.r.call("adb", "shell", "for p in /dev/block/by-name/recovery /dev/block/bootdevice/by-name/recovery "
                               "/dev/block/platform/*/by-name/RECOVERY /dev/block/platform/*/by-name/recovery "
                               "/dev/block/platform/*/*/by-name/recovery; do [ -e $p ] && echo $p && break; done", timeout=20)
         found = [l.strip() for l in out.splitlines() if l.strip().startswith("/dev/block/")]
         dst = os.path.join(self.workdir(), "current-recovery.img")
+        tried = []
+
+        def good():
+            if not os.path.isfile(dst) or os.path.getsize(dst) <= 4096:
+                return False
+            with open(dst, "rb") as f:
+                return f.read(8) == b"ANDROID!"
+
         for path in found[:1] + [p for p in self.RECOVERY_PATHS if p not in found[:1]]:
             if os.path.exists(dst):
                 os.remove(dst)
-            rc, out = self.r.call("adb", "pull", path, dst, timeout=300)
-            if rc == 0 and os.path.isfile(dst) and os.path.getsize(dst) > 4096:
-                with open(dst, "rb") as f:
-                    if f.read(8) == b"ANDROID!":
-                        self.log("   %s -> %s (%.1f MB)" % (path, os.path.basename(dst), os.path.getsize(dst) / 1048576.0))
-                        return dst
+            tmp = "/tmp/fmrre-recovery-pull.img"
+            rc, out = self.r.call("adb", "shell", "dd if=%s of=%s bs=1048576 2>&1 && echo FMRRE_DD_OK" % (path, tmp), timeout=120)
+            if "FMRRE_DD_OK" in out:
+                rc, out = self.r.call("adb", "pull", tmp, dst, timeout=300)
+                self.r.call("adb", "shell", "rm -f " + tmp, timeout=20)
+                if rc == 0 and good():
+                    self.log("   %s -> %s (%.1f MB)" % (path, os.path.basename(dst), os.path.getsize(dst) / 1048576.0))
+                    return dst
+                tried.append("%s: dd ok, pull: %s" % (path, out.strip()[-160:]))
+            else:
+                tried.append("%s: dd: %s" % (path, out.strip()[-160:] or "rc %d" % rc))
+            if self.r.call_to_file("adb", dst, "exec-out", "cat", path, timeout=300) == 0 and good():
+                self.log("   %s -> %s (%.1f MB, exec-out)" % (path, os.path.basename(dst), os.path.getsize(dst) / 1048576.0))
+                return dst
+        self.log("   tried:\n     " + "\n     ".join(t for t in tried[:6]))
         raise Refused("Couldn't read the phone's recovery partition over adb (needs a custom recovery - TWRP or FMRRE - "
                       "running on the phone). Or give the stock firmware: install-samsung --base AP_....tar.md5")
 

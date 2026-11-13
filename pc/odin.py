@@ -241,6 +241,11 @@ class WinSerial:
             raise OdinError("can't open %s (Odin or another program may be using it)" % port)
         self.h = h
         self.k.SetupComm(h, 1 << 20, 1 << 20)
+        k.EscapeCommFunction.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k.EscapeCommFunction(h, 5)  # SETDTR: "a program is here" - some phones only talk once it is set
+        k.EscapeCommFunction(h, 3)  # SETRTS
+        k.PurgeComm.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k.PurgeComm(h, 0x0F)        # nothing left over from an earlier program
         self.name = port
 
     def _timeouts(self, ms):
@@ -317,6 +322,10 @@ class UsbTransport:
         except (NotImplementedError, usb.core.USBError):
             pass
         usb.util.claim_interface(dev, intf.bInterfaceNumber)
+        try:
+            dev.ctrl_transfer(0x21, 0x22, 0x3, 0, None, 1000)  # CDC SET_CONTROL_LINE_STATE: DTR + RTS
+        except usb.core.USBError:
+            pass
         self.intf = intf
         d = usb.util.ENDPOINT_IN
         self.ep_in = next(e for e in intf if usb.util.endpoint_direction(e.bEndpointAddress) == d)
@@ -503,6 +512,7 @@ def flash_files(files, partition=None, reboot=False, port=None, log=print, odin=
     try:
         log("Phone in Download mode (%s)" % getattr(o.t, "name", "?"))
         o.begin()
+        o.total_bytes(sum(len(d) for _, d in files))  # before the PIT, in Heimdall's order (known to work on the S8)
         entries = parse_pit(o.pit())
         plan = []
         for name, data in files:
@@ -514,7 +524,6 @@ def flash_files(files, partition=None, reboot=False, port=None, log=print, odin=
             if e.name.upper() in ("BOOTLOADER", "SBOOT", "PARAM", "UP_PARAM", "CM", "KEYSTORAGE", "PIT") and not os.environ.get("FMRRE_ODIN_ANY"):
                 raise OdinError("%s goes to %s (bootloader area) - not flashed by this tool; use Odin with the full firmware" % (name, e.name))
             plan.append((name, data, e))
-        o.total_bytes(sum(len(d) for _, d, _ in plan))
         for name, data, e in plan:
             log("Flashing %s -> %s (%.1f MB)" % (name, e.name, len(data) / 1048576.0))
             last = [0]
